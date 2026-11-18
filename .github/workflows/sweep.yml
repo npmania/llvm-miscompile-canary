@@ -1,0 +1,237 @@
+name: Corpus Sweep
+
+on:
+  workflow_dispatch:
+    inputs:
+      llvm_sha:
+        description: 'Full 40-char LLVM commit SHA matching a published toolchain-<sha12> release'
+        required: true
+        type: string
+      previous_sha:
+        description: 'Previous swept LLVM commit SHA'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+  actions: write
+
+env:
+  GH_REPO: ${{ github.repository }}
+
+jobs:
+  prepare:
+    name: Corpus Matrix
+    runs-on: ubuntu-24.04
+    outputs:
+      packages: ${{ steps.matrix.outputs.packages }}
+    env:
+      GOTOOLCHAIN: auto
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Emit corpus matrix
+        id: matrix
+        run: |
+          go build -o lmc .
+          pkgs="$(./lmc corpus-matrix -corpus corpus)"
+          echo "packages=${pkgs}" >> "$GITHUB_OUTPUT"
+
+  sweep:
+    name: ${{ matrix.package }} (${{ matrix.platform }})
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJson(needs.prepare.outputs.packages) }}
+        platform:
+          - linux-x86_64
+          - linux-aarch64
+          - darwin-arm64
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-24.04
+          - platform: linux-aarch64
+            runner: ubuntu-24.04-arm
+          - platform: darwin-arm64
+            runner: macos-latest
+    env:
+      GOTOOLCHAIN: auto
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+
+      - name: Install build tools (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            autoconf automake ca-certificates cmake curl git libtool make meson ninja-build pkg-config python3 zstd
+
+      - name: Install build tools (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake meson ninja pkg-config zstd
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Build lmc
+        run: go build -o lmc .
+
+      - name: Download toolchain-${{ matrix.platform }} snapshot
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LLVM_SHA: ${{ inputs.llvm_sha }}
+          PLAT: ${{ matrix.platform }}
+        run: |
+          sha12="${LLVM_SHA:0:12}"
+          mkdir -p "${RUNNER_TEMP}/tc"
+          gh release download "toolchain-${sha12}" \
+            --pattern "llvm-${sha12}-${PLAT}.tar.zst" \
+            --dir "${RUNNER_TEMP}/tc"
+          zstd -dc "${RUNNER_TEMP}/tc/llvm-${sha12}-${PLAT}.tar.zst" | tar -xf - -C "${RUNNER_TEMP}/tc"
+          rm -f "${RUNNER_TEMP}/tc/llvm-${sha12}-${PLAT}.tar.zst"
+
+      - name: Cache upstream corpus source archive
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/lmc-cache/sources
+          key: corpus-src-v1-${{ matrix.package }}-${{ hashFiles(format('corpus/{0}/recipe.yaml', matrix.package)) }}
+
+      - name: Run distro-O2 and release-lto (--thinlto-jobs=4)
+        run: |
+          ./lmc sweep \
+            -corpus corpus \
+            -pkg "${{ matrix.package }}" \
+            -plat "${{ matrix.platform }}" \
+            -prof distro-O2,release-lto \
+            -tc "${RUNNER_TEMP}/tc/bin" \
+            -sha "${{ inputs.llvm_sha }}" \
+            -dir "${RUNNER_TEMP}/lmc-work" \
+            -cache "${RUNNER_TEMP}/lmc-cache" \
+            -frag "fragments/${{ matrix.package }}-${{ matrix.platform }}.json"
+
+      - name: Upload result JSON fragment
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fragment-${{ matrix.package }}-${{ matrix.platform }}
+          path: fragments/${{ matrix.package }}-${{ matrix.platform }}.json
+          if-no-files-found: warn
+          retention-days: 3
+
+  aggregate:
+    name: Aggregate Sweep, Update data & gh-pages
+    needs: sweep
+    if: always()
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: data-gh-pages-write
+      cancel-in-progress: false
+    env:
+      GOTOOLCHAIN: auto
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Build lmc
+        run: go build -o lmc .
+
+      - name: Download result fragments
+        uses: actions/download-artifact@v4
+        with:
+          pattern: fragment-*
+          merge-multiple: true
+          path: fragments
+
+      - name: Checkout orphan data and gh-pages branches
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./scripts/sync-branch.sh checkout data _data
+          ./scripts/sync-branch.sh checkout gh-pages _site
+
+      - name: Fetch commit subject
+        id: meta
+        env:
+          LLVM_SHA: ${{ inputs.llvm_sha }}
+        run: |
+          git init _llvm_meta
+          subj=""
+          if git -C _llvm_meta fetch --filter=blob:none --depth=1 https://github.com/llvm/llvm-project.git "${LLVM_SHA}" 2>/dev/null; then
+            subj="$(git -C _llvm_meta log -1 --format=%s FETCH_HEAD)"
+          fi
+          rm -rf _llvm_meta
+          {
+            echo "subject<<EOF_SUBJ"
+            printf '%s\n' "${subj}"
+            echo "EOF_SUBJ"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Aggregate fragments, update store & render static site
+        run: |
+          ./lmc aggregate \
+            -frags fragments \
+            -store _data \
+            -sha "${{ inputs.llvm_sha }}" \
+            -subj "${{ steps.meta.outputs.subject }}" \
+            -prev "${{ inputs.previous_sha }}" \
+            -out _site \
+            -corpus corpus \
+            -reg-out regressions.json
+          test "$(tr -d '\r\n' < _site/CNAME)" = "llvm-miscompile-canary.glendalab.com"
+
+      - name: Sync issues
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./lmc sync-issues \
+            -store _data \
+            -repo "${{ github.repository }}" \
+            -url "https://llvm-miscompile-canary.glendalab.com" \
+            -sha "${{ inputs.llvm_sha }}"
+
+      - name: Commit & push data and gh-pages
+        env:
+          LLVM_SHA: ${{ inputs.llvm_sha }}
+        run: |
+          sha12="${LLVM_SHA:0:12}"
+          ./scripts/sync-branch.sh push data _data "data: record sweep ${sha12}"
+          ./scripts/sync-branch.sh push gh-pages _site "site: render dashboard for ${sha12}"
+
+      - name: Trigger triage.yml on test_fail regressions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -f regressions.json ] && [ "$(jq 'length' regressions.json)" -gt 0 ]; then
+            gh workflow run triage.yml \
+              --ref master \
+              -f bad_sha="${{ inputs.llvm_sha }}" \
+              -f regressions_json="$(jq -c . regressions.json)"
+          fi

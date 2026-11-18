@@ -1,0 +1,36 @@
+name: libwebp
+category: Image & HDR FP16
+repo: webmproject/libwebp
+version: v1.6.0
+url: https://github.com/webmproject/libwebp/archive/refs/tags/v1.6.0.tar.gz
+sha256: 93a852c2b3efafee3723efd4636de855b46f9fe1efddd607e1f42f60fc8f2136
+strip_components: 1
+lang: c
+timeout_min: 10
+smoke_test: lossless_roundtrip
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - darwin-arm64
+description: WebP lossy and lossless image codec with SharpYUV and SIMD DSP
+cmake:
+  flags:
+    - -DBUILD_SHARED_LIBS=OFF
+    - -DWEBP_ENABLE_SIMD=ON
+    - -DWEBP_BUILD_CWEBP=ON
+    - -DWEBP_BUILD_DWEBP=ON
+    - -DWEBP_BUILD_WEBPINFO=ON
+    - -DWEBP_BUILD_WEBPMUX=ON
+    - -DWEBP_BUILD_LIBWEBPMUX=ON
+    - -DWEBP_BUILD_ANIM_UTILS=OFF
+    - -DWEBP_BUILD_GIF2WEBP=OFF
+    - -DWEBP_BUILD_IMG2WEBP=OFF
+    - -DWEBP_BUILD_VWEBP=OFF
+    - -DWEBP_BUILD_EXTRAS=OFF
+    - -DCMAKE_DISABLE_FIND_PACKAGE_PNG=ON
+    - -DCMAKE_DISABLE_FIND_PACKAGE_JPEG=ON
+    - -DCMAKE_DISABLE_FIND_PACKAGE_TIFF=ON
+    - -DCMAKE_DISABLE_FIND_PACKAGE_GIF=ON
+    - -DCMAKE_DISABLE_FIND_PACKAGE_OpenGL=ON
+    - -DCMAKE_DISABLE_FIND_PACKAGE_GLUT=ON
+    - -DCMAKE_DISABLE_FIND_PACKAGE_SDL2=ON

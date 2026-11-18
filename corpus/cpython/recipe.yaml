@@ -1,0 +1,15 @@
+name: cpython
+category: Language VMs & Runtimes
+repo: python/cpython
+version: v3.14.3
+url: https://github.com/python/cpython/archive/refs/tags/v3.14.3.tar.gz
+sha256: f229a232052ae318d2fc8eb0aca4a02d631e7e1a8790ef1f9b65e1632743a469
+strip_components: 1
+lang: c
+timeout_min: 25
+smoke_test: test_math
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - darwin-arm64
+description: CPython bytecode interpreter with computed-goto dispatch and core C stdlib modules

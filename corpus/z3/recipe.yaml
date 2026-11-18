@@ -1,0 +1,25 @@
+name: z3
+category: Databases, Compression & Solvers
+repo: Z3Prover/z3
+version: z3-5.4.1
+url: https://github.com/Z3Prover/z3/archive/refs/tags/z3-5.4.1.tar.gz
+sha256: 6a9196fb64e0460640beee08b8e823f0d51371bd3c4db78d161af275463846ef
+strip_components: 1
+lang: cxx
+timeout_min: 30
+smoke_test: bit_vector
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - darwin-arm64
+description: Z3 SMT theorem prover (CDCL(T), bit-vectors, linear/nonlinear arithmetic, E-graph, floating-point)
+cmake:
+  flags:
+    - -DZ3_BUILD_LIBZ3_SHARED=OFF
+    - -DZ3_BUILD_TEST_EXECUTABLES=ON
+    - -DZ3_BUILD_PYTHON_BINDINGS=OFF
+    - -DZ3_USE_LIB_GMP=OFF
+    - -DZ3_INCLUDE_GIT_HASH=OFF
+    - -DZ3_INCLUDE_GIT_DESCRIBE=OFF
+  targets:
+    - test-z3

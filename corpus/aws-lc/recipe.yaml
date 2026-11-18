@@ -1,0 +1,30 @@
+name: aws-lc
+category: Crypto & Bignum
+repo: aws/aws-lc
+version: v5.15.0
+url: https://github.com/aws/aws-lc/archive/refs/tags/v5.15.0.tar.gz
+sha256: 66e7132566cf2356b16ae79a9b57ea7a75ad6d65a41408753b08569c7db02921
+strip_components: 1
+lang: cxx
+timeout_min: 20
+smoke_test: AESTest.TestVectors
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - darwin-arm64
+description: AWS-LC general-purpose cryptographic and TLS library (pure C/C++, no asm)
+cmake:
+  flags:
+    - -DOPENSSL_NO_ASM=ON
+    - -DDISABLE_PERL=ON
+    - -DDISABLE_GO=ON
+    - -DDISABLE_CPU_JITTER_ENTROPY=ON
+    - -DBUILD_TESTING=ON
+    - -DBUILD_LIBSSL=ON
+    - -DBUILD_TOOL=OFF
+    - -DBUILD_SHARED_LIBS=OFF
+    - -DENABLE_SOURCE_MODIFICATION=OFF
+  targets:
+    - urandom_test
+    - crypto_test
+    - ssl_test

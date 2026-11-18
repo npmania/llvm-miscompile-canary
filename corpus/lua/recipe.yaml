@@ -1,0 +1,15 @@
+name: lua
+category: Language VMs & Runtimes
+repo: lua/lua
+version: v5.4.8
+url: https://github.com/lua/lua/archive/refs/tags/v5.4.8.tar.gz
+sha256: d85b70a65f43c5d2254944d58d625e822c8e2e10d9c6a3bd9b5b657e46376a19
+strip_components: 1
+lang: c
+timeout_min: 10
+smoke_test: math
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - darwin-arm64
+description: Pure ANSI C register-based Lua 5.4 bytecode VM, compiler, and generational GC

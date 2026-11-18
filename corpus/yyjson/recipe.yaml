@@ -1,0 +1,20 @@
+name: yyjson
+category: Parsers, Regex & Serialization
+repo: ibireme/yyjson
+version: 0.13.0
+url: https://github.com/ibireme/yyjson/archive/refs/tags/0.13.0.tar.gz
+sha256: 34e0f62a2bc11ab20d601e8ca1cc2b2079503aa45119a19133d89d19b94a0fae
+strip_components: 1
+lang: c
+timeout_min: 10
+smoke_test: test_json_reader
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - darwin-arm64
+description: ANSI C JSON library and floating-point parser/serializer
+cmake:
+  flags:
+    - -DBUILD_SHARED_LIBS=OFF
+    - -DYYJSON_BUILD_TESTS=ON
+ctest: {}

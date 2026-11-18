@@ -1,0 +1,24 @@
+name: quickjs-ng
+category: Language VMs & Runtimes
+repo: quickjs-ng/quickjs
+version: v0.18.0
+url: https://github.com/quickjs-ng/quickjs/archive/refs/tags/v0.18.0.tar.gz
+sha256: 28bcd89aa3683fd2a946537e5ce3f11cc46b5cbf3383c7561aaef3df5ff9f1dd
+strip_components: 1
+lang: c
+timeout_min: 10
+smoke_test: test_closure.js
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - darwin-arm64
+description: QuickJS JavaScript engine (ES2023, BigInt, RegExp bytecode, GC)
+cmake:
+  flags:
+    - -DBUILD_SHARED_LIBS=OFF
+    - -DQJS_BUILD_WERROR=OFF
+  targets:
+    - qjs_exe
+    - run-test262
+    - api-test
+    - lre-test

@@ -1,0 +1,15 @@
+name: wamr
+category: Language VMs & Runtimes
+repo: bytecodealliance/wasm-micro-runtime
+version: WAMR-2.4.6
+url: https://github.com/bytecodealliance/wasm-micro-runtime/archive/refs/tags/WAMR-2.4.6.tar.gz
+sha256: 6a8de3f74671a72698b4bd61a96c1ce8966db077b2adad7b720757cfd9caff62
+strip_components: 1
+lang: c
+timeout_min: 10
+smoke_test: i64_arith
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - darwin-arm64
+description: WebAssembly Micro Runtime fast/classic interpreter, AOT loader, and WASI runtime

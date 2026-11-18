@@ -1,0 +1,45 @@
+name: eigen
+category: Linear Algebra & SIMD
+repo: live-clones/eigen
+version: 5.0.1
+url: https://github.com/live-clones/eigen/archive/refs/tags/5.0.1.tar.gz
+sha256: e9c326dc8c05cd1e044c71f30f1b2e34a6161a3b6ecf445d56b53ff1669e3dec
+strip_components: 1
+lang: cxx
+timeout_min: 20
+smoke_test: basicstuff_1
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - darwin-arm64
+description: Eigen C++ template library for dense/sparse linear algebra and decompositions
+cmake:
+  flags:
+    - -DCMAKE_Fortran_COMPILER=OFF
+    - -DBUILD_TESTING=ON
+    - -DEIGEN_BUILD_TESTING=ON
+    - -DEIGEN_BUILD_BLAS=OFF
+    - -DEIGEN_BUILD_LAPACK=OFF
+    - -DEIGEN_BUILD_DOC=OFF
+    - -DEIGEN_BUILD_DEMOS=OFF
+    - -DEIGEN_SPLIT_LARGE_TESTS=ON
+  targets:
+    - basicstuff_1
+    - packetmath_1
+    - product_small_1
+    - adjoint_1
+    - array_cwise_1
+    - determinant_1
+    - inverse_1
+    - lu_1
+    - cholesky_1
+    - qr_1
+    - qr_colpivoting_1
+    - jacobisvd_1
+    - bdcsvd_1
+    - eigensolver_selfadjoint_1
+    - sparse_basic_1
+ctest:
+  regex: ^(basicstuff_1|packetmath_1|product_small_1|adjoint_1|array_cwise_1|determinant_1|inverse_1|lu_1|cholesky_1|qr_1|qr_colpivoting_1|jacobisvd_1|bdcsvd_1|eigensolver_selfadjoint_1|sparse_basic_1)$
+  env:
+    EIGEN_SEED: "1"

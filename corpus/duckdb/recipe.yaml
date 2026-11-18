@@ -1,0 +1,28 @@
+name: duckdb
+category: Databases, Compression & Solvers
+repo: duckdb/duckdb
+version: v1.5.6
+url: https://github.com/duckdb/duckdb/archive/refs/tags/v1.5.6.tar.gz
+sha256: 1fadcbe9e69e1470f9093b6bcde08daf477d729c449e59a807f45c346622099b
+strip_components: 1
+lang: cxx
+timeout_min: 30
+smoke_test: test/sql/window/test_basic_window.test
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - darwin-arm64
+description: Vectorized analytical SQL OLAP engine (columnar execution, query optimizer, hash joins)
+cmake:
+  flags:
+    - -DBUILD_UNITTESTS=ON
+    - -DBUILD_SHELL=OFF
+    - -DBUILD_COMPLETE_EXTENSION_SET=FALSE
+    - -DENABLE_EXTENSION_AUTOLOADING=FALSE
+    - -DENABLE_EXTENSION_AUTOINSTALL=FALSE
+    - -DENABLE_JEMALLOC=FALSE
+    - -DENABLE_SANITIZER=FALSE
+    - -DENABLE_UBSAN=FALSE
+    - -DOVERRIDE_GIT_DESCRIBE=v1.5.6-0-g0000000000
+  targets:
+    - unittest

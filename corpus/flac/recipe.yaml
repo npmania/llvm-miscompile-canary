@@ -1,0 +1,27 @@
+name: flac
+category: Codecs & DSP
+repo: xiph/flac
+version: 1.5.0
+url: https://github.com/xiph/flac/archive/refs/tags/1.5.0.tar.gz
+sha256: aea54ed186ad07a34750399cb27fc216a2b62d0ffcd6dc2e3064a3518c3146f8
+strip_components: 1
+lang: cxx
+timeout_min: 15
+smoke_test: grabbag
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - darwin-arm64
+description: Free Lossless Audio Codec C/C++ library and unit tests
+cmake:
+  flags:
+    - -DWITH_OGG=OFF
+    - -DWITH_ASM=OFF
+    - -DBUILD_SHARED_LIBS=OFF
+    - -DBUILD_TESTING=ON
+    - -DBUILD_CXXLIBS=ON
+    - -DBUILD_PROGRAMS=OFF
+    - -DBUILD_EXAMPLES=OFF
+    - -DBUILD_DOCS=OFF
+    - -DINSTALL_MANPAGES=OFF
+ctest: {}

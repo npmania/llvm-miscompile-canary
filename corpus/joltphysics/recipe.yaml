@@ -1,0 +1,37 @@
+name: joltphysics
+category: Physics Engines
+repo: jrouwe/JoltPhysics
+version: v5.7.0
+url: https://github.com/jrouwe/JoltPhysics/archive/refs/tags/v5.7.0.tar.gz
+sha256: 9a0a405f2375dc4bd9f72486c56e1cbc7794c6a62e42fc48fadea45dfc93dacc
+strip_components: 1
+lang: cxx
+timeout_min: 15
+smoke_test: Mat44Tests
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - darwin-arm64
+description: 3D rigid-body physics and collision engine
+cmake:
+  subdir: Build
+  flags:
+    - -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON
+    - -DBUILD_SHARED_LIBS=OFF
+    - -DTARGET_UNIT_TESTS=ON
+    - -DTARGET_HELLO_WORLD=OFF
+    - -DTARGET_PERFORMANCE_TEST=OFF
+    - -DTARGET_SAMPLES=OFF
+    - -DUSE_ASSERTS=OFF
+    - -DCROSS_PLATFORM_DETERMINISTIC=ON
+    - -DENABLE_ALL_WARNINGS=OFF
+    - -DOVERRIDE_CXX_FLAGS=OFF
+    - -DINTERPROCEDURAL_OPTIMIZATION=OFF
+    - -DGENERATE_DEBUG_SYMBOLS=OFF
+    - -DFLOATING_POINT_EXCEPTIONS_ENABLED=OFF
+    - -DJPH_USE_DX12=OFF
+    - -DJPH_USE_VK=OFF
+    - -DJPH_USE_MTL=OFF
+    - -DJPH_USE_CPU_COMPUTE=OFF
+  targets:
+    - UnitTests

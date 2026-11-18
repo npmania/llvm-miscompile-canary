@@ -1,0 +1,24 @@
+name: simdjson
+category: Parsers, Regex & Serialization
+repo: simdjson/simdjson
+version: v5.2.0
+url: https://github.com/simdjson/simdjson/archive/refs/tags/v5.2.0.tar.gz
+sha256: 499176afd4b32fbe6f65551ef573b880407280072e1c19e22df0b45da58cdf64
+strip_components: 1
+lang: cxx
+timeout_min: 15
+smoke_test: unicode_tests
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - darwin-arm64
+description: SIMD JSON parser (DOM, On-Demand, UTF-8)
+cmake:
+  flags:
+    - -DBUILD_SHARED_LIBS=OFF
+    - -DSIMDJSON_DEVELOPER_MODE=ON
+    - -DSIMDJSON_ALLOW_DOWNLOADS=OFF
+  targets:
+    - all_tests
+ctest:
+  exclude: "(^(avoid_|just_ascii$|simdjson-singleheader$|readme_examples|compilation_failure_|compile_failure_)|_should_(not_)?compile$)"

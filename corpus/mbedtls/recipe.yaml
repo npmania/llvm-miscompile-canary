@@ -1,0 +1,16 @@
+name: mbedtls
+category: Crypto & Bignum
+repo: Mbed-TLS/mbedtls
+version: v3.5.2
+url: https://github.com/Mbed-TLS/mbedtls/archive/refs/tags/v3.5.2.tar.gz
+sha256: 35890edf1a2c7a7e29eac3118d43302c3e1173e0df0ebaf5db56126dabe5bb05
+strip_components: 1
+lang: c
+timeout_min: 15
+smoke_test: aes.ecb-suite
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - darwin-arm64
+description: Mbed TLS cryptographic, X.509, and TLS/DTLS C library
+ctest: {}

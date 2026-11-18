@@ -1,0 +1,23 @@
+name: box2d
+category: Physics Engines
+repo: erincatto/box2d
+version: v3.2.0
+url: https://github.com/erincatto/box2d/archive/refs/tags/v3.2.0.tar.gz
+sha256: ffec747b27a2267016f8d0240d658c82d187fb2271fa0f69fcbe53fbc067180d
+strip_components: 1
+lang: c
+timeout_min: 10
+smoke_test: MathTest
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - darwin-arm64
+description: 2D rigid-body physics engine in C17
+cmake:
+  flags:
+    - -DBUILD_SHARED_LIBS=OFF
+    - -DBOX2D_UNIT_TESTS=ON
+    - -DBOX2D_SAMPLES=OFF
+    - -DBOX2D_BENCHMARKS=OFF
+    - -DBOX2D_DOCS=OFF
+    - -DBOX2D_COMPILE_WARNING_AS_ERROR=OFF

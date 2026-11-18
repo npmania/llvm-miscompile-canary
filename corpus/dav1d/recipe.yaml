@@ -1,0 +1,15 @@
+name: dav1d
+category: Codecs & DSP
+repo: videolan/dav1d
+version: 1.5.5
+url: https://github.com/videolan/dav1d/archive/refs/tags/1.5.5.tar.gz
+sha256: 76ad07ab121d68407b64a6f50f540c90ca0b066d178bdc9adbea14acf4ce25a9
+strip_components: 1
+lang: c
+timeout_min: 15
+smoke_test: decode_av1_8bpc
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - darwin-arm64
+description: VideoLAN dav1d AV1 video decoder with handwritten assembly disabled

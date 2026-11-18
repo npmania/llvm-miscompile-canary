@@ -1,0 +1,147 @@
+:root {
+  color-scheme: light dark;
+  --bg: #fff;
+  --fg: #111;
+  --muted: #666;
+  --rule: #ddd;
+  --pre-bg: #f7f7f7;
+  --fail: #b91c1c;
+  --diff-add: #166534;
+  --diff-del: #991b1b;
+  --sans: system-ui, -apple-system, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141414;
+    --fg: #e5e5e5;
+    --muted: #888;
+    --rule: #303030;
+    --pre-bg: #1e1e1e;
+    --fail: #f87171;
+    --diff-add: #4ade80;
+    --diff-del: #f87171;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 16px 24px 40px;
+  max-width: 1360px;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+header {
+  padding-bottom: 8px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--rule);
+  font-size: 13px;
+}
+
+h1 {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0 0 12px;
+}
+
+h2 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 20px 0 6px;
+}
+
+h2:first-child {
+  margin-top: 0;
+}
+
+a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+code, pre, .mono {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+pre {
+  margin: 6px 0 18px;
+  padding: 10px 12px;
+  background: var(--pre-bg);
+  border: 1px solid var(--rule);
+  overflow-x: auto;
+  line-height: 1.4;
+}
+
+p.cmd {
+  margin: 4px 0;
+  color: var(--muted);
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 16px;
+}
+
+th, td {
+  padding: 4px 10px 4px 0;
+  text-align: left;
+  vertical-align: top;
+}
+
+thead th {
+  font-weight: 600;
+  color: var(--muted);
+  border-bottom: 1px solid var(--rule);
+  white-space: nowrap;
+}
+
+tbody tr {
+  border-bottom: 1px solid var(--rule);
+}
+
+table.kv {
+  width: auto;
+  min-width: min(100%, 640px);
+}
+
+table.kv th {
+  width: 120px;
+  font-weight: 400;
+  color: var(--muted);
+  white-space: nowrap;
+  padding-right: 16px;
+}
+
+table.kv tr {
+  border-bottom: 1px solid var(--rule);
+}
+
+.muted { color: var(--muted); }
+.nowrap { white-space: nowrap; }
+
+a.fail, .fail {
+  color: var(--fail);
+  font-weight: 700;
+  text-decoration: underline;
+}
+
+.err {
+  color: var(--fail);
+}
+
+.diff-add { color: var(--diff-add); }
+.diff-del { color: var(--diff-del); }

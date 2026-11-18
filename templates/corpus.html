@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>corpus · llvm-miscompile-canary</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header><strong>llvm-miscompile-canary</strong> · trunk <code>{{.Nav.LatestSHA12}}</code> · <time{{if .Nav.UpdatedISO}} datetime="{{.Nav.UpdatedISO}}"{{end}}>{{.Nav.UpdatedUTC}}</time> · <a href="{{.Nav.RootPrefix}}index.html">status</a> · <a href="{{.Nav.RootPrefix}}corpus/index.html">corpus</a> · <a href="https://github.com/npmania/llvm-miscompile-canary" rel="noopener">git</a></header>
+  <main>
+    <h1>Corpus</h1>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Package</th>
+            <th>Version</th>
+            <th>Lang</th>
+            <th>Domain</th>
+            <th>Smoke</th>
+            <th>Upstream</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{- range .Packages}}
+          <tr>
+            <td class="mono">{{.Name}}</td>
+            <td class="mono muted">{{if .Version}}{{.Version}}{{else}}-{{end}}</td>
+            <td class="mono muted">{{.Lang}}</td>
+            <td>{{.Category}}</td>
+            <td class="mono muted">{{if .SmokeTest}}{{.SmokeTest}}{{else}}-{{end}}</td>
+            <td class="mono muted">{{if .Repo}}<a href="https://github.com/{{.Repo}}" rel="noopener">{{.Repo}}</a>{{else}}-{{end}}</td>
+          </tr>
+          {{- end}}
+        </tbody>
+      </table>
+    </div>
+  </main>
+</body>
+</html>

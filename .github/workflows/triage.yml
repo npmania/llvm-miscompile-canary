@@ -1,0 +1,406 @@
+name: Miscompile Triage
+
+on:
+  workflow_dispatch:
+    inputs:
+      bad_sha:
+        description: 'Failing LLVM commit SHA'
+        required: true
+        type: string
+      regressions_json:
+        description: 'JSON array of failing entries from sweep aggregate'
+        required: false
+        type: string
+      package:
+        description: 'Single package name (manual dispatch)'
+        required: false
+        type: string
+      platform:
+        description: 'Single platform ID (manual dispatch: linux-x86_64, linux-aarch64, darwin-arm64)'
+        required: false
+        type: string
+      profile:
+        description: 'Single profile ID (manual dispatch: distro-O2 or release-lto)'
+        required: false
+        type: string
+      good_sha:
+        description: 'Last-known-good LLVM commit SHA (manual dispatch)'
+        required: false
+        type: string
+      test_id:
+        description: 'Specific failing subtest ID (manual dispatch)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+
+env:
+  GH_REPO: ${{ github.repository }}
+
+jobs:
+  prepare:
+    name: Build Triage Matrix
+    runs-on: ubuntu-24.04
+    outputs:
+      has_entries: ${{ steps.matrix.outputs.has_entries }}
+      matrix_json: ${{ steps.matrix.outputs.matrix_json }}
+    steps:
+      - name: Normalize regression entries
+        id: matrix
+        env:
+          BAD_SHA: ${{ inputs.bad_sha }}
+          REGRESSIONS_JSON: ${{ inputs.regressions_json }}
+          SINGLE_PKG: ${{ inputs.package }}
+          SINGLE_PLAT: ${{ inputs.platform }}
+          SINGLE_PROF: ${{ inputs.profile }}
+          SINGLE_GOOD: ${{ inputs.good_sha }}
+          SINGLE_TEST: ${{ inputs.test_id }}
+        run: |
+          set -euo pipefail
+          if [ -n "${REGRESSIONS_JSON}" ]; then
+            raw="${REGRESSIONS_JSON}"
+          elif [ -n "${SINGLE_PKG}" ] && [ -n "${SINGLE_PLAT}" ]; then
+            raw="$(jq -nc \
+              --arg pkg "${SINGLE_PKG}" \
+              --arg plat "${SINGLE_PLAT}" \
+              --arg prof "${SINGLE_PROF:-distro-O2}" \
+              --arg good "${SINGLE_GOOD}" \
+              --arg bad "${BAD_SHA}" \
+              --arg tid "${SINGLE_TEST}" \
+              '[{
+                package: $pkg,
+                platform: $plat,
+                profile: $prof,
+                good_sha: $good,
+                bad_sha: $bad,
+                failed_tests: (if $tid == "" then [] else [$tid] end)
+              }]')"
+          else
+            raw="[]"
+          fi
+
+          enriched="$(printf '%s' "${raw}" | jq -c --arg bad "${BAD_SHA}" '
+            map(select((.good_sha // "") != "") | . + {
+              bad_sha: (.bad_sha // $bad),
+              test_id: ((.failed_tests // [])[0] // ""),
+              runner: (
+                if .platform == "linux-x86_64" then "ubuntu-24.04"
+                elif .platform == "linux-aarch64" then "ubuntu-24.04-arm"
+                else "macos-latest"
+                end
+              )
+            })
+          ')"
+
+          count="$(printf '%s' "${enriched}" | jq 'length')"
+          if [ "${count}" -gt 0 ]; then
+            echo "has_entries=true" >> "$GITHUB_OUTPUT"
+            echo "matrix_json={\"include\":${enriched}}" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_entries=false" >> "$GITHUB_OUTPUT"
+            echo "matrix_json={\"include\":[]}" >> "$GITHUB_OUTPUT"
+          fi
+
+  triage:
+    name: Triage ${{ matrix.package }} (${{ matrix.platform }} / ${{ matrix.profile }})
+    needs: prepare
+    if: needs.prepare.outputs.has_entries == 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix_json) }}
+    env:
+      GOTOOLCHAIN: auto
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+
+      - name: Free runner disk space (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            autoconf automake ca-certificates ccache clang cmake curl git \
+            libtool libzstd-dev lld make meson ninja-build pkg-config python3 zstd
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install ccache cmake meson ninja pkg-config zstd
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Build lmc
+        run: go build -o lmc .
+
+      - name: Download good and bad prebuilt LLVM snapshots
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOOD_SHA: ${{ matrix.good_sha }}
+          BAD_SHA: ${{ matrix.bad_sha }}
+          PLAT: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          good12="${GOOD_SHA:0:12}"
+          bad12="${BAD_SHA:0:12}"
+          mkdir -p "${RUNNER_TEMP}/tc-good" "${RUNNER_TEMP}/tc-bad"
+
+          gh release download "toolchain-${good12}" \
+            --pattern "llvm-${good12}-${PLAT}.tar.zst" \
+            --dir "${RUNNER_TEMP}/tc-good"
+          zstd -dc "${RUNNER_TEMP}/tc-good/llvm-${good12}-${PLAT}.tar.zst" | tar -xf - -C "${RUNNER_TEMP}/tc-good"
+          rm -f "${RUNNER_TEMP}/tc-good/llvm-${good12}-${PLAT}.tar.zst"
+
+          gh release download "toolchain-${bad12}" \
+            --pattern "llvm-${bad12}-${PLAT}.tar.zst" \
+            --dir "${RUNNER_TEMP}/tc-bad"
+          zstd -dc "${RUNNER_TEMP}/tc-bad/llvm-${bad12}-${PLAT}.tar.zst" | tar -xf - -C "${RUNNER_TEMP}/tc-bad"
+          rm -f "${RUNNER_TEMP}/tc-bad/llvm-${bad12}-${PLAT}.tar.zst"
+
+      - name: Restore ccache for single-TU commit bisection
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: ccache-bisect-${{ matrix.platform }}-${{ matrix.bad_sha }}
+          restore-keys: |
+            ccache-bisect-${{ matrix.platform }}-
+            ccache-toolchain-${{ matrix.platform }}-
+
+      - name: Fetch llvm-project history
+        env:
+          GOOD_SHA: ${{ matrix.good_sha }}
+          BAD_SHA: ${{ matrix.bad_sha }}
+        run: |
+          git init "${RUNNER_TEMP}/llvm-project"
+          git -C "${RUNNER_TEMP}/llvm-project" remote add origin https://github.com/llvm/llvm-project.git
+          git -C "${RUNNER_TEMP}/llvm-project" fetch --filter=blob:none origin "${GOOD_SHA}" "${BAD_SHA}"
+          git -C "${RUNNER_TEMP}/llvm-project" checkout --detach "${BAD_SHA}"
+
+      - name: Run lmc triage
+        env:
+          CCACHE_DIR: ${{ runner.temp }}/ccache
+          CCACHE_MAXSIZE: 3G
+          CCACHE_COMPRESS: 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p out/dist out/store out/ir
+          extra_args=()
+          if [ -n "${{ matrix.test_id }}" ]; then
+            extra_args+=(-test "${{ matrix.test_id }}")
+          fi
+
+          ./lmc triage \
+            -corpus corpus \
+            -pkg "${{ matrix.package }}" \
+            -plat "${{ matrix.platform }}" \
+            -prof "${{ matrix.profile }}" \
+            -good-tc "${RUNNER_TEMP}/tc-good/bin" \
+            -bad-tc "${RUNNER_TEMP}/tc-bad/bin" \
+            -good "${{ matrix.good_sha }}" \
+            -bad "${{ matrix.bad_sha }}" \
+            -llvm "${RUNNER_TEMP}/llvm-project" \
+            -dir "${RUNNER_TEMP}/triage-work" \
+            -cache "${RUNNER_TEMP}/lmc-cache" \
+            -bundle out/dist \
+            -store out/store \
+            -out out/incident.json \
+            "${extra_args[@]}"
+
+          find "${RUNNER_TEMP}/triage-work" -maxdepth 4 \( -name 'before.ll' -o -name 'after.ll' \) -exec cp {} out/ir/ \; 2>/dev/null || true
+
+      - name: Upload triage output artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: triage-${{ matrix.package }}-${{ matrix.platform }}-${{ matrix.profile }}
+          path: out/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  alive2-verify:
+    name: alive-tv
+    needs: [prepare, triage]
+    if: always() && needs.prepare.outputs.has_entries == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      GOTOOLCHAIN: auto
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Build lmc
+        run: go build -o lmc .
+
+      - name: Download triage artifacts
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: triage-*
+          path: triaged
+
+      - name: Run alive-tv
+        run: |
+          set -euo pipefail
+          mkdir -p triaged
+          if ! find triaged -name 'before.ll' | grep -q .; then
+            exit 0
+          fi
+
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ca-certificates clang cmake git libz3-dev llvm-dev ninja-build re2c || true
+          llvm_dir=""
+          if command -v llvm-config >/dev/null 2>&1; then
+            llvm_dir="$(llvm-config --cmakedir 2>/dev/null || true)"
+          fi
+          if [ -z "${llvm_dir}" ] || [ ! -f "${llvm_dir}/LLVMConfig.cmake" ]; then
+            llvm_cmake="$(find /usr/lib -maxdepth 5 -path '*/cmake/llvm/LLVMConfig.cmake' 2>/dev/null | sort -r | head -n1 || true)"
+            [ -n "${llvm_cmake}" ] && llvm_dir="$(dirname "${llvm_cmake}")"
+          fi
+          LLVM_DIR="${llvm_dir}" ./scripts/build-alive2-linux.sh /tmp/alive2/bin/alive-tv || true
+
+          if [ ! -x /tmp/alive2/bin/alive-tv ]; then
+            exit 0
+          fi
+
+          for dir in triaged/triage-*; do
+            [ -d "${dir}" ] || continue
+            inc="${dir}/incident.json"
+            before="${dir}/ir/before.ll"
+            after="${dir}/ir/after.ll"
+            [ -f "${inc}" ] && [ -f "${before}" ] && [ -f "${after}" ] || continue
+
+            ./lmc alive-check \
+              -alive-tv /tmp/alive2/bin/alive-tv \
+              -before "${before}" \
+              -after "${after}" \
+              -inc "${inc}"
+          done
+
+      - name: Upload verified triage bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: triaged-verified
+          path: triaged/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  publish:
+    name: Upload Reproducers, Update Dashboard & Sync GitHub Issues
+    needs: [prepare, triage, alive2-verify]
+    if: always() && needs.prepare.outputs.has_entries == 'true'
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: data-gh-pages-write
+      cancel-in-progress: false
+    env:
+      GOTOOLCHAIN: auto
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Build lmc
+        run: go build -o lmc .
+
+      - name: Download verified triage artifacts
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: triaged-verified
+          path: verified
+
+      - name: Checkout orphan data and gh-pages branches
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./scripts/sync-branch.sh checkout data _data
+          mkdir -p _data/incidents _data/sweeps
+          ./scripts/sync-branch.sh checkout gh-pages _site
+
+      - name: Upload reproducer-<id>.tar.zst bundles & merge incidents
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p verified
+          if ! find verified -name 'incident.json' | grep -q .; then
+            exit 0
+          fi
+
+          if ! gh release view reproducers >/dev/null 2>&1; then
+            gh release create reproducers \
+              --target master \
+              --title "Reproducer archives" \
+              --notes "reproducer-<id>.tar.zst archives."
+          fi
+
+          for dir in verified/triage-*; do
+            [ -f "${dir}/incident.json" ] || continue
+            inc_id="$(jq -r '.id // ""' "${dir}/incident.json")"
+            [ -n "${inc_id}" ] || continue
+
+            bundle_url=""
+            for archive in "${dir}"/dist/reproducer-*.tar.zst; do
+              [ -f "${archive}" ] || continue
+              fname="$(basename "${archive}")"
+              gh release upload reproducers "${archive}" --clobber
+              bundle_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/reproducers/${fname}"
+            done
+
+            ./lmc merge-incident \
+              -store _data \
+              -inc "${dir}/incident.json" \
+              -bundle-url "${bundle_url}"
+          done
+
+      - name: Sync issues
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./lmc sync-issues \
+            -store _data \
+            -repo "${{ github.repository }}" \
+            -url "https://llvm-miscompile-canary.glendalab.com" \
+            -sha "${{ inputs.bad_sha }}"
+
+      - name: Build site
+        run: |
+          ./lmc site -store _data -out _site -corpus corpus
+          test "$(tr -d '\r\n' < _site/CNAME)" = "llvm-miscompile-canary.glendalab.com"
+
+      - name: Commit & push data and gh-pages
+        env:
+          BAD_SHA: ${{ inputs.bad_sha }}
+        run: |
+          sha12="${BAD_SHA:0:12}"
+          ./scripts/sync-branch.sh push data _data "data: update triage incidents for ${sha12}"
+          ./scripts/sync-branch.sh push gh-pages _site "site: publish triaged incidents for ${sha12}"

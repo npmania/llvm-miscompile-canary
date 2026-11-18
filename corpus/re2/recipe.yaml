@@ -1,0 +1,36 @@
+name: re2
+category: Parsers, Regex & Serialization
+repo: google/re2
+version: 2023-03-01
+url: https://github.com/google/re2/archive/refs/tags/2023-03-01.tar.gz
+sha256: 7a9a4824958586980926a300b4717202485c4b4115ac031822e29aa4ef207e48
+strip_components: 1
+lang: cxx
+timeout_min: 10
+smoke_test: re2_test
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - darwin-arm64
+description: Finite-automata regular expression engine (NFA, DFA, one-pass, bitstate)
+cmake:
+  flags:
+    - -DBUILD_SHARED_LIBS=OFF
+    - -DRE2_BUILD_TESTING=ON
+  targets:
+    - charclass_test
+    - compile_test
+    - filtered_re2_test
+    - mimics_pcre_test
+    - parse_test
+    - possible_match_test
+    - re2_test
+    - re2_arg_test
+    - regexp_test
+    - required_prefix_test
+    - search_test
+    - set_test
+    - simplify_test
+    - string_generator_test
+ctest:
+  exclude: "^(dfa_test|exhaustive.*_test|random_test)$"

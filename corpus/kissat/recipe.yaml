@@ -1,0 +1,15 @@
+name: kissat
+category: Databases, Compression & Solvers
+repo: arminbiere/kissat
+version: rel-4.0.4
+url: https://github.com/arminbiere/kissat/archive/refs/tags/rel-4.0.4.tar.gz
+sha256: bfe93eaa6323b48011e4b1fcf74b3f2e20f9de544767e728009e5b2018296193
+strip_components: 1
+lang: c
+timeout_min: 10
+smoke_test: kitten
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - darwin-arm64
+description: Kissat CDCL SAT solver and kitten probing library

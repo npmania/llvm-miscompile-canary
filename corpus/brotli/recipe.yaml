@@ -1,0 +1,20 @@
+name: brotli
+category: Databases, Compression & Solvers
+repo: google/brotli
+version: v1.2.1
+url: https://github.com/google/brotli/archive/refs/tags/v1.2.1.tar.gz
+sha256: 98d35d11a78dc453aebb7d10c3748f3f73ff78c8267c0dc697b8631f67bf7e8f
+strip_components: 1
+lang: c
+timeout_min: 10
+smoke_test: roundtrip/c/enc/encode.c/6
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - darwin-arm64
+description: Brotli LZ77 + 2nd-order context modeling + Huffman encoder and decoder
+cmake:
+  flags:
+    - -DBUILD_SHARED_LIBS=OFF
+    - -DBROTLI_BUILD_TOOLS=ON
+ctest: {}

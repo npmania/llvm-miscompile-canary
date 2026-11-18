@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>llvm-miscompile-canary</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header><strong>llvm-miscompile-canary</strong> · trunk <code>{{.Nav.LatestSHA12}}</code> · <time{{if .Nav.UpdatedISO}} datetime="{{.Nav.UpdatedISO}}"{{end}}>{{.Nav.UpdatedUTC}}</time> · <a href="{{.Nav.RootPrefix}}index.html">status</a> · <a href="{{.Nav.RootPrefix}}corpus/index.html">corpus</a> · <a href="https://github.com/npmania/llvm-miscompile-canary" rel="noopener">git</a></header>
+  <main>
+    {{- if .OpenIncidents}}
+    <h2>Open</h2>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Incident</th>
+            <th>Commit</th>
+            <th>Pass</th>
+            <th>Function</th>
+            <th>Targets</th>
+            <th>Issue</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{- range .OpenIncidents}}
+          <tr>
+            <td class="mono"><a href="incidents/{{.ID}}/index.html">{{.ID}}</a></td>
+            <td class="mono">{{.CulpritSHA}}</td>
+            <td class="mono">{{.Pass}}</td>
+            <td class="mono">{{.Function}}</td>
+            <td class="mono">{{.Targets}}</td>
+            <td class="mono">{{if .IssueURL}}<a href="{{.IssueURL}}">#{{.IssueNumber}}</a>{{else if gt .IssueNumber 0}}#{{.IssueNumber}}{{else}}-{{end}}</td>
+          </tr>
+          {{- end}}
+        </tbody>
+      </table>
+    </div>
+    {{- end}}
+
+    <h2>Corpus</h2>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Package</th>
+            <th>Version</th>
+            {{- range .Columns}}
+            <th>{{.Header}}</th>
+            {{- end}}
+          </tr>
+        </thead>
+        <tbody>
+          {{- range .Rows}}
+          <tr>
+            <td class="mono">{{.Package}}</td>
+            <td class="mono muted">{{if .Version}}{{.Version}}{{else}}-{{end}}</td>
+            {{- range .Cells}}
+            {{- if eq .Kind "fail"}}
+            <td class="mono">{{if .IncidentID}}<a class="fail" href="incidents/{{.IncidentID}}/index.html">fail</a>{{else}}<span class="fail">fail</span>{{end}}</td>
+            {{- else if eq .Kind "err"}}
+            <td class="mono err">err</td>
+            {{- else}}
+            <td class="mono muted">{{.Text}}</td>
+            {{- end}}
+            {{- end}}
+          </tr>
+          {{- end}}
+        </tbody>
+      </table>
+    </div>
+
+    {{- if .ResolvedIncidents}}
+    <h2>Resolved</h2>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Incident</th>
+            <th>Commit</th>
+            <th>Fixed</th>
+            <th>Pass</th>
+            <th>Targets</th>
+            <th>Issue</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{- range .ResolvedIncidents}}
+          <tr>
+            <td class="mono"><a href="incidents/{{.ID}}/index.html">{{.ID}}</a></td>
+            <td class="mono">{{.CulpritSHA}}</td>
+            <td class="mono">{{.FixedSHA}}</td>
+            <td class="mono">{{.Pass}}</td>
+            <td class="mono">{{.Targets}}</td>
+            <td class="mono">{{if .IssueURL}}<a href="{{.IssueURL}}">#{{.IssueNumber}}</a>{{else if gt .IssueNumber 0}}#{{.IssueNumber}}{{else}}-{{end}}</td>
+          </tr>
+          {{- end}}
+        </tbody>
+      </table>
+    </div>
+    {{- end}}
+  </main>
+</body>
+</html>

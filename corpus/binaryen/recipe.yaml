@@ -1,0 +1,24 @@
+name: binaryen
+category: Compilers & IR
+repo: WebAssembly/binaryen
+version: version_133
+url: https://github.com/WebAssembly/binaryen/archive/refs/tags/version_133.tar.gz
+sha256: 2f3e3d9edc56751499571da073a8a81943ca3fcbc08a945d2c619a7a1d4eb88b
+strip_components: 1
+lang: cxx
+timeout_min: 25
+smoke_test: licm.wast
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - darwin-arm64
+description: Binaryen WebAssembly IR optimizer, assembler, and interpreter toolchain
+cmake:
+  flags:
+    - -DBUILD_SHARED_LIBS=OFF
+    - -DBUILD_TESTS=OFF
+    - -DBUILD_TOOLS=ON
+    - -DBYN_ENABLE_LTO=OFF
+    - -DENABLE_WERROR=OFF
+  targets:
+    - wasm-opt

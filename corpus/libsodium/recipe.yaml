@@ -1,0 +1,15 @@
+name: libsodium
+category: Crypto & Bignum
+repo: jedisct1/libsodium
+version: 1.0.22-RELEASE
+url: https://github.com/jedisct1/libsodium/releases/download/1.0.22-RELEASE/libsodium-1.0.22.tar.gz
+sha256: adbdd8f16149e81ac6078a03aca6fc03b592b89ef7b5ed83841c086191be3349
+strip_components: 1
+lang: c
+timeout_min: 15
+smoke_test: secretbox
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - darwin-arm64
+description: Libsodium cryptography library (C, assembly disabled)

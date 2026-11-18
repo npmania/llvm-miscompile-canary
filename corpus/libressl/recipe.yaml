@@ -1,0 +1,24 @@
+name: libressl
+category: Crypto & Bignum
+repo: libressl/portable
+version: v4.4.1
+url: https://github.com/libressl/portable/releases/download/v4.4.1/libressl-4.4.1.tar.gz
+sha256: 290cdf1b53c086255dc302f118b98602a444e9ae6d11e9bfdd8c9b1b60aa3a22
+strip_components: 1
+lang: c
+timeout_min: 15
+smoke_test: aes_test
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - darwin-arm64
+description: LibreSSL portable TLS and cryptography stack with assembly disabled
+cmake:
+  flags:
+    - -DENABLE_ASM=OFF
+    - -DBUILD_SHARED_LIBS=OFF
+    - -DLIBRESSL_APPS=ON
+    - -DLIBRESSL_TESTS=ON
+    - -DENABLE_EXTRATESTS=OFF
+    - -DENABLE_NC=OFF
+ctest: {}

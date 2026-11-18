@@ -1,0 +1,27 @@
+name: pcre2
+category: Parsers, Regex & Serialization
+repo: PCRE2Project/pcre2
+version: pcre2-10.49
+url: https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.49/pcre2-10.49.tar.gz
+sha256: 929f0b20e62879252a15886b06c89f1edef61a363cbd5826fb041080a5e557ae
+strip_components: 1
+lang: c
+timeout_min: 10
+smoke_test: pcre2_jit_test
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - darwin-arm64
+description: Perl-compatible regular expression library with SLJIT native code generator
+cmake:
+  flags:
+    - -DBUILD_SHARED_LIBS=OFF
+    - -DPCRE2_BUILD_TESTS=ON
+    - -DPCRE2_SUPPORT_JIT=ON
+    - -DPCRE2_BUILD_PCRE2_16=ON
+    - -DPCRE2_BUILD_PCRE2_32=ON
+    - -DPCRE2_SUPPORT_LIBZ=OFF
+    - -DPCRE2_SUPPORT_LIBBZ2=OFF
+    - -DPCRE2_SUPPORT_LIBEDIT=OFF
+    - -DPCRE2_SUPPORT_LIBREADLINE=OFF
+ctest: {}

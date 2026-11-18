@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-24.04
+          - macos-latest
+    env:
+      GOTOOLCHAIN: auto
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Install lld (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang lld
+
+      - name: Install lld (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          if ! command -v ld64.lld >/dev/null 2>&1 && [ ! -x /opt/homebrew/opt/lld/bin/ld64.lld ]; then
+            brew install lld
+          fi
+
+      - name: Vet
+        run: go vet .
+
+      - name: Test
+        run: go test -race -v .
+
+      - name: Build lmc
+        run: go build -o lmc .
+
+      - name: Validate corpus
+        run: ./lmc validate-corpus -corpus corpus -require 34

@@ -1,0 +1,32 @@
+name: zstd
+category: Databases, Compression & Solvers
+repo: facebook/zstd
+version: v1.5.7
+url: https://github.com/facebook/zstd/archive/refs/tags/v1.5.7.tar.gz
+sha256: 37d7284556b20954e56e1ca85b80226768902e2edabd3b649e9e72c0c9012ee3
+strip_components: 1
+lang: c
+timeout_min: 10
+smoke_test: fullbench
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - darwin-arm64
+description: Zstandard lossless compression engine (FSE/Huffman entropy coding, LZ matchfinder, pure C)
+cmake:
+  subdir: build/cmake
+  cflags: -DZSTD_DISABLE_ASM
+  flags:
+    - -DZSTD_BUILD_SHARED=OFF
+    - -DZSTD_BUILD_STATIC=ON
+    - -DZSTD_BUILD_PROGRAMS=ON
+    - -DZSTD_BUILD_TESTS=ON
+    - -DZSTD_LEGACY_SUPPORT=OFF
+    - -DZSTD_ASM_SUPPORTED=OFF
+    - -DZSTD_HAS_NOEXECSTACK=OFF
+  targets:
+    - fuzzer
+    - zstreamtest
+    - fullbench
+    - zstd
+    - datagen
