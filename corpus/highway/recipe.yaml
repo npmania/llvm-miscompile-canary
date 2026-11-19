@@ -1,9 +1,9 @@
 name: highway
 category: Linear Algebra & SIMD
 repo: google/highway
-version: 1.4.0
-url: https://github.com/google/highway/releases/download/1.4.0/highway-1.4.0.tar.gz
-sha256: 36f672ab48ddb3c8555e9e89e16fe400cd7d16c6eb455a1a3d0c146a63ababdc
+version: 1.4.0-786-g1b6d3f7
+url: https://github.com/npmania/highway/archive/1b6d3f71ca8cd1975e9c5d67bea64018a1715233.tar.gz
+sha256: 055a9cdaf2afd277b3069544e7b0eb5fe5f73a9e25470efcaa1b6919257d6a0b
 strip_components: 1
 lang: cxx
 timeout_min: 20
