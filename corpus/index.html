@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>corpus · llvm-miscompile-canary</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header><strong>llvm-miscompile-canary</strong> · trunk <code>704660a68dae</code> · <time datetime="2026-11-19T12:58:47Z">2026-11-19 12:58 UTC</time> · <a href="../index.html">status</a> · <a href="../corpus/index.html">corpus</a> · <a href="https://github.com/npmania/llvm-miscompile-canary" rel="noopener">git</a></header>
+  <main>
+    <h1>Corpus</h1>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Package</th>
+            <th>Version</th>
+            <th>Lang</th>
+            <th>Domain</th>
+            <th>Smoke</th>
+            <th>Upstream</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="mono nowrap">dav1d</td>
+            <td class="mono muted nowrap">1.5.5</td>
+            <td class="mono muted nowrap">C</td>
+            <td class="nowrap">Codecs &amp; DSP</td>
+            <td class="mono muted">decode_av1_8bpc</td>
+            <td class="mono nowrap"><a href="https://github.com/videolan/dav1d" rel="noopener">videolan/dav1d</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">ffmpeg</td>
+            <td class="mono muted nowrap">n8.1.3</td>
+            <td class="mono muted nowrap">C</td>
+            <td class="nowrap">Codecs &amp; DSP</td>
+            <td class="mono muted">fate-adler32</td>
+            <td class="mono nowrap"><a href="https://github.com/FFmpeg/FFmpeg" rel="noopener">FFmpeg/FFmpeg</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">flac</td>
+            <td class="mono muted nowrap">1.5.0</td>
+            <td class="mono muted nowrap">C&#43;&#43;</td>
+            <td class="nowrap">Codecs &amp; DSP</td>
+            <td class="mono muted">grabbag</td>
+            <td class="mono nowrap"><a href="https://github.com/xiph/flac" rel="noopener">xiph/flac</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">opus</td>
+            <td class="mono muted nowrap">v1.5.2</td>
+            <td class="mono muted nowrap">C</td>
+            <td class="nowrap">Codecs &amp; DSP</td>
+            <td class="mono muted">test_opus_padding</td>
+            <td class="mono nowrap"><a href="https://github.com/xiph/opus" rel="noopener">xiph/opus</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">binaryen</td>
+            <td class="mono muted nowrap">version_133</td>
+            <td class="mono muted nowrap">C&#43;&#43;</td>
+            <td class="nowrap">Compilers &amp; IR</td>
+            <td class="mono muted">licm.wast</td>
+            <td class="mono nowrap"><a href="https://github.com/WebAssembly/binaryen" rel="noopener">WebAssembly/binaryen</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">glslang</td>
+            <td class="mono muted nowrap">16.6.0</td>
+            <td class="mono muted nowrap">C&#43;&#43;</td>
+            <td class="nowrap">Compilers &amp; IR</td>
+            <td class="mono muted">reflection.vert</td>
+            <td class="mono nowrap"><a href="https://github.com/KhronosGroup/glslang" rel="noopener">KhronosGroup/glslang</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">aws-lc</td>
+            <td class="mono muted nowrap">v5.15.0</td>
+            <td class="mono muted nowrap">C&#43;&#43;</td>
+            <td class="nowrap">Crypto &amp; Bignum</td>
+            <td class="mono muted">AESTest.TestVectors</td>
+            <td class="mono nowrap"><a href="https://github.com/aws/aws-lc" rel="noopener">aws/aws-lc</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">libressl</td>
+            <td class="mono muted nowrap">v4.4.1</td>
+            <td class="mono muted nowrap">C</td>
+            <td class="nowrap">Crypto &amp; Bignum</td>
+            <td class="mono muted">aes_test</td>
+            <td class="mono nowrap"><a href="https://github.com/libressl/portable" rel="noopener">libressl/portable</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">libsodium</td>
+            <td class="mono muted nowrap">1.0.22-RELEASE</td>
+            <td class="mono muted nowrap">C</td>
+            <td class="nowrap">Crypto &amp; Bignum</td>
+            <td class="mono muted">secretbox</td>
+            <td class="mono nowrap"><a href="https://github.com/jedisct1/libsodium" rel="noopener">jedisct1/libsodium</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">mbedtls</td>
+            <td class="mono muted nowrap">v3.5.2</td>
+            <td class="mono muted nowrap">C</td>
+            <td class="nowrap">Crypto &amp; Bignum</td>
+            <td class="mono muted">aes.ecb-suite</td>
+            <td class="mono nowrap"><a href="https://github.com/Mbed-TLS/mbedtls" rel="noopener">Mbed-TLS/mbedtls</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">abseil-cpp</td>
+            <td class="mono muted nowrap">20260817.0</td>
+            <td class="mono muted nowrap">C&#43;&#43;</td>
+            <td class="nowrap">Databases, Compression &amp; Solvers</td>
+            <td class="mono muted">swiss_table_test</td>
+            <td class="mono nowrap"><a href="https://github.com/abseil/abseil-cpp" rel="noopener">abseil/abseil-cpp</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">brotli</td>
+            <td class="mono muted nowrap">v1.2.1</td>
+            <td class="mono muted nowrap">C</td>
+            <td class="nowrap">Databases, Compression &amp; Solvers</td>
+            <td class="mono muted">roundtrip/c/enc/encode.c/6</td>
+            <td class="mono nowrap"><a href="https://github.com/google/brotli" rel="noopener">google/brotli</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">duckdb</td>
+            <td class="mono muted nowrap">v1.5.6</td>
+            <td class="mono muted nowrap">C&#43;&#43;</td>
+            <td class="nowrap">Databases, Compression &amp; Solvers</td>
+            <td class="mono muted">test/sql/window/test_basic_window.test</td>
+            <td class="mono nowrap"><a href="https://github.com/duckdb/duckdb" rel="noopener">duckdb/duckdb</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">harfbuzz</td>
+            <td class="mono muted nowrap">15.1.0</td>
+            <td class="mono muted nowrap">C&#43;&#43;</td>
+            <td class="nowrap">Databases, Compression &amp; Solvers</td>
+            <td class="mono muted">test-algs</td>
+            <td class="mono nowrap"><a href="https://github.com/harfbuzz/harfbuzz" rel="noopener">harfbuzz/harfbuzz</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">kissat</td>
+            <td class="mono muted nowrap">rel-4.0.4</td>
+            <td class="mono muted nowrap">C</td>
+            <td class="nowrap">Databases, Compression &amp; Solvers</td>
+            <td class="mono muted">kitten</td>
+            <td class="mono nowrap"><a href="https://github.com/arminbiere/kissat" rel="noopener">arminbiere/kissat</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">sqlite</td>
+            <td class="mono muted nowrap">version-3.54.1</td>
+            <td class="mono muted nowrap">C</td>
+            <td class="nowrap">Databases, Compression &amp; Solvers</td>
+            <td class="mono muted">sql_window_cte</td>
+            <td class="mono nowrap"><a href="https://github.com/sqlite/sqlite" rel="noopener">sqlite/sqlite</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">z3</td>
+            <td class="mono muted nowrap">z3-5.4.1</td>
+            <td class="mono muted nowrap">C&#43;&#43;</td>
+            <td class="nowrap">Databases, Compression &amp; Solvers</td>
+            <td class="mono muted">bit_vector</td>
+            <td class="mono nowrap"><a href="https://github.com/Z3Prover/z3" rel="noopener">Z3Prover/z3</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">zstd</td>
+            <td class="mono muted nowrap">v1.5.7</td>
+            <td class="mono muted nowrap">C</td>
+            <td class="nowrap">Databases, Compression &amp; Solvers</td>
+            <td class="mono muted">fullbench</td>
+            <td class="mono nowrap"><a href="https://github.com/facebook/zstd" rel="noopener">facebook/zstd</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">libjpeg-turbo</td>
+            <td class="mono muted nowrap">3.2.1</td>
+            <td class="mono muted nowrap">C</td>
+            <td class="nowrap">Image &amp; HDR FP16</td>
+            <td class="mono muted">cjpeg-static-rgb-islow-cmp</td>
+            <td class="mono nowrap"><a href="https://github.com/libjpeg-turbo/libjpeg-turbo" rel="noopener">libjpeg-turbo/libjpeg-turbo</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">libwebp</td>
+            <td class="mono muted nowrap">v1.6.0</td>
+            <td class="mono muted nowrap">C</td>
+            <td class="nowrap">Image &amp; HDR FP16</td>
+            <td class="mono muted">lossless_roundtrip</td>
+            <td class="mono nowrap"><a href="https://github.com/webmproject/libwebp" rel="noopener">webmproject/libwebp</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">openexr</td>
+            <td class="mono muted nowrap">v2.5.10</td>
+            <td class="mono muted nowrap">C&#43;&#43;</td>
+            <td class="nowrap">Image &amp; HDR FP16</td>
+            <td class="mono muted">Half.testArithmetic</td>
+            <td class="mono nowrap"><a href="https://github.com/AcademySoftwareFoundation/openexr" rel="noopener">AcademySoftwareFoundation/openexr</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">cpython</td>
+            <td class="mono muted nowrap">v3.14.3</td>
+            <td class="mono muted nowrap">C</td>
+            <td class="nowrap">Language VMs &amp; Runtimes</td>
+            <td class="mono muted">test_math</td>
+            <td class="mono nowrap"><a href="https://github.com/python/cpython" rel="noopener">python/cpython</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">lua</td>
+            <td class="mono muted nowrap">v5.4.8</td>
+            <td class="mono muted nowrap">C</td>
+            <td class="nowrap">Language VMs &amp; Runtimes</td>
+            <td class="mono muted">math</td>
+            <td class="mono nowrap"><a href="https://github.com/lua/lua" rel="noopener">lua/lua</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">luau</td>
+            <td class="mono muted nowrap">0.747</td>
+            <td class="mono muted nowrap">C&#43;&#43;</td>
+            <td class="nowrap">Language VMs &amp; Runtimes</td>
+            <td class="mono muted">Conformance:Basic</td>
+            <td class="mono nowrap"><a href="https://github.com/luau-lang/luau" rel="noopener">luau-lang/luau</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">quickjs-ng</td>
+            <td class="mono muted nowrap">v0.18.0</td>
+            <td class="mono muted nowrap">C</td>
+            <td class="nowrap">Language VMs &amp; Runtimes</td>
+            <td class="mono muted">test_closure.js</td>
+            <td class="mono nowrap"><a href="https://github.com/quickjs-ng/quickjs" rel="noopener">quickjs-ng/quickjs</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">wamr</td>
+            <td class="mono muted nowrap">WAMR-2.4.6</td>
+            <td class="mono muted nowrap">C</td>
+            <td class="nowrap">Language VMs &amp; Runtimes</td>
+            <td class="mono muted">i64_arith</td>
+            <td class="mono nowrap"><a href="https://github.com/bytecodealliance/wasm-micro-runtime" rel="noopener">bytecodealliance/wasm-micro-runtime</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">eigen</td>
+            <td class="mono muted nowrap">5.0.1</td>
+            <td class="mono muted nowrap">C&#43;&#43;</td>
+            <td class="nowrap">Linear Algebra &amp; SIMD</td>
+            <td class="mono muted">basicstuff_1</td>
+            <td class="mono nowrap"><a href="https://github.com/live-clones/eigen" rel="noopener">live-clones/eigen</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">highway</td>
+            <td class="mono muted nowrap">1.4.0</td>
+            <td class="mono muted nowrap">C&#43;&#43;</td>
+            <td class="nowrap">Linear Algebra &amp; SIMD</td>
+            <td class="mono muted">arithmetic_test</td>
+            <td class="mono nowrap"><a href="https://github.com/google/highway" rel="noopener">google/highway</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">pcre2</td>
+            <td class="mono muted nowrap">pcre2-10.49</td>
+            <td class="mono muted nowrap">C</td>
+            <td class="nowrap">Parsers, Regex &amp; Serialization</td>
+            <td class="mono muted">pcre2_jit_test</td>
+            <td class="mono nowrap"><a href="https://github.com/PCRE2Project/pcre2" rel="noopener">PCRE2Project/pcre2</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">re2</td>
+            <td class="mono muted nowrap">2023-03-01</td>
+            <td class="mono muted nowrap">C&#43;&#43;</td>
+            <td class="nowrap">Parsers, Regex &amp; Serialization</td>
+            <td class="mono muted">re2_test</td>
+            <td class="mono nowrap"><a href="https://github.com/google/re2" rel="noopener">google/re2</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">simdjson</td>
+            <td class="mono muted nowrap">v5.2.0</td>
+            <td class="mono muted nowrap">C&#43;&#43;</td>
+            <td class="nowrap">Parsers, Regex &amp; Serialization</td>
+            <td class="mono muted">unicode_tests</td>
+            <td class="mono nowrap"><a href="https://github.com/simdjson/simdjson" rel="noopener">simdjson/simdjson</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">yyjson</td>
+            <td class="mono muted nowrap">0.13.0</td>
+            <td class="mono muted nowrap">C</td>
+            <td class="nowrap">Parsers, Regex &amp; Serialization</td>
+            <td class="mono muted">test_json_reader</td>
+            <td class="mono nowrap"><a href="https://github.com/ibireme/yyjson" rel="noopener">ibireme/yyjson</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">box2d</td>
+            <td class="mono muted nowrap">v3.2.0</td>
+            <td class="mono muted nowrap">C</td>
+            <td class="nowrap">Physics Engines</td>
+            <td class="mono muted">MathTest</td>
+            <td class="mono nowrap"><a href="https://github.com/erincatto/box2d" rel="noopener">erincatto/box2d</a></td>
+          </tr>
+          <tr>
+            <td class="mono nowrap">joltphysics</td>
+            <td class="mono muted nowrap">v5.7.0</td>
+            <td class="mono muted nowrap">C&#43;&#43;</td>
+            <td class="nowrap">Physics Engines</td>
+            <td class="mono muted">Mat44Tests</td>
+            <td class="mono nowrap"><a href="https://github.com/jrouwe/JoltPhysics" rel="noopener">jrouwe/JoltPhysics</a></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </main>
+</body>
+</html>
