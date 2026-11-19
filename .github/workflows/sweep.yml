@@ -30,12 +30,12 @@ jobs:
       GOTOOLCHAIN: auto
     steps:
       - name: Checkout master
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: master
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           check-latest: true
@@ -71,7 +71,7 @@ jobs:
       GOTOOLCHAIN: auto
     steps:
       - name: Checkout master
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: master
 
@@ -88,7 +88,7 @@ jobs:
           brew install cmake meson ninja pkg-config zstd
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           check-latest: true
@@ -111,7 +111,7 @@ jobs:
           rm -f "${RUNNER_TEMP}/tc/llvm-${sha12}-${PLAT}.tar.zst"
 
       - name: Cache upstream corpus source archive
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/lmc-cache/sources
           key: corpus-src-v1-${{ matrix.package }}-${{ hashFiles(format('corpus/{0}/recipe.yaml', matrix.package)) }}
@@ -131,7 +131,7 @@ jobs:
 
       - name: Upload result JSON fragment
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fragment-${{ matrix.package }}-${{ matrix.platform }}
           path: fragments/${{ matrix.package }}-${{ matrix.platform }}.json
@@ -150,12 +150,12 @@ jobs:
       GOTOOLCHAIN: auto
     steps:
       - name: Checkout master
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: master
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           check-latest: true
@@ -164,7 +164,7 @@ jobs:
         run: go build -o lmc .
 
       - name: Download result fragments
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: fragment-*
           merge-multiple: true

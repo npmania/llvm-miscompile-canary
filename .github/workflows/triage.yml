@@ -116,7 +116,7 @@ jobs:
       GOTOOLCHAIN: auto
     steps:
       - name: Checkout master
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: master
 
@@ -139,7 +139,7 @@ jobs:
           brew install ccache cmake meson ninja pkg-config zstd
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           check-latest: true
@@ -172,7 +172,7 @@ jobs:
           rm -f "${RUNNER_TEMP}/tc-bad/llvm-${bad12}-${PLAT}.tar.zst"
 
       - name: Restore ccache for single-TU commit bisection
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/ccache
           key: ccache-bisect-${{ matrix.platform }}-${{ matrix.bad_sha }}
@@ -224,7 +224,7 @@ jobs:
 
       - name: Upload triage output artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: triage-${{ matrix.package }}-${{ matrix.platform }}-${{ matrix.profile }}
           path: out/
@@ -240,12 +240,12 @@ jobs:
       GOTOOLCHAIN: auto
     steps:
       - name: Checkout master
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: master
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           check-latest: true
@@ -255,7 +255,7 @@ jobs:
 
       - name: Download triage artifacts
         continue-on-error: true
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: triage-*
           path: triaged
@@ -299,7 +299,7 @@ jobs:
           done
 
       - name: Upload verified triage bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: triaged-verified
           path: triaged/
@@ -318,12 +318,12 @@ jobs:
       GOTOOLCHAIN: auto
     steps:
       - name: Checkout master
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: master
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           check-latest: true
@@ -333,7 +333,7 @@ jobs:
 
       - name: Download verified triage artifacts
         continue-on-error: true
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: triaged-verified
           path: verified

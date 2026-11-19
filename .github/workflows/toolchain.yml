@@ -99,7 +99,7 @@ jobs:
             runner: macos-latest
     steps:
       - name: Checkout master
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: master
 
@@ -126,7 +126,7 @@ jobs:
           brew install ccache cmake ninja zstd
 
       - name: Restore ccache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/ccache
           key: ccache-toolchain-${{ matrix.platform }}-${{ needs.check.outputs.llvm_sha12 }}
@@ -188,7 +188,7 @@ jobs:
           ls -lh "${stage}.tar.zst"
 
       - name: Upload snapshot tarball artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: toolchain-${{ matrix.platform }}
           path: llvm-${{ needs.check.outputs.llvm_sha12 }}-${{ matrix.platform }}.tar.zst
@@ -200,7 +200,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Download built platform tarballs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: toolchain-*
           merge-multiple: true
