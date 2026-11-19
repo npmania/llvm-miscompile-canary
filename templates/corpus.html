@@ -25,12 +25,12 @@
         <tbody>
           {{- range .Packages}}
           <tr>
-            <td class="mono">{{.Name}}</td>
-            <td class="mono muted">{{if .Version}}{{.Version}}{{else}}-{{end}}</td>
-            <td class="mono muted">{{.Lang}}</td>
-            <td>{{.Category}}</td>
+            <td class="mono nowrap">{{.Name}}</td>
+            <td class="mono muted nowrap">{{if .Version}}{{.Version}}{{else}}-{{end}}</td>
+            <td class="mono muted nowrap">{{.Lang}}</td>
+            <td class="nowrap">{{.Category}}</td>
             <td class="mono muted">{{if .SmokeTest}}{{.SmokeTest}}{{else}}-{{end}}</td>
-            <td class="mono muted">{{if .Repo}}<a href="https://github.com/{{.Repo}}" rel="noopener">{{.Repo}}</a>{{else}}-{{end}}</td>
+            <td class="mono nowrap">{{if .Repo}}<a href="https://github.com/{{.Repo}}" rel="noopener">{{.Repo}}</a>{{else}}<span class="muted">-</span>{{end}}</td>
           </tr>
           {{- end}}
         </tbody>

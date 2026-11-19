@@ -26,12 +26,12 @@
         <tbody>
           {{- range .OpenIncidents}}
           <tr>
-            <td class="mono"><a href="incidents/{{.ID}}/index.html">{{.ID}}</a></td>
-            <td class="mono">{{.CulpritSHA}}</td>
-            <td class="mono">{{.Pass}}</td>
-            <td class="mono">{{.Function}}</td>
+            <td class="mono nowrap"><a href="incidents/{{.ID}}/index.html">{{.ID}}</a></td>
+            <td class="mono nowrap">{{.CulpritSHA}}</td>
+            <td class="mono nowrap">{{.Pass}}</td>
+            <td class="mono nowrap">{{.Function}}</td>
             <td class="mono">{{.Targets}}</td>
-            <td class="mono">{{if .IssueURL}}<a href="{{.IssueURL}}">#{{.IssueNumber}}</a>{{else if gt .IssueNumber 0}}#{{.IssueNumber}}{{else}}-{{end}}</td>
+            <td class="mono nowrap">{{if .IssueURL}}<a href="{{.IssueURL}}">#{{.IssueNumber}}</a>{{else if gt .IssueNumber 0}}#{{.IssueNumber}}{{else}}-{{end}}</td>
           </tr>
           {{- end}}
         </tbody>
@@ -47,22 +47,22 @@
             <th>Package</th>
             <th>Version</th>
             {{- range .Columns}}
-            <th>{{.Header}}</th>
+            <th class="num">{{.Header}}</th>
             {{- end}}
           </tr>
         </thead>
         <tbody>
           {{- range .Rows}}
           <tr>
-            <td class="mono">{{.Package}}</td>
-            <td class="mono muted">{{if .Version}}{{.Version}}{{else}}-{{end}}</td>
+            <td class="mono nowrap">{{.Package}}</td>
+            <td class="mono muted nowrap">{{if .Version}}{{.Version}}{{else}}-{{end}}</td>
             {{- range .Cells}}
             {{- if eq .Kind "fail"}}
-            <td class="mono">{{if .IncidentID}}<a class="fail" href="incidents/{{.IncidentID}}/index.html">fail</a>{{else}}<span class="fail">fail</span>{{end}}</td>
+            <td class="mono num">{{if .IncidentID}}<a class="fail" href="incidents/{{.IncidentID}}/index.html">fail</a>{{else}}<span class="fail">fail</span>{{end}}</td>
             {{- else if eq .Kind "err"}}
-            <td class="mono err">err</td>
+            <td class="mono num err">err</td>
             {{- else}}
-            <td class="mono muted">{{.Text}}</td>
+            <td class="mono num muted">{{.Text}}</td>
             {{- end}}
             {{- end}}
           </tr>
@@ -88,12 +88,12 @@
         <tbody>
           {{- range .ResolvedIncidents}}
           <tr>
-            <td class="mono"><a href="incidents/{{.ID}}/index.html">{{.ID}}</a></td>
-            <td class="mono">{{.CulpritSHA}}</td>
-            <td class="mono">{{.FixedSHA}}</td>
-            <td class="mono">{{.Pass}}</td>
+            <td class="mono nowrap"><a href="incidents/{{.ID}}/index.html">{{.ID}}</a></td>
+            <td class="mono nowrap">{{.CulpritSHA}}</td>
+            <td class="mono nowrap">{{.FixedSHA}}</td>
+            <td class="mono nowrap">{{.Pass}}</td>
             <td class="mono">{{.Targets}}</td>
-            <td class="mono">{{if .IssueURL}}<a href="{{.IssueURL}}">#{{.IssueNumber}}</a>{{else if gt .IssueNumber 0}}#{{.IssueNumber}}{{else}}-{{end}}</td>
+            <td class="mono nowrap">{{if .IssueURL}}<a href="{{.IssueURL}}">#{{.IssueNumber}}</a>{{else if gt .IssueNumber 0}}#{{.IssueNumber}}{{else}}-{{end}}</td>
           </tr>
           {{- end}}
         </tbody>

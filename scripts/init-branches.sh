@@ -60,6 +60,7 @@ cat >"${pages_stage}/index.html" <<'EOF'
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>llvm-miscompile-canary</title>
+  <style>:root{color-scheme:light dark}body{margin:0;padding:14px 20px;font:13px/1.45 system-ui,-apple-system,sans-serif}h1{font-size:15px;margin:0 0 8px}</style>
 </head>
 <body>
   <main>
