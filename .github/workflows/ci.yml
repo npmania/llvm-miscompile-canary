@@ -36,8 +36,8 @@ jobs:
       - name: Install lld (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends clang lld
+          sudo apt-get -o Acquire::Retries=5 update -qq
+          sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends clang lld
 
       - name: Install lld (macOS)
         if: runner.os == 'macOS'

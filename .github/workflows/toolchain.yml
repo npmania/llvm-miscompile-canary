@@ -116,14 +116,13 @@ jobs:
       - name: Install build dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            ca-certificates ccache clang cmake git libzstd-dev lld ninja-build python3 zstd
+          sudo apt-get -o Acquire::Retries=5 update -qq
+          sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
+            ccache clang lld ninja-build
 
       - name: Install build dependencies (macOS)
         if: runner.os == 'macOS'
-        run: |
-          brew install ccache cmake ninja zstd
+        run: brew install ccache
 
       - name: Restore ccache
         uses: actions/cache@v6
