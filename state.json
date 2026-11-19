@@ -1,7 +1,7 @@
 {
   "last_sweep_sha": "704660a68dae1f1e91c3e79fe11535b432ae6b6c",
-  "last_sweep_id": "20261119T125847Z-704660a68dae",
-  "last_sweep_at": "2026-11-19T12:58:47.83516735Z",
+  "last_sweep_id": "20261119T130538Z-704660a68dae",
+  "last_sweep_at": "2026-11-19T13:05:38.630312565Z",
   "last_good_sha": "704660a68dae1f1e91c3e79fe11535b432ae6b6c",
   "last_good_by_target": {
     "abseil-cpp|darwin-arm64|distro-O2": "704660a68dae1f1e91c3e79fe11535b432ae6b6c",
@@ -164,6 +164,8 @@
     "quickjs-ng|darwin-arm64|release-lto": "704660a68dae1f1e91c3e79fe11535b432ae6b6c",
     "quickjs-ng|linux-aarch64|distro-O2": "704660a68dae1f1e91c3e79fe11535b432ae6b6c",
     "quickjs-ng|linux-aarch64|release-lto": "704660a68dae1f1e91c3e79fe11535b432ae6b6c",
+    "quickjs-ng|linux-x86_64|distro-O2": "704660a68dae1f1e91c3e79fe11535b432ae6b6c",
+    "quickjs-ng|linux-x86_64|release-lto": "704660a68dae1f1e91c3e79fe11535b432ae6b6c",
     "re2|darwin-arm64|distro-O2": "704660a68dae1f1e91c3e79fe11535b432ae6b6c",
     "re2|darwin-arm64|release-lto": "704660a68dae1f1e91c3e79fe11535b432ae6b6c",
     "re2|linux-aarch64|distro-O2": "704660a68dae1f1e91c3e79fe11535b432ae6b6c",
@@ -207,5 +209,5 @@
     "zstd|linux-x86_64|distro-O2": "704660a68dae1f1e91c3e79fe11535b432ae6b6c",
     "zstd|linux-x86_64|release-lto": "704660a68dae1f1e91c3e79fe11535b432ae6b6c"
   },
-  "updated_at": "2026-11-19T12:58:47.83516735Z"
+  "updated_at": "2026-11-19T13:05:38.630312565Z"
 }
