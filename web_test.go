@@ -403,7 +403,7 @@ func TestWorkflowsAndInitScript(t *testing.T) {
 		"ci.yml":        {"go build -o lmc .", "validate-corpus -corpus corpus -require 42"},
 		"toolchain.yml": {"'53 3,9,15,21 * * *'", "fail-fast: false", "--target master", "| zstd ", "GH_REPO: ${{ github.repository }}"},
 		"sweep.yml":     {"corpus-matrix -corpus corpus", "fail-fast: false", "zstd -dc", "| tar -xf -", "GH_REPO: ${{ github.repository }}"},
-		"triage.yml":    {"./lmc alive-check", "--target master", "LLVM_DIR=", "GH_REPO: ${{ github.repository }}"},
+		"triage.yml":    {"./lmc alive-check", "--target master", "BUILD_ALIVE2_LLVM=1", "GH_REPO: ${{ github.repository }}"},
 	}
 	for name, wants := range checks {
 		raw, err := os.ReadFile(filepath.Join(".github", "workflows", name))

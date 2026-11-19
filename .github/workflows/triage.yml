@@ -257,6 +257,7 @@ jobs:
     needs: [prepare, triage]
     if: always() && needs.prepare.outputs.has_entries == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     env:
       GOTOOLCHAIN: auto
     steps:
@@ -265,15 +266,6 @@ jobs:
         with:
           ref: master
 
-      - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          check-latest: true
-
-      - name: Build lmc
-        run: go build -o lmc .
-
       - name: Download triage artifacts
         continue-on-error: true
         uses: actions/download-artifact@v8
@@ -281,29 +273,70 @@ jobs:
           pattern: triage-*
           path: triaged
 
-      - name: Run alive-tv
+      - name: Check for IR diffs
+        id: check_ir
+        run: |
+          mkdir -p triaged
+          if [ -n "$(find triaged -name 'before.ll' -print -quit)" ]; then
+            echo "has_ir=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_ir=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dependencies
+        if: steps.check_ir.outputs.has_ir == 'true'
+        run: |
+          sudo apt-get -o Acquire::Retries=5 update -qq
+          sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
+            ccache clang lld libz3-dev re2c
+
+      - name: Set up Go
+        if: steps.check_ir.outputs.has_ir == 'true'
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Build lmc
+        if: steps.check_ir.outputs.has_ir == 'true'
+        run: go build -o lmc .
+
+      - name: Restore ccache
+        if: steps.check_ir.outputs.has_ir == 'true'
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/ccache-alive2
+          key: ccache-alive2-linux-x86_64-${{ inputs.bad_sha }}
+          restore-keys: |
+            ccache-alive2-linux-x86_64-
+
+      - name: Fetch LLVM source
+        if: steps.check_ir.outputs.has_ir == 'true'
+        env:
+          BAD_SHA: ${{ inputs.bad_sha }}
+        run: |
+          git init "${RUNNER_TEMP}/llvm-project"
+          git -C "${RUNNER_TEMP}/llvm-project" remote add origin https://github.com/llvm/llvm-project.git
+          git -C "${RUNNER_TEMP}/llvm-project" fetch --filter=blob:none --depth=1 origin "${BAD_SHA}"
+          git -C "${RUNNER_TEMP}/llvm-project" checkout --detach FETCH_HEAD
+
+      - name: Build and run alive-tv
+        if: steps.check_ir.outputs.has_ir == 'true'
+        env:
+          BAD_SHA: ${{ inputs.bad_sha }}
+          CCACHE_DIR: ${{ runner.temp }}/ccache-alive2
+          CCACHE_MAXSIZE: 3G
+          CCACHE_COMPRESS: 'true'
         run: |
           set -euo pipefail
-          mkdir -p triaged
-          if ! find triaged -name 'before.ll' | grep -q .; then
+          if ! BUILD_ALIVE2_LLVM=1 LLVM_SRC="${RUNNER_TEMP}/llvm-project" \
+            ./scripts/build-alive2-linux.sh /tmp/alive2/bin/alive-tv ||
+            [ ! -x /tmp/alive2/bin/alive-tv ]; then
+            echo "::warning::alive-tv build failed against LLVM ${BAD_SHA}; continuing without Alive2 verification"
+            ccache -s || true
             exit 0
           fi
-
-          sudo apt-get -o Acquire::Retries=5 update -qq
-          sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends clang libz3-dev llvm-dev re2c || true
-          llvm_dir=""
-          if command -v llvm-config >/dev/null 2>&1; then
-            llvm_dir="$(llvm-config --cmakedir 2>/dev/null || true)"
-          fi
-          if [ -z "${llvm_dir}" ] || [ ! -f "${llvm_dir}/LLVMConfig.cmake" ]; then
-            llvm_cmake="$(find /usr/lib -maxdepth 5 -path '*/cmake/llvm/LLVMConfig.cmake' 2>/dev/null | sort -r | head -n1 || true)"
-            [ -n "${llvm_cmake}" ] && llvm_dir="$(dirname "${llvm_cmake}")"
-          fi
-          LLVM_DIR="${llvm_dir}" ./scripts/build-alive2-linux.sh /tmp/alive2/bin/alive-tv || true
-
-          if [ ! -x /tmp/alive2/bin/alive-tv ]; then
-            exit 0
-          fi
+          ccache -s || true
 
           for dir in triaged/triage-*; do
             [ -d "${dir}" ] || continue
@@ -320,6 +353,7 @@ jobs:
           done
 
       - name: Upload verified triage bundle
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: triaged-verified
