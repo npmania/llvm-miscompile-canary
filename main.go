@@ -130,6 +130,7 @@ func cmdCorpusMatrix(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("corpus-matrix", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	corpusDir := fs.String("corpus", "corpus", "corpus directory")
+	include := fs.Bool("include", false, "emit GitHub Actions include matrix filtered by recipe platforms")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -137,11 +138,39 @@ func cmdCorpusMatrix(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	names := make([]string, len(recipes))
-	for i, r := range recipes {
-		names[i] = r.Name
+	var payload any
+	if *include {
+		type entry struct {
+			Package    string `json:"package"`
+			Platform   string `json:"platform"`
+			Runner     string `json:"runner"`
+			TCPlatform string `json:"tc_platform"`
+		}
+		targets := []struct{ plat, runner, tc string }{
+			{platLinuxX86, "ubuntu-24.04", platLinuxX86},
+			{platLinuxARM64, "ubuntu-24.04-arm", platLinuxARM64},
+			{platLinuxRISCV64, "ubuntu-24.04", platLinuxX86},
+			{platDarwinARM, "macos-latest", platDarwinARM},
+		}
+		rows := make([]entry, 0, len(recipes)*len(targets))
+		for _, r := range recipes {
+			for _, t := range targets {
+				if r.supportsPlatform(t.plat) {
+					rows = append(rows, entry{Package: r.Name, Platform: t.plat, Runner: t.runner, TCPlatform: t.tc})
+				}
+			}
+		}
+		payload = struct {
+			Include []entry `json:"include"`
+		}{Include: rows}
+	} else {
+		names := make([]string, len(recipes))
+		for i, r := range recipes {
+			names[i] = r.Name
+		}
+		payload = names
 	}
-	raw, err := json.Marshal(names)
+	raw, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
@@ -245,14 +274,14 @@ func cmdTest(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		target = rec.SmokeTest
 	}
 	if target != "" {
-		out := r.testOne(ctx, rec, ws, target, nil, rec.timeout())
+		out := r.testOne(ctx, rec, ws, target, nil, crossTimeout(tc.Spec, rec.timeout()))
 		if !out.Passed {
 			return fmt.Errorf("test %s failed (exit %d):\n%s", target, out.ExitCode, tailText(out.Output, 3000))
 		}
 		fmt.Fprintf(stdout, "PASS %s %s (%.2fs)\n", rec.Name, target, out.Duration.Seconds())
 		return nil
 	}
-	out, failIDs := r.testAll(ctx, rec, ws, nil, rec.timeout())
+	out, failIDs := r.testAll(ctx, rec, ws, nil, crossTimeout(tc.Spec, rec.timeout()))
 	if !out.Passed {
 		return fmt.Errorf("test_all failed (failed=%v, exit=%d):\n%s", failIDs, out.ExitCode, tailText(out.Output, 3000))
 	}

@@ -11,6 +11,7 @@ smoke_test: bit_vector
 platforms:
   - linux-x86_64
   - linux-aarch64
+  - linux-riscv64
   - darwin-arm64
 description: Z3 SMT theorem prover (CDCL(T), bit-vectors, linear/nonlinear arithmetic, E-graph, floating-point)
 cmake:

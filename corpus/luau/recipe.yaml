@@ -11,6 +11,7 @@ smoke_test: Conformance:Basic
 platforms:
   - linux-x86_64
   - linux-aarch64
+  - linux-riscv64
   - darwin-arm64
 description: Luau typed Lua VM, bytecode compiler, and type checker
 cmake:

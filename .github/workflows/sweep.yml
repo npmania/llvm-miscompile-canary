@@ -25,7 +25,7 @@ jobs:
     name: Corpus Matrix
     runs-on: ubuntu-24.04
     outputs:
-      packages: ${{ steps.matrix.outputs.packages }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
     env:
       GOTOOLCHAIN: auto
     steps:
@@ -44,29 +44,17 @@ jobs:
         id: matrix
         run: |
           go build -o lmc .
-          pkgs="$(./lmc corpus-matrix -corpus corpus)"
-          echo "packages=${pkgs}" >> "$GITHUB_OUTPUT"
+          mat="$(./lmc corpus-matrix -corpus corpus -include)"
+          echo "matrix=${mat}" >> "$GITHUB_OUTPUT"
 
   sweep:
     name: ${{ matrix.package }} (${{ matrix.platform }})
     needs: prepare
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: 150
     strategy:
       fail-fast: false
-      matrix:
-        package: ${{ fromJson(needs.prepare.outputs.packages) }}
-        platform:
-          - linux-x86_64
-          - linux-aarch64
-          - darwin-arm64
-        include:
-          - platform: linux-x86_64
-            runner: ubuntu-24.04
-          - platform: linux-aarch64
-            runner: ubuntu-24.04-arm
-          - platform: darwin-arm64
-            runner: macos-latest
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
     env:
       GOTOOLCHAIN: auto
     steps:
@@ -83,10 +71,20 @@ jobs:
           if [ "${{ matrix.package }}" = "dav1d" ]; then
             command -v meson >/dev/null 2>&1 || pkgs="$pkgs meson"
           fi
+          if [ "${{ matrix.platform }}" = "linux-riscv64" ]; then
+            pkgs="$pkgs libc6-dev-riscv64-cross libstdc++-13-dev-riscv64-cross libgcc-13-dev-riscv64-cross"
+          fi
           if [ -n "$pkgs" ]; then
             sudo apt-get -o Acquire::Retries=5 update -qq
             sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends $pkgs
           fi
+
+      - name: Set up QEMU RVA23 (linux-riscv64)
+        if: matrix.platform == 'linux-riscv64'
+        run: |
+          docker run --privileged --rm tonistiigi/binfmt:qemu-v10.2.3-68 --install riscv64
+          echo "QEMU_CPU=rva23u64" >> "$GITHUB_ENV"
+          echo "QEMU_LD_PREFIX=/usr/riscv64-linux-gnu" >> "$GITHUB_ENV"
 
       - name: Install build tools (macOS)
         if: runner.os == 'macOS' && matrix.package == 'dav1d'
@@ -101,19 +99,19 @@ jobs:
       - name: Build lmc
         run: go build -o lmc .
 
-      - name: Download toolchain-${{ matrix.platform }} snapshot
+      - name: Download toolchain-${{ matrix.tc_platform }} snapshot
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           LLVM_SHA: ${{ inputs.llvm_sha }}
-          PLAT: ${{ matrix.platform }}
+          TC_PLAT: ${{ matrix.tc_platform }}
         run: |
           sha12="${LLVM_SHA:0:12}"
           mkdir -p "${RUNNER_TEMP}/tc"
           gh release download "toolchain-${sha12}" \
-            --pattern "llvm-${sha12}-${PLAT}.tar.zst" \
+            --pattern "llvm-${sha12}-${TC_PLAT}.tar.zst" \
             --dir "${RUNNER_TEMP}/tc"
-          zstd -dc "${RUNNER_TEMP}/tc/llvm-${sha12}-${PLAT}.tar.zst" | tar -xf - -C "${RUNNER_TEMP}/tc"
-          rm -f "${RUNNER_TEMP}/tc/llvm-${sha12}-${PLAT}.tar.zst"
+          zstd -dc "${RUNNER_TEMP}/tc/llvm-${sha12}-${TC_PLAT}.tar.zst" | tar -xf - -C "${RUNNER_TEMP}/tc"
+          rm -f "${RUNNER_TEMP}/tc/llvm-${sha12}-${TC_PLAT}.tar.zst"
 
       - name: Cache upstream corpus source archive
         uses: actions/cache@v6

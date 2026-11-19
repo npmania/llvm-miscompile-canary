@@ -3,16 +3,25 @@ set(LLVM_ENABLE_ASSERTIONS OFF CACHE BOOL "" FORCE)
 set(LLVM_ENABLE_PROJECTS "clang;lld" CACHE STRING "" FORCE)
 set(LLVM_ENABLE_RUNTIMES "compiler-rt" CACHE STRING "" FORCE)
 
-# uname -m is needed before project() initializes CMAKE_SYSTEM_PROCESSOR
+# uname is needed before project() initializes CMAKE_SYSTEM_{NAME,PROCESSOR}
+execute_process(
+  COMMAND uname -s
+  OUTPUT_VARIABLE _lmc_host_os
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  ERROR_QUIET
+)
+execute_process(
+  COMMAND uname -m
+  OUTPUT_VARIABLE _lmc_host_arch
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  ERROR_QUIET
+)
+
 if(NOT DEFINED LLVM_TARGETS_TO_BUILD OR LLVM_TARGETS_TO_BUILD STREQUAL "")
-  execute_process(
-    COMMAND uname -m
-    OUTPUT_VARIABLE _lmc_host_arch
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET
-  )
   if(_lmc_host_arch MATCHES "^(arm64|aarch64)$")
     set(LLVM_TARGETS_TO_BUILD "AArch64" CACHE STRING "" FORCE)
+  elseif(_lmc_host_os STREQUAL "Linux" AND _lmc_host_arch MATCHES "^(x86_64|amd64)$")
+    set(LLVM_TARGETS_TO_BUILD "X86;RISCV" CACHE STRING "" FORCE)
   elseif(_lmc_host_arch MATCHES "^(x86_64|amd64)$")
     set(LLVM_TARGETS_TO_BUILD "X86" CACHE STRING "" FORCE)
   else()
@@ -43,16 +52,13 @@ set(COMPILER_RT_BUILD_COPYPROF OFF CACHE BOOL "" FORCE)
 set(COMPILER_RT_BUILD_ORC OFF CACHE BOOL "" FORCE)
 set(COMPILER_RT_BUILD_GWP_ASAN OFF CACHE BOOL "" FORCE)
 
-execute_process(
-  COMMAND uname -s
-  OUTPUT_VARIABLE _lmc_host_os
-  OUTPUT_STRIP_TRAILING_WHITESPACE
-  ERROR_QUIET
-)
 if(_lmc_host_os STREQUAL "Linux")
   find_program(_lmc_lld ld.lld)
   if(_lmc_lld)
     set(LLVM_USE_LINKER "lld" CACHE STRING "")
+  endif()
+  if(_lmc_host_arch MATCHES "^(x86_64|amd64)$" AND EXISTS "/usr/riscv64-linux-gnu/include/stdio.h")
+    include("${CMAKE_CURRENT_LIST_DIR}/toolchain-riscv64.cmake")
   endif()
 elseif(_lmc_host_os STREQUAL "Darwin")
   set(COMPILER_RT_ENABLE_IOS OFF CACHE BOOL "" FORCE)

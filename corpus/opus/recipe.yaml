@@ -11,6 +11,7 @@ smoke_test: test_opus_padding
 platforms:
   - linux-x86_64
   - linux-aarch64
+  - linux-riscv64
   - darwin-arm64
 description: Xiph Opus low-latency speech and audio codec (SILK + CELT DSP)
 cmake:

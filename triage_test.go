@@ -481,7 +481,7 @@ exec %s "$@"
 
 	candObj := filepath.Join(tmp, "cand.o")
 	appBin := filepath.Join(tmp, "app")
-	linkArgs := []string{candObj, "-fuse-ld=" + tc.Linker, "-o", appBin}
+	linkArgs := []string{candObj, linkerFlag(tc.Linker), "-o", appBin}
 	if spec.IsDarwin && tc.SDKRoot != "" {
 		linkArgs = append([]string{"-isysroot", tc.SDKRoot}, linkArgs...)
 	}

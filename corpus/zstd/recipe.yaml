@@ -11,6 +11,7 @@ smoke_test: fullbench
 platforms:
   - linux-x86_64
   - linux-aarch64
+  - linux-riscv64
   - darwin-arm64
 description: Zstandard lossless compression engine (FSE/Huffman entropy coding, LZ matchfinder, pure C)
 cmake:

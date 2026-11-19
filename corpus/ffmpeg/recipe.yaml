@@ -11,5 +11,6 @@ smoke_test: fate-adler32
 platforms:
   - linux-x86_64
   - linux-aarch64
+  - linux-riscv64
   - darwin-arm64
 description: FFmpeg multimedia framework and codec suite (C, FATE tests)

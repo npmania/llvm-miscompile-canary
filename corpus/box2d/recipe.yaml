@@ -11,6 +11,7 @@ smoke_test: MathTest
 platforms:
   - linux-x86_64
   - linux-aarch64
+  - linux-riscv64
   - darwin-arm64
 description: 2D rigid-body physics engine in C17
 cmake:

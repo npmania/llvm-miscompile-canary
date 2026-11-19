@@ -39,6 +39,8 @@ var matrixCols = []matrixColumn{
 	{platLinuxX86, profReleaseLTO, "x86_64 LTO"},
 	{platLinuxARM64, profDistroO2, "aarch64 O2"},
 	{platLinuxARM64, profReleaseLTO, "aarch64 LTO"},
+	{platLinuxRISCV64, profDistroO2, "riscv64 O2"},
+	{platLinuxRISCV64, profReleaseLTO, "riscv64 LTO"},
 	{platDarwinARM, profDistroO2, "darwin-arm64 O2"},
 	{platDarwinARM, profReleaseLTO, "darwin-arm64 LTO"},
 }

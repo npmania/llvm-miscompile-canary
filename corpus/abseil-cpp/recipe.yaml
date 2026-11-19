@@ -11,6 +11,7 @@ smoke_test: swiss_table_test
 platforms:
   - linux-x86_64
   - linux-aarch64
+  - linux-riscv64
   - darwin-arm64
 description: Abseil C++ core libraries (SIMD SwissTable, B-tree, CRC32C, Wyhash, int128, StrFormat, Time)
 ctest: {}

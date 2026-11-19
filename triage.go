@@ -165,7 +165,7 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("asan/ubsan build: %w", err)
 	}
-	if !sanOut.Passed && !hasSanitizerReport(sanOut.Output) && isMissingSanitizerRuntime(sanOut.Output) {
+	if !sanOut.Passed && !isCross(o.Spec) && !hasSanitizerReport(sanOut.Output) && isMissingSanitizerRuntime(sanOut.Output) {
 		if hostTC, err := resolveToolchain(o.Spec.ID, "", "", "", "", ""); err == nil &&
 			hostTC != nil && filepath.Clean(hostTC.Clang) != filepath.Clean(o.BadTC.Clang) {
 			if ws, out, err := buildProfile("asan-ubsan-host", profDiagSan, hostTC, nil, sanEnv, false); err == nil {
@@ -306,6 +306,9 @@ func containsAny(s string, needles []string) bool {
 }
 
 func hasSanitizerReport(out string) bool {
+	if strings.HasPrefix(out, "ubsan: ") || strings.Contains(out, "\nubsan: ") {
+		return true
+	}
 	return containsAny(out, []string{
 		"AddressSanitizer:", "UndefinedBehaviorSanitizer:", "LeakSanitizer:", "Sanitizer:",
 		"runtime error:", "SEGV on unknown address", "heap-buffer-overflow", "stack-buffer-overflow",
@@ -493,6 +496,7 @@ func captureStandaloneTU(ctx context.Context, spec platformSpec, prof string, ba
 			return drv + " " + joinFlags(standaloneCompileArgs(culprit.CompileRec, name, outObj, true))
 		}
 		flags, _ := profileCompilerFlags(prof, spec)
+		flags = append(slices.Clone(crossTargetArgs(spec)), flags...)
 		return drv + " " + joinFlags(append(flags, "-c", name, "-o", outObj))
 	}
 	if pre := culprit.CompileRec.PreprocessedPath; pre != "" && fileExists(pre) {
@@ -564,7 +568,7 @@ func runLLVMReduce(ctx context.Context, o triageOpts, badWS *workspace, testID s
 	}
 	timeoutSec := int(o.TestTimeout.Seconds())
 	if timeoutSec <= 0 {
-		timeoutSec = 180
+		timeoutSec = int(crossTimeout(o.Spec, 3*time.Minute).Seconds())
 	}
 	spec := reduceSpec{
 		reduceRelink: rr, Clang: o.BadTC.Clang, IRFlags: irCompileFlags(o.Spec, o.Profile, o.BadTC),
@@ -660,17 +664,18 @@ func evalReduceCheck(ctx context.Context, spec reduceSpec, candIR string) bool {
 
 func irCompileFlags(spec platformSpec, prof string, tc *toolchain) []string {
 	profFlags, _ := profileCompilerFlags(prof, spec)
-	var flags []string
+	flags := slices.Clone(crossTargetArgs(spec))
+	baseLen := len(flags)
 	for _, f := range profFlags {
 		if !strings.HasPrefix(f, "-flto") {
 			flags = append(flags, f)
 		}
 	}
-	if len(flags) == 0 {
+	if len(flags) == baseLen {
 		flags = append(flags, "-O2")
 	}
 	flags = append(flags, "-Wno-error")
-	if spec.IsDarwin && tc.SDKRoot != "" {
+	if spec.IsDarwin && tc != nil && tc.SDKRoot != "" {
 		flags = append(flags, "-isysroot", tc.SDKRoot)
 	}
 	return flags
@@ -760,12 +765,13 @@ func generateReproScript(inc *incident) string {
 	if inc.StandaloneReproCmd != "" {
 		fmt.Fprintf(&b, "# standalone: %s\n", oneLine(inc.StandaloneReproCmd))
 	}
+	targetFlag := crossTargetFlag(inc.Affected)
 	b.WriteString("\nCLANG=\"${CLANG:-clang}\"\nALIVE_TV=\"${ALIVE_TV:-alive-tv}\"\n\n")
 	if inc.CulpritPassIndex > 0 {
-		fmt.Fprintf(&b, "\"$CLANG\" -O2 -x ir -c reduced.ll -o good_limit.o -mllvm -opt-bisect-limit=%d\n", inc.CulpritPassIndex-1)
-		fmt.Fprintf(&b, "\"$CLANG\" -O2 -x ir -c reduced.ll -o bad_limit.o -mllvm -opt-bisect-limit=%d\n", inc.CulpritPassIndex)
+		fmt.Fprintf(&b, "\"$CLANG\"%s -O2 -x ir -c reduced.ll -o good_limit.o -mllvm -opt-bisect-limit=%d\n", targetFlag, inc.CulpritPassIndex-1)
+		fmt.Fprintf(&b, "\"$CLANG\"%s -O2 -x ir -c reduced.ll -o bad_limit.o -mllvm -opt-bisect-limit=%d\n", targetFlag, inc.CulpritPassIndex)
 	} else {
-		b.WriteString("\"$CLANG\" -O2 -x ir -c reduced.ll -o bad_limit.o\n")
+		fmt.Fprintf(&b, "\"$CLANG\"%s -O2 -x ir -c reduced.ll -o bad_limit.o\n", targetFlag)
 	}
 	b.WriteString("\nif command -v \"$ALIVE_TV\" >/dev/null 2>&1; then\n  \"$ALIVE_TV\" --smt-to=30000 before.ll after.ll || true\nfi\n")
 	return b.String()

@@ -696,11 +696,11 @@ func runSaveTempsLink(ctx context.Context, spec platformSpec, tc *toolchain, goo
 	var args []string
 	for i := 0; i < len(rec.FullArgs); i++ {
 		a := rec.FullArgs[i]
-		if a == "-o" {
+		if a == "-o" || a == "--ld-path" {
 			i++
 			continue
 		}
-		if isAttachedOutputFlag(a) || strings.HasPrefix(a, "-fuse-ld=") ||
+		if isAttachedOutputFlag(a) || strings.HasPrefix(a, "-fuse-ld=") || strings.HasPrefix(a, "--ld-path=") ||
 			strings.Contains(a, "save-temps") || strings.Contains(a, "object_path_lto") || strings.Contains(a, "lto-obj-path") {
 			continue
 		}
@@ -714,7 +714,7 @@ func runSaveTempsLink(ctx context.Context, spec platformSpec, tc *toolchain, goo
 	}
 
 	outBin, objPrefix := filepath.Join(workDir, filepath.Base(rec.Output)), filepath.Join(ltoDir, "mod")
-	args = append(args, "-fuse-ld="+tc.Linker, "-o", outBin)
+	args = append(args, linkerFlag(tc.Linker), "-o", outBin)
 	if spec.IsDarwin {
 		args = append(args, "-Wl,-save-temps", "-Wl,-object_path_lto,"+ltoDir)
 	} else {
@@ -1037,6 +1037,7 @@ func compileCulpritWithBisect(ctx context.Context, spec platformSpec, tc *toolch
 	}
 	var args []string
 	if culprit.BadImportBC != "" {
+		args = append(args, crossTargetArgs(spec)...)
 		args = append(args, "-O3", "-Wno-error")
 		args = append(args, spec.BaselineFlags...)
 		if spec.IsDarwin && tc.SDKRoot != "" {
@@ -1280,6 +1281,7 @@ func compileSingleTUWithClang(ctx context.Context, clangBin string, spec platfor
 		}
 		args = append(args, "-c", "-o", outObj)
 	} else if bc := firstNonEmpty(culprit.GoodImportBC, culprit.BadImportBC); bc != "" {
+		args = append(args, crossTargetArgs(spec)...)
 		args = append(args, "-O3", "-Wno-error")
 		args = append(args, spec.BaselineFlags...)
 		if spec.IsDarwin && sdkRoot != "" {

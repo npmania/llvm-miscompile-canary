@@ -11,5 +11,6 @@ smoke_test: kitten
 platforms:
   - linux-x86_64
   - linux-aarch64
+  - linux-riscv64
   - darwin-arm64
 description: Kissat CDCL SAT solver and kitten probing library

@@ -11,6 +11,7 @@ smoke_test: cjpeg-static-rgb-islow-cmp
 platforms:
   - linux-x86_64
   - linux-aarch64
+  - linux-riscv64
   - darwin-arm64
 description: libjpeg-turbo JPEG codec and TurboJPEG API with external SIMD disabled
 cmake:

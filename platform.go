@@ -13,9 +13,10 @@ import (
 )
 
 const (
-	platLinuxX86   = "linux-x86_64"
-	platLinuxARM64 = "linux-aarch64"
-	platDarwinARM  = "darwin-arm64"
+	platLinuxX86     = "linux-x86_64"
+	platLinuxARM64   = "linux-aarch64"
+	platLinuxRISCV64 = "linux-riscv64"
+	platDarwinARM    = "darwin-arm64"
 
 	profDistroO2   = "distro-O2"
 	profReleaseLTO = "release-lto"
@@ -28,14 +29,16 @@ type platformSpec struct {
 	OS            string
 	Arch          string
 	LLVMTarget    string
+	TargetTriple  string
 	BaselineFlags []string
 	IsDarwin      bool
 }
 
 var platformSpecs = map[string]platformSpec{
-	platLinuxX86:   {ID: platLinuxX86, OS: "linux", Arch: "amd64", LLVMTarget: "X86", BaselineFlags: []string{"-march=x86-64-v3"}},
-	platLinuxARM64: {ID: platLinuxARM64, OS: "linux", Arch: "arm64", LLVMTarget: "AArch64", BaselineFlags: []string{"-mcpu=neoverse-v1"}},
-	platDarwinARM:  {ID: platDarwinARM, OS: "darwin", Arch: "arm64", LLVMTarget: "AArch64", BaselineFlags: []string{"-mcpu=apple-m1"}, IsDarwin: true},
+	platLinuxX86:     {ID: platLinuxX86, OS: "linux", Arch: "amd64", LLVMTarget: "X86", BaselineFlags: []string{"-march=x86-64-v3"}},
+	platLinuxARM64:   {ID: platLinuxARM64, OS: "linux", Arch: "arm64", LLVMTarget: "AArch64", BaselineFlags: []string{"-mcpu=neoverse-v1"}},
+	platLinuxRISCV64: {ID: platLinuxRISCV64, OS: "linux", Arch: "riscv64", LLVMTarget: "RISCV", TargetTriple: "riscv64-linux-gnu", BaselineFlags: []string{"-march=rva23u64"}},
+	platDarwinARM:    {ID: platDarwinARM, OS: "darwin", Arch: "arm64", LLVMTarget: "AArch64", BaselineFlags: []string{"-mcpu=apple-m1"}, IsDarwin: true},
 }
 
 func lookupPlatform(id string) (platformSpec, error) {
@@ -53,6 +56,8 @@ func lookupOSArch(goos, goarch string) (platformSpec, error) {
 		return lookupPlatform(platLinuxX86)
 	case "linux/arm64":
 		return lookupPlatform(platLinuxARM64)
+	case "linux/riscv64":
+		return lookupPlatform(platLinuxRISCV64)
 	case "darwin/arm64":
 		return lookupPlatform(platDarwinARM)
 	default:
@@ -82,6 +87,9 @@ func profileCompilerFlags(prof string, spec platformSpec) ([]string, error) {
 	case profDiagO0:
 		return []string{"-O0"}, nil
 	case profDiagSan:
+		if c, _, ok := crossDiagSanFlags(spec); ok {
+			return c, nil
+		}
 		return []string{"-O1", "-g", "-fsanitize=address,undefined", "-fno-sanitize-recover=address,undefined"}, nil
 	default:
 		return nil, fmt.Errorf("unsupported profile %q", prof)
@@ -94,6 +102,9 @@ func profileLinkerFlags(prof string, spec platformSpec) []string {
 		// both ld.lld and ld64.lld accept --thinlto-jobs=4
 		return append([]string{"-O3", "-flto=thin", "-Wl,--thinlto-jobs=4"}, spec.BaselineFlags...)
 	case profDiagSan:
+		if _, ld, ok := crossDiagSanFlags(spec); ok {
+			return ld
+		}
 		return []string{"-fsanitize=address,undefined", "-fno-sanitize-recover=address,undefined"}
 	default:
 		return nil

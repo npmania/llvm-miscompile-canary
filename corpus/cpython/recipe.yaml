@@ -11,5 +11,6 @@ smoke_test: test_math
 platforms:
   - linux-x86_64
   - linux-aarch64
+  - linux-riscv64
   - darwin-arm64
 description: CPython bytecode interpreter with computed-goto dispatch and core C stdlib modules

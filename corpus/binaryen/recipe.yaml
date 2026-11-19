@@ -11,6 +11,7 @@ smoke_test: licm.wast
 platforms:
   - linux-x86_64
   - linux-aarch64
+  - linux-riscv64
   - darwin-arm64
 description: Binaryen WebAssembly IR optimizer, assembler, and interpreter toolchain
 cmake:

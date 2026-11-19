@@ -377,6 +377,7 @@ type runConfig struct {
 }
 
 type workspace struct {
+	Spec                                                       platformSpec
 	WorkDir, SrcDir, BuildDir, ManifestDir, WrapperDir, TmpDir string
 	Env                                                        []string
 }
@@ -492,10 +493,14 @@ func (r *runner) wireWorkspace(absWork, srcDir string, cfg runConfig) (*workspac
 		ManifestDir: manifestDir, ExtraCFlags: cfg.ExtraCFlags, ExtraLDFlags: cfg.ExtraLDFlags,
 		SaveLTOTemps: cfg.SaveLTOTemps, CaptureTU: cfg.CaptureTU, CaptureOutDir: cfg.CaptureOutDir,
 	})...)
+	var err error
+	if overrides, err = setupCrossWorkspace(absWork, cfg.Spec, overrides); err != nil {
+		return nil, err
+	}
 	overrides = append(overrides, cfg.ExtraEnv...)
 
 	return &workspace{
-		WorkDir: absWork, SrcDir: srcDir, BuildDir: buildDir,
+		Spec: cfg.Spec, WorkDir: absWork, SrcDir: srcDir, BuildDir: buildDir,
 		ManifestDir: manifestDir, WrapperDir: wrapperDir, TmpDir: tmpDir,
 		Env: mergeEnv(os.Environ(), overrides),
 	}, nil
@@ -508,7 +513,7 @@ func (r *runner) build(ctx context.Context, cfg runConfig) (*workspace, runOut, 
 	}
 	timeout := cfg.Timeout
 	if timeout <= 0 {
-		timeout = cfg.Recipe.timeout()
+		timeout = crossTimeout(cfg.Spec, cfg.Recipe.timeout())
 	}
 	start := time.Now()
 	script := filepath.Join(cfg.Recipe.Dir, "build.sh")
@@ -578,7 +583,7 @@ func (r *runner) runCMakeBuild(ctx context.Context, cm *cmakeSpec, tc *toolchain
 
 func (r *runner) testAll(ctx context.Context, rec *recipe, ws *workspace, extraEnv []string, timeout time.Duration) (runOut, []string) {
 	if timeout <= 0 {
-		timeout = rec.timeout()
+		timeout = crossTimeout(ws.Spec, rec.timeout())
 	}
 	start := time.Now()
 	script := filepath.Join(rec.Dir, "test_all.sh")
@@ -609,7 +614,7 @@ func (r *runner) testAll(ctx context.Context, rec *recipe, ws *workspace, extraE
 	out.Duration = time.Since(start)
 
 	if !out.Passed && len(failIDs) == 0 && rec.SmokeTest != "" {
-		if one := r.testOne(ctx, rec, ws, rec.SmokeTest, extraEnv, 2*time.Minute); !one.Passed {
+		if one := r.testOne(ctx, rec, ws, rec.SmokeTest, extraEnv, crossTimeout(ws.Spec, 2*time.Minute)); !one.Passed {
 			failIDs = []string{rec.SmokeTest}
 		}
 	}
@@ -629,7 +634,7 @@ func (r *runner) testOneCmd(rec *recipe, ws *workspace, testID string, extraEnv 
 
 func (r *runner) testOne(ctx context.Context, rec *recipe, ws *workspace, testID string, extraEnv []string, timeout time.Duration) runOut {
 	if timeout <= 0 {
-		timeout = 3 * time.Minute
+		timeout = crossTimeout(ws.Spec, 3*time.Minute)
 	}
 	argv, dir, env := r.testOneCmd(rec, ws, testID, extraEnv)
 	if len(argv) == 0 {

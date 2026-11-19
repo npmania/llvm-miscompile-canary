@@ -11,6 +11,7 @@ smoke_test: Half.testArithmetic
 platforms:
   - linux-x86_64
   - linux-aarch64
+  - linux-riscv64
   - darwin-arm64
 description: OpenEXR IlmBase FP16 Half, 2D/3D vector/matrix Imath, and exception libraries
 cmake:

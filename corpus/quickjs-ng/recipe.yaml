@@ -11,6 +11,7 @@ smoke_test: test_closure.js
 platforms:
   - linux-x86_64
   - linux-aarch64
+  - linux-riscv64
   - darwin-arm64
 description: QuickJS JavaScript engine (ES2023, BigInt, RegExp bytecode, GC)
 cmake:

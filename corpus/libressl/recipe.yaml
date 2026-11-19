@@ -11,6 +11,7 @@ smoke_test: aes_test
 platforms:
   - linux-x86_64
   - linux-aarch64
+  - linux-riscv64
   - darwin-arm64
 description: LibreSSL portable TLS and cryptography stack with assembly disabled
 cmake:

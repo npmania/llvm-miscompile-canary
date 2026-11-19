@@ -17,6 +17,9 @@ set -- \
   CC="${CC:-cc}"
 if [ -n "${AR:-}" ]; then set -- "$@" AR="$AR"; fi
 if [ -n "${RANLIB:-}" ]; then set -- "$@" RANLIB="$RANLIB"; fi
+if [ "${LMC_PLATFORM:-}" = "linux-riscv64" ] && [ "$(uname -m)" != "riscv64" ]; then
+  set -- "$@" --host=riscv64-linux-gnu CC_FOR_BUILD="${LMC_REAL_CC:-cc}"
+fi
 
 "$SRC_DIR/configure" "$@"
 make -C "$BUILD_DIR" -j "$JOBS" sqlite3.h libsqlite3.a mptester
@@ -61,7 +64,8 @@ int main(int argc, char **argv) {
 }
 EOF
 
-set -- -lm -lpthread -lz
+set -- -lm -lpthread
+if grep -q '^LDFLAGS\.zlib.*-lz' "$BUILD_DIR/Makefile"; then set -- "$@" -lz; fi
 if [ "$(uname -s)" = "Linux" ]; then set -- "$@" -ldl; fi
 
 "${CC:-cc}" -I"$BUILD_DIR" -c "$BUILD_DIR/sql_runner.c" -o "$BUILD_DIR/sql_runner.o"

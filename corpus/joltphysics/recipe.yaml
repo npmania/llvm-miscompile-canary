@@ -11,6 +11,7 @@ smoke_test: Mat44Tests
 platforms:
   - linux-x86_64
   - linux-aarch64
+  - linux-riscv64
   - darwin-arm64
 description: 3D rigid-body physics and collision engine
 cmake:

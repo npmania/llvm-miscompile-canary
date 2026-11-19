@@ -11,6 +11,7 @@ smoke_test: basicstuff_1
 platforms:
   - linux-x86_64
   - linux-aarch64
+  - linux-riscv64
   - darwin-arm64
 description: Eigen C++ template library for dense/sparse linear algebra and decompositions
 cmake:

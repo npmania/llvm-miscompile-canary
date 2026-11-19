@@ -11,5 +11,6 @@ smoke_test: i64_arith
 platforms:
   - linux-x86_64
   - linux-aarch64
+  - linux-riscv64
   - darwin-arm64
 description: WebAssembly Micro Runtime fast/classic interpreter, AOT loader, and WASI runtime

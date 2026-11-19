@@ -11,6 +11,7 @@ smoke_test: roundtrip/c/enc/encode.c/6
 platforms:
   - linux-x86_64
   - linux-aarch64
+  - linux-riscv64
   - darwin-arm64
 description: Brotli LZ77 + 2nd-order context modeling + Huffman encoder and decoder
 cmake:

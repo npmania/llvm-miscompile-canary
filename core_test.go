@@ -51,6 +51,9 @@ func TestPlatformAndFlags(t *testing.T) {
 		{platLinuxX86, profDistroO2, []string{"-O2"}, nil, false},
 		{platLinuxX86, profReleaseLTO, []string{"-O3", "-flto=thin", "-march=x86-64-v3"}, []string{"-O3", "-flto=thin", "-Wl,--thinlto-jobs=4", "-march=x86-64-v3"}, false},
 		{platLinuxARM64, profReleaseLTO, []string{"-O3", "-flto=thin", "-mcpu=neoverse-v1"}, []string{"-O3", "-flto=thin", "-Wl,--thinlto-jobs=4", "-mcpu=neoverse-v1"}, false},
+		{platLinuxRISCV64, profDistroO2, []string{"-O2"}, nil, false},
+		{platLinuxRISCV64, profReleaseLTO, []string{"-O3", "-flto=thin", "-march=rva23u64"}, []string{"-O3", "-flto=thin", "-Wl,--thinlto-jobs=4", "-march=rva23u64"}, false},
+		{platLinuxRISCV64, profDiagSan, []string{"-O1", "-g", "-fsanitize=undefined", "-fno-sanitize-recover=undefined"}, []string{"-fsanitize=undefined", "-fno-sanitize-recover=undefined"}, false},
 		{platDarwinARM, profReleaseLTO, []string{"-O3", "-flto=thin", "-mcpu=apple-m1"}, []string{"-O3", "-flto=thin", "-Wl,--thinlto-jobs=4", "-mcpu=apple-m1"}, true},
 		{platLinuxX86, profDiagO0, []string{"-O0"}, nil, false},
 		{platLinuxX86, profDiagSan, []string{"-O1", "-g", "-fsanitize=address,undefined", "-fno-sanitize-recover=address,undefined"}, []string{"-fsanitize=address,undefined", "-fno-sanitize-recover=address,undefined"}, false},
@@ -76,6 +79,23 @@ func TestPlatformAndFlags(t *testing.T) {
 	}
 	if !slices.Equal(conservativeFlags(), []string{"-fno-strict-aliasing", "-fwrapv", "-ftrivial-auto-var-init=zero"}) {
 		t.Fatalf("unexpected conservativeFlags: %v", conservativeFlags())
+	}
+	rvSpec, err := lookupPlatform(platLinuxRISCV64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := irCompileFlags(rvSpec, profReleaseLTO, &toolchain{}); !slices.Equal(got, []string{"--target=riscv64-linux-gnu", "-O3", "-march=rva23u64", "-Wno-error"}) {
+		t.Fatalf("irCompileFlags(riscv64/lto) = %v", got)
+	}
+	if !hasSanitizerReport("ubsan: signed-integer-overflow") || !hasSanitizerReport("err\nubsan: type-mismatch") {
+		t.Fatal("expected hasSanitizerReport to match ubsan minimal output")
+	}
+	if hasSanitizerReport("/tmp/work/asan-ubsan: build error") {
+		t.Fatal("hasSanitizerReport false-positived on asan-ubsan workdir path")
+	}
+	repro := generateReproScript(&incident{ID: "rv-1", GoodSHA: "aaaa", BadSHA: "bbbb", CulpritPass: "instcombine", CulpritPassIndex: 5, Affected: []affected{{Package: "lua", Platform: platLinuxRISCV64}}})
+	if !strings.Contains(repro, `"$CLANG" --target=riscv64-linux-gnu -O2 -x ir`) {
+		t.Fatalf("repro script missing riscv64 target:\n%s", repro)
 	}
 }
 
@@ -162,7 +182,7 @@ func TestWrapperProbeAndPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	if pLinkELF.mode != "link" || !slices.Contains(pLinkELF.fullArgs, "-Wl,--save-temps") ||
-		!slices.Contains(pLinkELF.fullArgs, "-Wl,--thinlto-jobs=4") || !slices.Contains(pLinkELF.fullArgs, "-fuse-ld=/fake/ld.lld") {
+		!slices.Contains(pLinkELF.fullArgs, "-Wl,--thinlto-jobs=4") || !slices.Contains(pLinkELF.fullArgs, "--ld-path=/fake/ld.lld") {
 		t.Fatalf("unexpected ELF link plan: %+v", pLinkELF)
 	}
 
@@ -179,6 +199,77 @@ func TestWrapperProbeAndPlan(t *testing.T) {
 		!slices.Contains(pLinkDarwin.fullArgs, "-isysroot") ||
 		pLinkDarwin.ltoTempsDir != "/work/app.lto.d" {
 		t.Fatalf("unexpected Darwin link plan: %+v", pLinkDarwin)
+	}
+
+	rvCfg := baseCfg
+	rvCfg.Platform = platLinuxRISCV64
+	pRVHelp, err := planWrap(rvCfg, false, "/work", []string{"--help"})
+	if err != nil || pRVHelp.mode != "probe" || !slices.Equal(pRVHelp.fullArgs, []string{"--help"}) {
+		t.Fatalf("riscv64 --help probe = %+v (%v)", pRVHelp, err)
+	}
+	pRVProbeCompile, err := planWrap(rvCfg, false, "/work", []string{"-c", "conftest.c", "-o", "conftest.o"})
+	if err != nil || pRVProbeCompile.mode != "probe" || !slices.Contains(pRVProbeCompile.fullArgs, "--target=riscv64-linux-gnu") || slices.Contains(pRVProbeCompile.fullArgs, "--ld-path=/fake/ld.lld") {
+		t.Fatalf("riscv64 compile probe = %+v (%v)", pRVProbeCompile, err)
+	}
+	pRVProbeLink, err := planWrap(rvCfg, false, "/work", []string{"-v", "CMakeCCompilerABI.c", "-o", "cmTC"})
+	if err != nil || pRVProbeLink.mode != "probe" || !slices.Contains(pRVProbeLink.fullArgs, "--target=riscv64-linux-gnu") || !slices.Contains(pRVProbeLink.fullArgs, "--ld-path=/fake/ld.lld") {
+		t.Fatalf("riscv64 link probe = %+v (%v)", pRVProbeLink, err)
+	}
+	pRVProbeWl, err := planWrap(rvCfg, false, "/work", []string{"-Wl,--version"})
+	if err != nil || pRVProbeWl.mode != "probe" || !slices.Contains(pRVProbeWl.fullArgs, "--target=riscv64-linux-gnu") || !slices.Contains(pRVProbeWl.fullArgs, "--ld-path=/fake/ld.lld") {
+		t.Fatalf("riscv64 -Wl,--version probe = %+v (%v)", pRVProbeWl, err)
+	}
+	pRVProbeXLinker, err := planWrap(rvCfg, false, "/work", []string{"-Xlinker", "--version"})
+	if err != nil || pRVProbeXLinker.mode != "probe" || !slices.Contains(pRVProbeXLinker.fullArgs, "--target=riscv64-linux-gnu") || !slices.Contains(pRVProbeXLinker.fullArgs, "--ld-path=/fake/ld.lld") {
+		t.Fatalf("riscv64 -Xlinker --version probe = %+v (%v)", pRVProbeXLinker, err)
+	}
+	pRVProbeCompileWl, err := planWrap(rvCfg, false, "/work", []string{"-c", "-Wl,--gc-sections", "conftest.c"})
+	if err != nil || pRVProbeCompileWl.mode != "probe" || !slices.Contains(pRVProbeCompileWl.fullArgs, "--target=riscv64-linux-gnu") || slices.Contains(pRVProbeCompileWl.fullArgs, "--ld-path=/fake/ld.lld") {
+		t.Fatalf("riscv64 compile+Wl probe = %+v (%v)", pRVProbeCompileWl, err)
+	}
+	pRVExplicitTarget, err := planWrap(rvCfg, false, "/work", []string{"--target=riscv64-linux-gnu", "-c", "conftest.c"})
+	if err != nil || !slices.Equal(pRVExplicitTarget.fullArgs, []string{"--target=riscv64-linux-gnu", "-c", "conftest.c"}) {
+		t.Fatalf("riscv64 explicit target probe = %+v (%v)", pRVExplicitTarget, err)
+	}
+	pRVExplicitLD, err := planWrap(rvCfg, false, "/work", []string{"--ld-path", "/custom/ld", "conftest.c", "-o", "conftest"})
+	if err != nil || slices.Contains(pRVExplicitLD.fullArgs, "--ld-path=/fake/ld.lld") || !slices.Contains(pRVExplicitLD.fullArgs, "--target=riscv64-linux-gnu") {
+		t.Fatalf("riscv64 explicit --ld-path probe = %+v (%v)", pRVExplicitLD, err)
+	}
+	pRVCompile, err := planWrap(rvCfg, false, "/work", []string{"-c", "a.c", "-o", "a.o"})
+	if err != nil || pRVCompile.mode != "compile" || !slices.Contains(pRVCompile.fullArgs, "--target=riscv64-linux-gnu") || !slices.Contains(pRVCompile.fullArgs, "-march=rva23u64") {
+		t.Fatalf("riscv64 compile = %+v (%v)", pRVCompile, err)
+	}
+	pRVLink, err := planWrap(rvCfg, false, "/work", []string{"a.o", "-o", "/work/app"})
+	if err != nil || pRVLink.mode != "link" || !slices.Contains(pRVLink.fullArgs, "--target=riscv64-linux-gnu") || !slices.Contains(pRVLink.fullArgs, "--ld-path=/fake/ld.lld") {
+		t.Fatalf("riscv64 link = %+v (%v)", pRVLink, err)
+	}
+
+	rvSpec, err := lookupPlatform(platLinuxRISCV64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if crossTimeout(rvSpec, 10*time.Minute) != 30*time.Minute {
+		t.Fatalf("crossTimeout(riscv64) = %v, want 30m", crossTimeout(rvSpec, 10*time.Minute))
+	}
+	if hostSpec, err := resolvePlatform(""); err == nil && crossTimeout(hostSpec, 10*time.Minute) != 10*time.Minute {
+		t.Fatalf("crossTimeout(host) = %v, want 10m", crossTimeout(hostSpec, 10*time.Minute))
+	}
+	rvWork := t.TempDir()
+	ws, err := (&runner{LMCBin: "/bin/sh"}).wireWorkspace(rvWork, filepath.Join(rvWork, "src"), runConfig{
+		Spec: rvSpec, Profile: profDistroO2, TC: &toolchain{Spec: rvSpec, Clang: "/fake/clang", ClangXX: "/fake/clang++", Linker: "/fake/ld.lld"},
+	})
+	if err != nil {
+		t.Fatalf("wireWorkspace(riscv64): %v", err)
+	}
+	tcFile := filepath.Join(rvWork, "cross.cmake")
+	tcRaw, err := os.ReadFile(tcFile)
+	if err != nil || !strings.Contains(string(tcRaw), "CMAKE_SYSTEM_PROCESSOR riscv64") ||
+		!strings.Contains(string(tcRaw), "CMAKE_C_COMPILER_TARGET riscv64-linux-gnu") ||
+		!strings.Contains(string(tcRaw), "BROTLI_WRAPPER_LD_PREFIX") {
+		t.Fatalf("cross.cmake = %q (%v)", string(tcRaw), err)
+	}
+	if !slices.Contains(ws.Env, "CMAKE_TOOLCHAIN_FILE="+tcFile) || !slices.Contains(ws.Env, "QEMU_CPU=rva23u64") {
+		t.Fatalf("missing cross env in ws.Env")
 	}
 }
 
@@ -216,8 +307,8 @@ exit 0
 		t.Fatalf("missing capture artifacts: %+v", recs[0])
 	}
 
-	got := stripFlags([]string{"-I", "/inc", "-D", "X=1", "-isysroot", "/sdk", "-flto=thin", "-mllvm", "-opt-bisect-limit=9", "-frandom-seed=123", "-c", "foo.c", "-o", "foo.o"},
-		stripMode|stripOutput|stripInclude|stripHost|stripLTO|stripOptBisect|stripSources, dir)
+	got := stripFlags([]string{"-I", "/inc", "-D", "X=1", "-isysroot", "/sdk", "-flto=thin", "--ld-path=/ld", "--ld-path", "/ld2", "-fuse-ld=lld", "-mllvm", "-opt-bisect-limit=9", "-frandom-seed=123", "-c", "foo.c", "-o", "foo.o"},
+		stripMode|stripOutput|stripInclude|stripHost|stripLink|stripLTO|stripOptBisect|stripSources, dir)
 	if !slices.Equal(got, []string{"-D", "X=1"}) {
 		t.Fatalf("stripFlags = %v, want [-D X=1]", got)
 	}
@@ -428,13 +519,19 @@ int main(int argc, char **argv) { return (argc > 1 && strcmp(argv[1], "ok") == 0
 func TestCLISubcommands(t *testing.T) {
 	dir := t.TempDir()
 	corpusDir := filepath.Join(dir, "corpus")
-	for _, name := range []string{"beta", "alpha"} {
-		p := filepath.Join(corpusDir, name)
+	for _, tc := range []struct {
+		name  string
+		plats string
+	}{
+		{"beta", "[linux-x86_64, darwin-arm64]"},
+		{"alpha", "[linux-x86_64, linux-riscv64]"},
+	} {
+		p := filepath.Join(corpusDir, tc.name)
 		if err := os.MkdirAll(p, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		y := fmt.Sprintf("name: %s\ncategory: \"Crypto & Bignum\"\nrepo: a/b\nversion: \"1\"\nurl: https://example.com/a.tgz\nsha256: %s\nlang: c\ntimeout_min: 5\nsmoke_test: s\nplatforms: [linux-x86_64]\ndescription: d\ncmake: {}\nctest: {}\n",
-			name, strings.Repeat("a", 64))
+		y := fmt.Sprintf("name: %s\ncategory: \"Crypto & Bignum\"\nrepo: a/b\nversion: \"1\"\nurl: https://example.com/a.tgz\nsha256: %s\nlang: c\ntimeout_min: 5\nsmoke_test: s\nplatforms: %s\ndescription: d\ncmake: {}\nctest: {}\n",
+			tc.name, strings.Repeat("a", 64), tc.plats)
 		if err := os.WriteFile(filepath.Join(p, "recipe.yaml"), []byte(y), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -452,6 +549,30 @@ func TestCLISubcommands(t *testing.T) {
 	var names []string
 	if err := json.Unmarshal(out.Bytes(), &names); err != nil || !slices.Equal(names, []string{"alpha", "beta"}) {
 		t.Fatalf("corpus-matrix = %q (%v)", out.String(), err)
+	}
+
+	out.Reset()
+	if code := runCLI(context.Background(), []string{"lmc", "corpus-matrix", "-corpus", corpusDir, "-include"}, &out, &errBuf); code != 0 {
+		t.Fatalf("corpus-matrix -include failed (%d): %s", code, errBuf.String())
+	}
+	var incMat struct {
+		Include []struct {
+			Package    string `json:"package"`
+			Platform   string `json:"platform"`
+			Runner     string `json:"runner"`
+			TCPlatform string `json:"tc_platform"`
+		} `json:"include"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &incMat); err != nil || len(incMat.Include) != 4 {
+		t.Fatalf("corpus-matrix -include = %q (%v)", out.String(), err)
+	}
+	if incMat.Include[1].Package != "alpha" || incMat.Include[1].Platform != platLinuxRISCV64 ||
+		incMat.Include[1].Runner != "ubuntu-24.04" || incMat.Include[1].TCPlatform != platLinuxX86 {
+		t.Fatalf("unexpected riscv64 include row: %+v", incMat.Include[1])
+	}
+	if incMat.Include[3].Package != "beta" || incMat.Include[3].Platform != platDarwinARM ||
+		incMat.Include[3].Runner != "macos-latest" || incMat.Include[3].TCPlatform != platDarwinARM {
+		t.Fatalf("unexpected darwin include row: %+v", incMat.Include[3])
 	}
 
 	fakeAlive := filepath.Join(dir, "alive-tv")

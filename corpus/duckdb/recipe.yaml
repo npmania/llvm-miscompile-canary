@@ -11,6 +11,7 @@ smoke_test: test/sql/window/test_basic_window.test
 platforms:
   - linux-x86_64
   - linux-aarch64
+  - linux-riscv64
   - darwin-arm64
 description: Vectorized analytical SQL OLAP engine (columnar execution, query optimizer, hash joins)
 cmake:

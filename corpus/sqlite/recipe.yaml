@@ -11,5 +11,6 @@ smoke_test: sql_window_cte
 platforms:
   - linux-x86_64
   - linux-aarch64
+  - linux-riscv64
   - darwin-arm64
 description: Embedded relational SQL engine (VDBE bytecode VM, B-tree pager, WAL, FTS5, R-Tree)

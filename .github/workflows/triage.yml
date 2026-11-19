@@ -16,7 +16,7 @@ on:
         required: false
         type: string
       platform:
-        description: 'Single platform ID (manual dispatch: linux-x86_64, linux-aarch64, darwin-arm64)'
+        description: 'Single platform ID (manual dispatch: linux-x86_64, linux-aarch64, linux-riscv64, darwin-arm64)'
         required: false
         type: string
       profile:
@@ -86,9 +86,14 @@ jobs:
               bad_sha: (.bad_sha // $bad),
               test_id: ((.failed_tests // [])[0] // ""),
               runner: (
-                if .platform == "linux-x86_64" then "ubuntu-24.04"
+                if .platform == "linux-x86_64" or .platform == "linux-riscv64" then "ubuntu-24.04"
                 elif .platform == "linux-aarch64" then "ubuntu-24.04-arm"
                 else "macos-latest"
+                end
+              ),
+              tc_platform: (
+                if .platform == "linux-riscv64" then "linux-x86_64"
+                else .platform
                 end
               )
             })
@@ -132,8 +137,18 @@ jobs:
           if [ "${{ matrix.package }}" = "dav1d" ]; then
             pkgs="$pkgs meson"
           fi
+          if [ "${{ matrix.platform }}" = "linux-riscv64" ]; then
+            pkgs="$pkgs libc6-dev-riscv64-cross libstdc++-13-dev-riscv64-cross libgcc-13-dev-riscv64-cross"
+          fi
           sudo apt-get -o Acquire::Retries=5 update -qq
           sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends $pkgs
+
+      - name: Set up QEMU RVA23 (linux-riscv64)
+        if: matrix.platform == 'linux-riscv64'
+        run: |
+          docker run --privileged --rm tonistiigi/binfmt:qemu-v10.2.3-68 --install riscv64
+          echo "QEMU_CPU=rva23u64" >> "$GITHUB_ENV"
+          echo "QEMU_LD_PREFIX=/usr/riscv64-linux-gnu" >> "$GITHUB_ENV"
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
@@ -158,7 +173,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GOOD_SHA: ${{ matrix.good_sha }}
           BAD_SHA: ${{ matrix.bad_sha }}
-          PLAT: ${{ matrix.platform }}
+          TC_PLAT: ${{ matrix.tc_platform }}
         run: |
           set -euo pipefail
           good12="${GOOD_SHA:0:12}"
@@ -166,16 +181,16 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/tc-good" "${RUNNER_TEMP}/tc-bad"
 
           gh release download "toolchain-${good12}" \
-            --pattern "llvm-${good12}-${PLAT}.tar.zst" \
+            --pattern "llvm-${good12}-${TC_PLAT}.tar.zst" \
             --dir "${RUNNER_TEMP}/tc-good"
-          zstd -dc "${RUNNER_TEMP}/tc-good/llvm-${good12}-${PLAT}.tar.zst" | tar -xf - -C "${RUNNER_TEMP}/tc-good"
-          rm -f "${RUNNER_TEMP}/tc-good/llvm-${good12}-${PLAT}.tar.zst"
+          zstd -dc "${RUNNER_TEMP}/tc-good/llvm-${good12}-${TC_PLAT}.tar.zst" | tar -xf - -C "${RUNNER_TEMP}/tc-good"
+          rm -f "${RUNNER_TEMP}/tc-good/llvm-${good12}-${TC_PLAT}.tar.zst"
 
           gh release download "toolchain-${bad12}" \
-            --pattern "llvm-${bad12}-${PLAT}.tar.zst" \
+            --pattern "llvm-${bad12}-${TC_PLAT}.tar.zst" \
             --dir "${RUNNER_TEMP}/tc-bad"
-          zstd -dc "${RUNNER_TEMP}/tc-bad/llvm-${bad12}-${PLAT}.tar.zst" | tar -xf - -C "${RUNNER_TEMP}/tc-bad"
-          rm -f "${RUNNER_TEMP}/tc-bad/llvm-${bad12}-${PLAT}.tar.zst"
+          zstd -dc "${RUNNER_TEMP}/tc-bad/llvm-${bad12}-${TC_PLAT}.tar.zst" | tar -xf - -C "${RUNNER_TEMP}/tc-bad"
+          rm -f "${RUNNER_TEMP}/tc-bad/llvm-${bad12}-${TC_PLAT}.tar.zst"
 
       - name: Restore ccache for single-TU commit bisection
         uses: actions/cache@v6
@@ -184,7 +199,7 @@ jobs:
           key: ccache-bisect-${{ matrix.platform }}-${{ matrix.bad_sha }}
           restore-keys: |
             ccache-bisect-${{ matrix.platform }}-
-            ccache-toolchain-${{ matrix.platform }}-
+            ccache-toolchain-${{ matrix.tc_platform }}-
 
       - name: Fetch llvm-project history
         env:

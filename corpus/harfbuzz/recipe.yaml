@@ -11,6 +11,7 @@ smoke_test: test-algs
 platforms:
   - linux-x86_64
   - linux-aarch64
+  - linux-riscv64
   - darwin-arm64
 description: OpenType text shaping, GSUB/GPOS layout graph repacker, and font subsetting C++ engine
 ctest: {}

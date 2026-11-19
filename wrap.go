@@ -274,18 +274,19 @@ func planWrap(cfg wrapConfig, isCXX bool, cwd string, args []string) (*wrapPlan,
 		baseEnv = append(baseEnv, "SDKROOT="+cfg.SDKRoot)
 	}
 
-	// bypass configure/cmake probes so feature tests keep original exit status
-	if isProbe(cwd, args, parsed, captureMatch) {
-		return &wrapPlan{
-			mode: "probe", compiler: compiler, isCXX: isCXX, cwd: cwd,
-			rawArgs: slices.Clone(args), fullArgs: slices.Clone(args), extraEnv: baseEnv,
-		}, nil
-	}
-
 	spec, err := resolvePlatform(cfg.Platform)
 	if err != nil {
 		return nil, err
 	}
+
+	// bypass configure/cmake probes so feature tests keep original exit status
+	if isProbe(cwd, args, parsed, captureMatch) {
+		return &wrapPlan{
+			mode: "probe", compiler: compiler, isCXX: isCXX, cwd: cwd,
+			rawArgs: slices.Clone(args), fullArgs: crossProbeArgs(spec, cfg.Linker, args, parsed), extraEnv: baseEnv,
+		}, nil
+	}
+
 	prof := cfg.Profile
 	if prof == "" {
 		prof = profDistroO2
@@ -321,6 +322,9 @@ func planWrap(cfg wrapConfig, isCXX bool, cwd string, args []string) (*wrapPlan,
 	seed := hex.EncodeToString(sum[:8])
 
 	var injected []string
+	if !parsed.hasTarget {
+		injected = append(injected, crossTargetArgs(spec)...)
+	}
 	if spec.IsDarwin && cfg.SDKRoot != "" && !parsed.hasSysroot {
 		injected = append(injected, "-isysroot", cfg.SDKRoot)
 	}
@@ -335,7 +339,7 @@ func planWrap(cfg wrapConfig, isCXX bool, cwd string, args []string) (*wrapPlan,
 	var ltoTempsDir string
 	if mode == "link" || mode == "compile_link" {
 		if cfg.Linker != "" {
-			injected = append(injected, "-fuse-ld="+cfg.Linker)
+			injected = append(injected, linkerFlag(cfg.Linker))
 		}
 		injected = append(injected, profileLinkerFlags(prof, spec)...)
 		if cfg.SaveLTOTemps && prof == profReleaseLTO {
@@ -412,6 +416,13 @@ func hasProbeMarker(s string) bool {
 		}
 	}
 	return false
+}
+
+func linkerFlag(linker string) string {
+	if strings.ContainsRune(linker, filepath.Separator) {
+		return "--ld-path=" + linker
+	}
+	return "-fuse-ld=" + linker
 }
 
 func runTUCapture(ctx context.Context, plan *wrapPlan, childEnv []string) (string, string, error) {
@@ -501,8 +512,14 @@ func stripFlags(args []string, mask uint, cwd string, dropSources ...string) []s
 			i++
 			continue
 		}
-		if mask&stripLink != 0 && (strings.HasPrefix(a, "-fuse-ld=") || strings.HasPrefix(a, "-Wl,")) {
-			continue
+		if mask&stripLink != 0 {
+			if a == "--ld-path" {
+				i++
+				continue
+			}
+			if strings.HasPrefix(a, "-fuse-ld=") || strings.HasPrefix(a, "--ld-path=") || strings.HasPrefix(a, "-Wl,") {
+				continue
+			}
 		}
 		if mask&stripLTO != 0 && (a == "-flto" || strings.HasPrefix(a, "-flto=")) {
 			continue
@@ -531,9 +548,9 @@ func isAttachedOutputFlag(a string) bool {
 }
 
 type parsedClangArgs struct {
-	compileOnly, preprocessOnly, isShared, hasSysroot, hasRandomSeed, hasStdin, hasFilelist, isAssemblyOnly bool
-	output                                                                                                  string
-	sources, objectFiles, archiveFiles, sharedLibs                                                          []string
+	compileOnly, preprocessOnly, isShared, hasSysroot, hasTarget, hasLinkerFlag, hasRandomSeed, hasStdin, hasFilelist, isAssemblyOnly bool
+	output                                                                                                                            string
+	sources, objectFiles, archiveFiles, sharedLibs                                                                                    []string
 }
 
 var twoArgClangFlags = map[string]bool{
@@ -542,7 +559,7 @@ var twoArgClangFlags = map[string]bool{
 	"-MF": true, "-MT": true, "-MQ": true, "-MJ": true,
 	"-L": true, "-l": true, "-F": true, "-framework": true, "-weak_framework": true,
 	"-mllvm": true, "-Xclang": true, "-Xlinker": true, "-Xpreprocessor": true,
-	"-target": true, "--target": true, "-arch": true, "-rpath": true,
+	"-target": true, "--target": true, "--ld-path": true, "-arch": true, "-rpath": true,
 	"-install_name": true, "-current_version": true, "-compatibility_version": true,
 	"-exported_symbols_list": true, "-unexported_symbols_list": true,
 	"-bundle_loader": true, "-order_file": true, "-serialize-diagnostics": true,
@@ -596,6 +613,12 @@ func parseClangArgs(cwd string, args []string) parsedClangArgs {
 			}
 			if a == "-isysroot" || strings.HasPrefix(a, "--sysroot=") || strings.HasPrefix(a, "-isysroot=") {
 				p.hasSysroot = true
+			}
+			if a == "-target" || a == "--target" || strings.HasPrefix(a, "--target=") || strings.HasPrefix(a, "-target=") {
+				p.hasTarget = true
+			}
+			if a == "--ld-path" || strings.HasPrefix(a, "--ld-path=") || strings.HasPrefix(a, "-fuse-ld=") {
+				p.hasLinkerFlag = true
 			}
 			if twoArgClangFlags[a] {
 				i++
