@@ -1,0 +1,28 @@
+name: nghttp2
+category: Systems & Networking
+repo: nghttp2/nghttp2
+version: v1.71.0
+url: https://github.com/nghttp2/nghttp2/releases/download/v1.71.0/nghttp2-1.71.0.tar.gz
+sha256: 0cdd35ecec77919b4b7b245f87fe8d2216e3d62da854eb0838c594ff058042fc
+strip_components: 1
+lang: c
+timeout_min: 10
+smoke_test: main
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - linux-riscv64
+  - darwin-arm64
+description: HTTP/2 framing, HPACK Huffman header compression, and stream priority library
+cmake:
+  flags:
+    - -DENABLE_LIB_ONLY=ON
+    - -DBUILD_STATIC_LIBS=ON
+    - -DBUILD_SHARED_LIBS=OFF
+    - -DBUILD_TESTING=ON
+    - -DENABLE_FAILMALLOC=ON
+    - -DENABLE_WERROR=OFF
+  targets:
+    - main
+    - failmalloc
+ctest: {}

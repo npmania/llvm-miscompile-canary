@@ -56,4 +56,4 @@ jobs:
         run: go build -o lmc .
 
       - name: Validate corpus
-        run: ./lmc validate-corpus -corpus corpus -require 34
+        run: ./lmc validate-corpus -corpus corpus -require 42

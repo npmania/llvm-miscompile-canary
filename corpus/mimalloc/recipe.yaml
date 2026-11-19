@@ -1,0 +1,26 @@
+name: mimalloc
+category: Systems & Networking
+repo: microsoft/mimalloc
+version: v3.7.0
+url: https://github.com/microsoft/mimalloc/archive/refs/tags/v3.7.0.tar.gz
+sha256: 1b8653b9ff9b841a97f2c50fd996e89e1a0cb712c3c5b0980ef16a027eb7acf8
+strip_components: 1
+lang: c
+timeout_min: 10
+smoke_test: test-api
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - linux-riscv64
+  - darwin-arm64
+description: Lock-free general-purpose memory allocator with C11 atomics, sharded heaps, and QSBR
+cmake:
+  flags:
+    - -DMI_OVERRIDE=OFF
+    - -DMI_NO_OPT_ARCH=ON
+    - -DMI_BUILD_SHARED=OFF
+    - -DMI_BUILD_OBJECT=OFF
+    - -DMI_BUILD_TESTS=ON
+    - -DMI_CARGO=MI_CARGO-NOTFOUND
+ctest:
+  exclude: "^(test-fork|test-rust)$"

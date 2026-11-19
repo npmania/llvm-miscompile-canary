@@ -393,14 +393,14 @@ func TestSiteGenerate(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(emptyOut, "index.html")); strings.Contains(string(b), "<h2>Open</h2>") || strings.Contains(string(b), "<h2>Resolved</h2>") {
 		t.Errorf("empty store should omit Open and Resolved")
 	}
-	if b, _ := os.ReadFile(filepath.Join(emptyOut, "corpus", "index.html")); strings.Count(string(b), "<tr>") != 35 || checkNoCrossRefs(string(b)) != nil {
-		t.Errorf("real corpus page row count = %d (want 35)", strings.Count(string(b), "<tr>"))
+	if b, _ := os.ReadFile(filepath.Join(emptyOut, "corpus", "index.html")); strings.Count(string(b), "<tr>") != 43 || checkNoCrossRefs(string(b)) != nil {
+		t.Errorf("real corpus page row count = %d (want 43)", strings.Count(string(b), "<tr>"))
 	}
 }
 
 func TestWorkflowsAndInitScript(t *testing.T) {
 	checks := map[string][]string{
-		"ci.yml":        {"go build -o lmc .", "validate-corpus -corpus corpus -require 34"},
+		"ci.yml":        {"go build -o lmc .", "validate-corpus -corpus corpus -require 42"},
 		"toolchain.yml": {"'53 3,9,15,21 * * *'", "fail-fast: false", "--target master", "| zstd ", "GH_REPO: ${{ github.repository }}"},
 		"sweep.yml":     {"corpus-matrix -corpus corpus", "fail-fast: false", "zstd -dc", "| tar -xf -", "GH_REPO: ${{ github.repository }}"},
 		"triage.yml":    {"./lmc alive-check", "--target master", "LLVM_DIR=", "GH_REPO: ${{ github.repository }}"},

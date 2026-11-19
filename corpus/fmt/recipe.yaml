@@ -1,0 +1,26 @@
+name: fmt
+category: Parsers, Regex & Serialization
+repo: fmtlib/fmt
+version: 12.2.1
+url: https://github.com/fmtlib/fmt/archive/refs/tags/12.2.1.tar.gz
+sha256: 449374d74f31b67796dece454d59b93e6f1538efcce0e9ac78000c98142c139e
+strip_components: 1
+lang: cxx
+timeout_min: 15
+smoke_test: format-test
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - linux-riscv64
+  - darwin-arm64
+description: Modern C++ formatting library with Dragonbox IEEE-754 float formatting, constexpr, and ranges
+cmake:
+  flags:
+    - -DBUILD_SHARED_LIBS=OFF
+    - -DFMT_TEST=ON
+    - -DFMT_DOC=OFF
+    - -DFMT_INSTALL=OFF
+    - -DFMT_MODULE=OFF
+    - -DFMT_PEDANTIC=OFF
+    - -DFMT_WERROR=OFF
+ctest: {}

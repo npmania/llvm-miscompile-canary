@@ -1,0 +1,24 @@
+name: simdutf
+category: Linear Algebra & SIMD
+repo: simdutf/simdutf
+version: v9.4.0
+url: https://github.com/simdutf/simdutf/archive/refs/tags/v9.4.0.tar.gz
+sha256: 361555059c963a1e5d78f3c7d42f35a19722b0333e6385994ff0fe7d80a5786a
+strip_components: 1
+lang: cxx
+timeout_min: 15
+smoke_test: validate_utf8_basic_tests
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - linux-riscv64
+  - darwin-arm64
+description: SIMD-accelerated Unicode validation, transcoding, and Base64 library (AVX2, NEON, RVV)
+cmake:
+  flags:
+    - -DBUILD_SHARED_LIBS=OFF
+    - -DSIMDUTF_TESTS=ON
+    - -DSIMDUTF_TOOLS=OFF
+    - -DSIMDUTF_ICONV=OFF
+ctest:
+  exclude: "^(avoid_|random_fuzzer$|check_feature_macros$)"

@@ -1,0 +1,26 @@
+name: libxml2
+category: Parsers, Regex & Serialization
+repo: GNOME/libxml2
+version: v2.15.4
+url: https://github.com/GNOME/libxml2/archive/refs/tags/v2.15.4.tar.gz
+sha256: bb01bd9ac9a7403f9706816fd6d3e7888041d32b0211075feb20e755d2a9f29d
+strip_components: 1
+lang: c
+timeout_min: 15
+smoke_test: testchar
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - linux-riscv64
+  - darwin-arm64
+description: XML, HTML, XPath, XSD, RelaxNG, and DTD parser and validation library
+cmake:
+  flags:
+    - -DBUILD_SHARED_LIBS=OFF
+    - -DLIBXML2_WITH_TESTS=ON
+    - -DLIBXML2_WITH_ICONV=OFF
+    - -DLIBXML2_WITH_ICU=OFF
+    - -DLIBXML2_WITH_ZLIB=OFF
+    - -DLIBXML2_WITH_PYTHON=OFF
+    - -DLIBXML2_WITH_HTTP=OFF
+ctest: {}

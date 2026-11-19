@@ -1,0 +1,27 @@
+name: h3
+category: Geometry & Geospatial
+repo: uber/h3
+version: v4.6.0
+url: https://github.com/uber/h3/archive/refs/tags/v4.6.0.tar.gz
+sha256: 071be536307b9d6c84e3c024ed9aa4b35f8af5a1eff7f1238c04831fa4a77e68
+strip_components: 1
+lang: c
+timeout_min: 10
+smoke_test: testLatLngToCell_test1
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - linux-riscv64
+  - darwin-arm64
+description: Hexagonal hierarchical geospatial indexing system with spherical trigonometry and polygon rasterization
+cmake:
+  flags:
+    - -DBUILD_SHARED_LIBS=OFF
+    - -DBUILD_TESTING=ON
+    - -DBUILD_BENCHMARKS=OFF
+    - -DBUILD_FUZZERS=OFF
+    - -DBUILD_GENERATORS=OFF
+    - -DBUILD_FILTERS=ON
+    - -DENABLE_DOCS=OFF
+    - -DWARNINGS_AS_ERRORS=OFF
+ctest: {}
