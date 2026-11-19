@@ -19,17 +19,21 @@ import (
 	"strings"
 )
 
+const maxBisectConsecSkips = 8
+
 var (
 	errBisectSkip = errors.New("skip")
 	bisectLineRe  = regexp.MustCompile(`^BISECT:\s+running pass \((\d+)\)\s+(.+?)\s+on\s+(.+)$`)
 )
 
 func bisectFirstFail(n int, fails func(int) (bool, error)) (int, error) {
-	if n <= 1 {
-		return 0, nil
+	if n < 2 {
+		return 0, fmt.Errorf("bisect requires at least 2 points (got %d)", n)
 	}
 	lo, hi := 0, n-1
 	var skipped map[int]bool
+	sawGood, sawBad := false, false
+	consecSkips := 0
 	for lo < hi {
 		mid := pickMid(lo, hi, skipped)
 		if mid < lo || mid >= hi {
@@ -41,16 +45,38 @@ func bisectFirstFail(n int, fails func(int) (bool, error)) (int, error) {
 				skipped = make(map[int]bool)
 			}
 			skipped[mid] = true
+			consecSkips++
+			if consecSkips >= maxBisectConsecSkips {
+				return 0, fmt.Errorf("bisect aborted after %d consecutive skipped probes", consecSkips)
+			}
 			continue
 		}
 		if err != nil {
 			return 0, err
 		}
+		consecSkips = 0
 		if bad {
+			sawBad = true
 			hi = mid
 		} else {
+			sawGood = true
 			lo = mid + 1
 		}
+	}
+	if !sawBad {
+		bad, err := fails(hi)
+		if errors.Is(err, errBisectSkip) {
+			return 0, errors.New("bisect: endpoint skipped and no failing point observed")
+		}
+		if err != nil {
+			return 0, err
+		}
+		if !bad {
+			return 0, errors.New("bisect: all probed points passed")
+		}
+	}
+	if !sawGood {
+		return 0, errors.New("bisect: all probed points failed without a passing baseline")
 	}
 	return hi, nil
 }
@@ -114,14 +140,8 @@ func bisectObjects(ctx context.Context, o objectBisectOpts) (*objectBisectResult
 	if o.GoodTC == nil || o.BadTC == nil || o.Test == nil {
 		return nil, errors.New("good toolchain, bad toolchain, and test func are required")
 	}
-	goodBuild, err := filepath.Abs(o.GoodBuildDir)
-	if err != nil {
-		return nil, err
-	}
-	badBuild, err := filepath.Abs(o.BadBuildDir)
-	if err != nil {
-		return nil, err
-	}
+	goodBuild := evalSymlinksExisting(o.GoodBuildDir)
+	badBuild := evalSymlinksExisting(o.BadBuildDir)
 	if err := os.MkdirAll(o.ScratchDir, 0o755); err != nil {
 		return nil, err
 	}
@@ -165,48 +185,73 @@ func bisectObjects(ctx context.Context, o objectBisectOpts) (*objectBisectResult
 
 	targetIdx := 0
 	if len(links) > 1 {
+		goodBackups := make([]string, len(links))
+		var relinkable []int
+		var lastErr error
+		for i := range links {
+			if err := relinkMapped(ctx, o.GoodTC, goodBuild, badBuild, links[i], o.ScratchDir, strconv.Itoa(i)); err != nil {
+				lastErr = err
+				_ = copyFile(backups[i], links[i].Output, 0)
+				continue
+			}
+			gb := filepath.Join(o.ScratchDir, "good_links", strconv.Itoa(i)+"_"+filepath.Base(links[i].Output))
+			if err := copyFile(links[i].Output, gb, 0); err != nil {
+				return nil, err
+			}
+			goodBackups[i] = gb
+			relinkable = append(relinkable, i)
+		}
+		if len(relinkable) == 0 {
+			return nil, fmt.Errorf("failed to relink any of %d link targets with good toolchain: %w", len(links), lastErr)
+		}
 		setLink := func(i int, useBad bool) error {
 			if useBad {
 				return copyFile(backups[i], links[i].Output, 0)
 			}
-			return relinkMapped(ctx, o.BadTC, goodBuild, badBuild, links[i])
-		}
-		for i := range links {
-			if err := setLink(i, false); err != nil {
-				return nil, fmt.Errorf("relink %s with good inputs: %w", links[i].Output, err)
-			}
+			return copyFile(goodBackups[i], links[i].Output, 0)
 		}
 		allGood, err := runTest()
 		if err != nil {
 			return nil, err
 		}
-		if allGood {
-			if targetIdx, err = bisectFirstFail(len(links), func(mid int) (bool, error) {
-				for i := range links {
-					if err := setLink(i, i <= mid); err != nil {
+		if !allGood {
+			for _, li := range relinkable {
+				_ = setLink(li, true)
+			}
+			return nil, fmt.Errorf("relinking %d/%d binaries with good toolchain still failed test", len(relinkable), len(links))
+		}
+		if len(relinkable) == 1 {
+			targetIdx = relinkable[0]
+		} else {
+			pos, err := bisectFirstFail(len(relinkable)+1, func(k int) (bool, error) {
+				if k == 0 {
+					return false, nil
+				}
+				for j, li := range relinkable {
+					if err := setLink(li, j < k); err != nil {
 						return false, err
 					}
 				}
 				pass, err := runTest()
 				return !pass, err
-			}); err != nil {
+			})
+			if err != nil {
 				return nil, err
 			}
+			targetIdx = relinkable[pos-1]
 		}
-		for i := range links {
-			if err := setLink(i, i == targetIdx); err != nil {
+		for _, li := range relinkable {
+			if err := setLink(li, li == targetIdx); err != nil {
 				return nil, err
 			}
 		}
 	}
 
 	targetLink := links[targetIdx]
-	if len(targetLink.ObjectFiles) == 0 && len(targetLink.ArchiveFiles) == 0 {
-		if synth, sb, ok, err := splitDirectCompileLink(ctx, o, goodBuild, badBuild, targetLink, badComp); err != nil {
-			return nil, err
-		} else if ok {
-			targetLink, badComp = synth, append(badComp, sb...)
-		}
+	if synth, sb, ok, err := splitDirectCompileLink(ctx, o, goodBuild, badBuild, targetLink, badComp); err != nil {
+		return nil, err
+	} else if ok {
+		targetLink, badComp = synth, append(badComp, sb...)
 	}
 
 	if o.Profile == profReleaseLTO && o.ForceNativeLTO {
@@ -230,9 +275,6 @@ func bisectObjects(ctx context.Context, o objectBisectOpts) (*objectBisectResult
 			buildRelink:  func(cand string) (reduceRelink, error) { return d.freezeRelink(ctx, cIdx, pIdx, cand) },
 		}
 	}
-	if len(d.units) == 1 {
-		return finish(0, -1), nil
-	}
 
 	testPick := func(pick func(int) string) (bool, error) {
 		if err := d.relink(ctx, pick); err != nil {
@@ -252,10 +294,16 @@ func bisectObjects(ctx context.Context, o objectBisectOpts) (*objectBisectResult
 		}
 		return nil, fmt.Errorf("relinking %s with all good objects still failed test", targetLink.Output)
 	}
+	if len(d.units) == 1 {
+		return finish(0, -1), nil
+	}
 
-	cIdx, err := bisectFirstFail(len(d.units), func(mid int) (bool, error) {
+	pos, err := bisectFirstFail(len(d.units)+1, func(k int) (bool, error) {
+		if k == 0 {
+			return false, nil
+		}
 		pass, err := testPick(func(i int) string {
-			if i <= mid {
+			if i < k {
 				return d.units[i].BadObj
 			}
 			return d.units[i].GoodObj
@@ -265,6 +313,7 @@ func bisectObjects(ctx context.Context, o objectBisectOpts) (*objectBisectResult
 	if err != nil {
 		return nil, err
 	}
+	cIdx := pos - 1
 
 	singlePass, err := testPick(func(i int) string {
 		if i == cIdx {
@@ -277,36 +326,47 @@ func bisectObjects(ctx context.Context, o objectBisectOpts) (*objectBisectResult
 	}
 	pIdx := -1
 	if singlePass && cIdx > 0 {
-		if pIdx, err = bisectFirstFail(cIdx, func(mid int) (bool, error) {
+		pPos, err := bisectFirstFail(cIdx+1, func(k int) (bool, error) {
+			if k == 0 {
+				return false, nil
+			}
 			pass, err := testPick(func(i int) string {
-				if i == cIdx || i <= mid {
+				if i == cIdx || i < k {
 					return d.units[i].BadObj
 				}
 				return d.units[i].GoodObj
 			})
 			return !pass, err
-		}); err != nil {
+		})
+		if err != nil {
 			return nil, err
 		}
+		pIdx = pPos - 1
 	}
 	return finish(cIdx, pIdx), nil
 }
 
-func relinkMapped(ctx context.Context, tc *toolchain, goodBuild, badBuild string, rec linkRec) error {
-	args := slices.Clone(rec.FullArgs)
-	for i, a := range args {
-		if strings.HasPrefix(a, "-") {
-			continue
+func relinkMapped(ctx context.Context, tc *toolchain, goodBuild, badBuild string, rec linkRec, scratchDir, tag string) error {
+	mapInput := func(canon string) (string, bool) {
+		rel, ok := relWithinDir(badBuild, canon)
+		if !ok {
+			return "", false
 		}
-		if rel, ok := relWithinDir(badBuild, resolvePath(rec.CWD, a)); ok {
-			cand := filepath.Join(goodBuild, rel)
-			switch strings.ToLower(filepath.Ext(cand)) {
-			case ".o", ".lo", ".obj", ".bc", ".a":
-				if fileExists(cand) {
-					args[i] = cand
-				}
+		cand := filepath.Join(goodBuild, rel)
+		switch strings.ToLower(filepath.Ext(cand)) {
+		case ".o", ".lo", ".obj", ".bc", ".a":
+			if fileExists(cand) {
+				return cand, true
 			}
 		}
+		return "", false
+	}
+	args, err := rewriteLinkArgs(rec.FullArgs, linkRewriteOpts{
+		cwd: rec.CWD, scratchDir: scratchDir, tag: "mapped_" + tag,
+		newLinker: tc.Linker, mapObj: mapInput, mapAr: mapInput,
+	})
+	if err != nil {
+		return fmt.Errorf("rewrite link args for %s: %w", rec.Output, err)
 	}
 	if out, err := runToolInDir(ctx, driverFor(tc, rec.IsCXX), args, rec.CWD); err != nil {
 		return fmt.Errorf("relink %s: %w\n%s", rec.Output, err, out)
@@ -315,9 +375,10 @@ func relinkMapped(ctx context.Context, tc *toolchain, goodBuild, badBuild string
 }
 
 func splitDirectCompileLink(ctx context.Context, o objectBisectOpts, goodBuild, badBuild string, rec linkRec, badComp []compileRec) (linkRec, []compileRec, bool, error) {
+	wantOut := evalSymlinksExisting(rec.Output)
 	var match *compileRec
 	for i := len(badComp) - 1; i >= 0; i-- {
-		if filepath.Clean(badComp[i].Output) == filepath.Clean(rec.Output) && len(badComp[i].Sources) > 0 {
+		if evalSymlinksExisting(badComp[i].Output) == wantOut && len(badComp[i].Sources) > 0 {
 			match = &badComp[i]
 			break
 		}
@@ -350,12 +411,12 @@ func splitDirectCompileLink(ctx context.Context, o objectBisectOpts, goodBuild, 
 
 	srcSet := make(map[string]bool, len(match.Sources))
 	for _, s := range match.Sources {
-		srcSet[filepath.Clean(s)] = true
+		srcSet[evalSymlinksExisting(s)] = true
 	}
 	var linkArgs []string
 	inserted := false
-	for _, a := range rec.FullArgs {
-		if !strings.HasPrefix(a, "-") && srcSet[resolvePath(rec.CWD, a)] {
+	for _, a := range expandResponseFiles(rec.CWD, rec.FullArgs) {
+		if !strings.HasPrefix(a, "-") && srcSet[evalSymlinksExisting(resolvePath(rec.CWD, a))] {
 			if !inserted {
 				linkArgs, inserted = append(linkArgs, badObjs...), true
 			}
@@ -366,7 +427,8 @@ func splitDirectCompileLink(ctx context.Context, o objectBisectOpts, goodBuild, 
 	if !inserted {
 		linkArgs = append(linkArgs, badObjs...)
 	}
-	rec.ObjectFiles, rec.FullArgs = badObjs, linkArgs
+	rec.ObjectFiles = append(slices.Clone(rec.ObjectFiles), badObjs...)
+	rec.FullArgs = linkArgs
 	return rec, sBad, true, nil
 }
 
@@ -389,7 +451,7 @@ func expandLinkUnits(o objectBisectOpts, goodBuild, badBuild string, rec linkRec
 	byOut, byHash := make(map[string]compileRec, len(badComp)), make(map[string]compileRec, len(badComp))
 	byBase := make(map[string][]compileRec)
 	for _, cr := range badComp {
-		out := filepath.Clean(cr.Output)
+		out := evalSymlinksExisting(cr.Output)
 		byOut[out] = cr
 		if h, err := fileSHA256Hex(out); err == nil {
 			byHash[h] = cr
@@ -400,7 +462,7 @@ func expandLinkUnits(o objectBisectOpts, goodBuild, badBuild string, rec linkRec
 	var units []*compiledObj
 	directIdx := make(map[string]int)
 	for _, obj := range rec.ObjectFiles {
-		bad := filepath.Clean(obj)
+		bad := evalSymlinksExisting(obj)
 		rel, ok := relWithinDir(badBuild, bad)
 		good := filepath.Join(goodBuild, rel)
 		if !ok || !fileExists(good) || !fileExists(bad) {
@@ -421,7 +483,7 @@ func expandLinkUnits(o objectBisectOpts, goodBuild, badBuild string, rec linkRec
 	seenAr := make(map[string]bool)
 	arRoot := filepath.Join(o.ScratchDir, "ar_members")
 	for i, ar := range rec.ArchiveFiles {
-		badAr := filepath.Clean(ar)
+		badAr := evalSymlinksExisting(ar)
 		relAr, ok := relWithinDir(badBuild, badAr)
 		goodAr := filepath.Join(goodBuild, relAr)
 		if !ok || seenAr[badAr] || !fileExists(goodAr) || !fileExists(badAr) {
@@ -435,6 +497,7 @@ func expandLinkUnits(o objectBisectOpts, goodBuild, badBuild string, rec linkRec
 		if err != nil || len(bMem) != len(gMem) {
 			continue
 		}
+		pair := pairArchiveMembers(gMem, bMem)
 		grp := archiveGroup{badPath: badAr, memberIdx: make([]int, len(bMem))}
 		for m := range bMem {
 			cr := byHash[bMem[m].sha256]
@@ -449,7 +512,7 @@ func expandLinkUnits(o objectBisectOpts, goodBuild, badBuild string, rec linkRec
 			}
 			grp.memberIdx[m] = len(units)
 			units = append(units, &compiledObj{
-				RelPath: rel, GoodObj: gMem[m].path, BadObj: bMem[m].path, SourceFile: cr.Source,
+				RelPath: rel, GoodObj: gMem[pair[m]].path, BadObj: bMem[m].path, SourceFile: cr.Source,
 				WorkDir: firstNonEmpty(cr.CWD, rec.CWD), IsCXX: cr.IsCXX, Args: slices.Clone(cr.FullArgs), CompileRec: cr,
 			})
 		}
@@ -470,6 +533,42 @@ func expandLinkUnits(o objectBisectOpts, goodBuild, badBuild string, rec linkRec
 	}, nil
 }
 
+func pairArchiveMembers(gMem, bMem []arMember) []int {
+	gByName := make(map[string][]int, len(gMem))
+	for gi, m := range gMem {
+		gByName[m.name] = append(gByName[m.name], gi)
+	}
+	pair := make([]int, len(bMem))
+	used := make([]bool, len(gMem))
+	for m, bm := range bMem {
+		if q := gByName[bm.name]; len(q) > 0 {
+			pair[m], gByName[bm.name] = q[0], q[1:]
+			used[pair[m]] = true
+		} else {
+			pair[m] = -1
+		}
+	}
+	nextUnused := 0
+	for m, gi := range pair {
+		if gi >= 0 {
+			continue
+		}
+		if m < len(gMem) && !used[m] {
+			pair[m], used[m] = m, true
+			continue
+		}
+		for nextUnused < len(gMem) && used[nextUnused] {
+			nextUnused++
+		}
+		if nextUnused < len(gMem) {
+			pair[m], used[nextUnused] = nextUnused, true
+		} else {
+			pair[m] = m
+		}
+	}
+	return pair
+}
+
 func (d *linkDecomp) pick(cIdx, pIdx int, cand string) func(int) string {
 	return func(i int) string {
 		if i == cIdx {
@@ -483,32 +582,21 @@ func (d *linkDecomp) pick(cIdx, pIdx int, cand string) func(int) string {
 }
 
 func (d *linkDecomp) buildArgs(pick func(int) string, builtAr map[string]string, tag string) ([]string, error) {
-	args := make([]string, 0, len(d.targetLink.FullArgs))
-	for i := 0; i < len(d.targetLink.FullArgs); i++ {
-		a := d.targetLink.FullArgs[i]
-		if a == "-filelist" && i+1 < len(d.targetLink.FullArgs) {
-			dst := filepath.Join(d.scratchDir, "filelist_"+tag+".txt")
-			if err := rewriteFilelist(resolvePath(d.targetLink.CWD, d.targetLink.FullArgs[i+1]), d.targetLink.CWD, dst, d.directIdx, pick); err != nil {
-				return nil, err
+	return rewriteLinkArgs(d.targetLink.FullArgs, linkRewriteOpts{
+		cwd: d.targetLink.CWD, scratchDir: d.scratchDir, tag: tag,
+		mapObj: func(canon string) (string, bool) {
+			if uIdx, ok := d.directIdx[canon]; ok {
+				return pick(uIdx), true
 			}
-			args = append(args, "-filelist", dst)
-			i++
-			continue
-		}
-		if !strings.HasPrefix(a, "-") {
-			res := resolvePath(d.targetLink.CWD, a)
-			if uIdx, ok := d.directIdx[res]; ok {
-				args = append(args, pick(uIdx))
-				continue
+			return "", false
+		},
+		mapAr: func(canon string) (string, bool) {
+			if mixed, ok := builtAr[canon]; ok {
+				return mixed, true
 			}
-			if mixed, ok := builtAr[res]; ok {
-				args = append(args, mixed)
-				continue
-			}
-		}
-		args = append(args, a)
-	}
-	return args, nil
+			return "", false
+		},
+	})
 }
 
 func (d *linkDecomp) relink(ctx context.Context, pick func(int) string) error {
@@ -575,45 +663,144 @@ func (d *linkDecomp) freezeRelink(ctx context.Context, cIdx, pIdx int, candObj s
 	return rr, nil
 }
 
+type savedLTOMod struct {
+	key, inputBC, memberName, nativeObj, importBC string
+}
+
+type savedLTOLink struct {
+	task0 savedLTOMod
+	mods  []savedLTOMod
+}
+
 func tryThinLTONativeBisect(ctx context.Context, o objectBisectOpts, goodBuild, badBuild string, rec linkRec, badComp []compileRec) (*objectBisectResult, bool) {
-	if len(rec.ArchiveFiles) > 0 || len(rec.ObjectFiles) == 0 {
+	if len(rec.ObjectFiles) == 0 && len(rec.ArchiveFiles) == 0 {
 		return nil, false
 	}
-	gMods, err := runSaveTempsLink(ctx, o.Spec, o.GoodTC, goodBuild, badBuild, rec, false, filepath.Join(o.ScratchDir, "lto_save_good"))
-	if err != nil || len(gMods) == 0 {
+	gLink, err := runSaveTempsLink(ctx, o.Spec, o.GoodTC, goodBuild, badBuild, rec, false, filepath.Join(o.ScratchDir, "lto_save_good"))
+	if err != nil || (len(gLink.mods) == 0 && gLink.task0.nativeObj == "") {
 		return nil, false
 	}
-	bMods, err := runSaveTempsLink(ctx, o.Spec, o.BadTC, goodBuild, badBuild, rec, true, filepath.Join(o.ScratchDir, "lto_save_bad"))
-	if err != nil || len(bMods) != len(gMods) {
+	bLink, err := runSaveTempsLink(ctx, o.Spec, o.BadTC, goodBuild, badBuild, rec, true, filepath.Join(o.ScratchDir, "lto_save_bad"))
+	if err != nil || (len(bLink.mods) == 0 && bLink.task0.nativeObj == "") {
 		return nil, false
 	}
 
-	byOut := make(map[string]compileRec, len(badComp))
-	for _, cr := range badComp {
-		byOut[filepath.Clean(cr.Output)] = cr
+	gAligned, bAligned := alignSavedLTOMods(gLink, bLink)
+	if len(bAligned) == 0 {
+		return nil, false
 	}
-	units := make([]*compiledObj, 0, len(bMods))
-	inputSet := make(map[string]int, len(bMods))
-	for i := range bMods {
-		gm, bm := gMods[i], bMods[i]
-		if !fileExists(gm.nativeObj) || !fileExists(bm.nativeObj) {
-			return nil, false
+
+	byOut, byHash := make(map[string]compileRec, len(badComp)), make(map[string]compileRec, len(badComp))
+	byBase := make(map[string][]compileRec)
+	for _, cr := range badComp {
+		out := evalSymlinksExisting(cr.Output)
+		byOut[out] = cr
+		if h, err := fileSHA256Hex(out); err == nil {
+			byHash[h] = cr
 		}
-		rel, _ := relWithinDir(badBuild, bm.inputBC)
-		cr := byOut[filepath.Clean(bm.inputBC)]
-		inputSet[filepath.Clean(bm.inputBC)] = len(units)
+		byBase[filepath.Base(out)] = append(byBase[filepath.Base(out)], cr)
+	}
+
+	// build archive member sha256 index and native-only fallback archives for mixed bitcode+asm archives
+	arTool := firstNonEmpty(o.BadTC.Ar, "ar")
+	nativeArDir := filepath.Join(o.ScratchDir, "lto_native_ar")
+	stripAr := make(map[string]string)
+	arMemByName := make(map[string]map[string][]string)
+	for i, ar := range rec.ArchiveFiles {
+		badAr := evalSymlinksExisting(ar)
+		if _, ok := relWithinDir(badBuild, badAr); !ok || !fileExists(badAr) {
+			continue
+		}
+		if _, seen := stripAr[badAr]; seen {
+			continue
+		}
+		mems, err := extractArMembers(badAr, filepath.Join(nativeArDir, fmt.Sprintf("ar%d", i)))
+		if err != nil {
+			stripAr[badAr] = ""
+			continue
+		}
+		var nativeMems []string
+		byName := make(map[string][]string, len(mems))
+		for _, m := range mems {
+			byName[m.name] = append(byName[m.name], m.sha256)
+			if !isBitcodeFile(m.path) {
+				nativeMems = append(nativeMems, m.path)
+			}
+		}
+		arMemByName[badAr] = byName
+		if len(nativeMems) > 0 {
+			outAr := filepath.Join(nativeArDir, fmt.Sprintf("native_%d_%s", i, filepath.Base(badAr)))
+			if createStaticArchive(ctx, arTool, o.BadTC.Ranlib, outAr, nativeMems) == nil {
+				stripAr[badAr] = outAr
+			} else {
+				stripAr[badAr] = ""
+			}
+		} else {
+			stripAr[badAr] = ""
+		}
+	}
+
+	units := make([]*compiledObj, 0, len(bAligned))
+	bitcodeObjs := make(map[string]bool, len(bAligned))
+	anyNative := false
+	for i := range bAligned {
+		gm, bm := gAligned[i], bAligned[i]
+		if gm.nativeObj != "" || bm.nativeObj != "" {
+			anyNative = true
+		}
+		ref := bm
+		if ref.inputBC == "" {
+			ref = gm
+		}
+		var cr compileRec
+		rel := ""
+		if ref.memberName != "" {
+			if cands := byBase[ref.memberName]; len(cands) == 1 {
+				cr = cands[0]
+			} else if hashes := arMemByName[evalSymlinksExisting(ref.inputBC)][ref.memberName]; len(hashes) > 0 {
+				for _, h := range hashes {
+					if c, ok := byHash[h]; ok {
+						cr = c
+						break
+					}
+				}
+			}
+			if r, ok := relWithinDir(badBuild, cr.Output); cr.Output != "" && ok {
+				rel = r
+			} else if rAr, ok := relWithinDir(badBuild, ref.inputBC); ok {
+				rel = fmt.Sprintf("%s(%s)", rAr, ref.memberName)
+			} else {
+				rel = ref.memberName
+			}
+		} else if ref.inputBC != "" && ref.inputBC != "ld-temp.o" {
+			canon := evalSymlinksExisting(ref.inputBC)
+			bitcodeObjs[canon] = true
+			cr = byOut[canon]
+			rel, _ = relWithinDir(badBuild, canon)
+		} else {
+			rel = "ld-temp.o"
+		}
 		units = append(units, &compiledObj{
-			RelPath: firstNonEmpty(rel, filepath.Base(bm.inputBC)), GoodObj: gm.inputBC, BadObj: bm.inputBC,
+			RelPath: firstNonEmpty(rel, filepath.Base(ref.inputBC)), GoodObj: gm.inputBC, BadObj: bm.inputBC,
 			SourceFile: cr.Source, WorkDir: firstNonEmpty(cr.CWD, rec.CWD), IsCXX: cr.IsCXX,
 			Args: slices.Clone(cr.FullArgs), CompileRec: cr,
 			GoodNativeLTOObj: gm.nativeObj, BadNativeLTOObj: bm.nativeObj,
 			GoodImportBC: gm.importBC, BadImportBC: bm.importBC,
 		})
 	}
+	if !anyNative {
+		return nil, false
+	}
 
 	driver := driverFor(o.BadTC, rec.IsCXX)
+	relinkSeq := 0
 	relink := func(ctx context.Context, pick func(int) string) error {
-		_, err := runToolInDir(ctx, driver, buildNativeRelinkArgs(rec, inputSet, pick), rec.CWD)
+		relinkSeq++
+		args, err := buildNativeRelinkArgs(rec, bitcodeObjs, stripAr, len(units), pick, o.ScratchDir, fmt.Sprintf("nat_%d", relinkSeq))
+		if err != nil {
+			return err
+		}
+		_, err = runToolInDir(ctx, driver, args, rec.CWD)
 		return err
 	}
 	testNative := func(pick func(int) string) (bool, error) {
@@ -629,23 +816,64 @@ func tryThinLTONativeBisect(ctx context.Context, o objectBisectOpts, goodBuild, 
 	if pass, err := testNative(func(i int) string { return units[i].BadNativeLTOObj }); err != nil || pass {
 		return nil, false
 	}
-	cIdx, err := bisectFirstFail(len(units), func(mid int) (bool, error) {
-		pass, err := testNative(func(i int) string {
-			if i <= mid {
+	cIdx := 0
+	if len(units) > 1 {
+		pos, err := bisectFirstFail(len(units)+1, func(k int) (bool, error) {
+			if k == 0 {
+				return false, nil
+			}
+			pass, err := testNative(func(i int) string {
+				if i < k {
+					return units[i].BadNativeLTOObj
+				}
+				return units[i].GoodNativeLTOObj
+			})
+			return !pass, err
+		})
+		if err != nil {
+			return nil, false
+		}
+		cIdx = pos - 1
+	}
+
+	pIdx := -1
+	if cIdx > 0 {
+		singlePass, err := testNative(func(i int) string {
+			if i == cIdx {
 				return units[i].BadNativeLTOObj
 			}
 			return units[i].GoodNativeLTOObj
 		})
-		return !pass, err
-	})
-	if err != nil {
-		return nil, false
+		if err != nil {
+			return nil, false
+		}
+		if singlePass {
+			pPos, err := bisectFirstFail(cIdx+1, func(k int) (bool, error) {
+				if k == 0 {
+					return false, nil
+				}
+				pass, err := testNative(func(i int) string {
+					if i == cIdx || i < k {
+						return units[i].BadNativeLTOObj
+					}
+					return units[i].GoodNativeLTOObj
+				})
+				return !pass, err
+			})
+			if err != nil {
+				return nil, false
+			}
+			pIdx = pPos - 1
+		}
 	}
 
 	pickCand := func(cand string) func(int) string {
 		return func(i int) string {
 			if i == cIdx {
 				return cand
+			}
+			if pIdx >= 0 && i == pIdx {
+				return units[i].BadNativeLTOObj
 			}
 			return units[i].GoodNativeLTOObj
 		}
@@ -660,57 +888,114 @@ func tryThinLTONativeBisect(ctx context.Context, o objectBisectOpts, goodBuild, 
 			return o.Test(ctx)
 		},
 		buildRelink: func(cand string) (reduceRelink, error) {
-			return reduceRelink{LinkDriver: driver, LinkDir: rec.CWD, CandObj: cand, LinkArgs: buildNativeRelinkArgs(rec, inputSet, pickCand(cand))}, nil
+			args, err := buildNativeRelinkArgs(rec, bitcodeObjs, stripAr, len(units), pickCand(cand), o.ScratchDir, "nat_reduce")
+			if err != nil {
+				return reduceRelink{}, err
+			}
+			return reduceRelink{LinkDriver: driver, LinkDir: rec.CWD, CandObj: cand, LinkArgs: args}, nil
 		},
 	}, true
 }
 
-type savedLTOMod struct{ inputBC, nativeObj, importBC string }
+func alignSavedLTOMods(gLink, bLink savedLTOLink) ([]savedLTOMod, []savedLTOMod) {
+	var gOut, bOut []savedLTOMod
+	if gLink.task0.nativeObj != "" || bLink.task0.nativeObj != "" {
+		gOut = append(gOut, gLink.task0)
+		bOut = append(bOut, bLink.task0)
+	}
+	sameOrder := len(gLink.mods) == len(bLink.mods)
+	if sameOrder {
+		for i := range bLink.mods {
+			if gLink.mods[i].key != bLink.mods[i].key {
+				sameOrder = false
+				break
+			}
+		}
+	}
+	if sameOrder {
+		gOut = append(gOut, gLink.mods...)
+		bOut = append(bOut, bLink.mods...)
+		return gOut, bOut
+	}
+	gByKey := make(map[string][]savedLTOMod, len(gLink.mods))
+	for _, gm := range gLink.mods {
+		gByKey[gm.key] = append(gByKey[gm.key], gm)
+	}
+	for _, bm := range bLink.mods {
+		if q := gByKey[bm.key]; len(q) > 0 {
+			gOut = append(gOut, q[0])
+			gByKey[bm.key] = q[1:]
+		} else {
+			gOut = append(gOut, savedLTOMod{key: bm.key, inputBC: bm.inputBC, memberName: bm.memberName})
+		}
+		bOut = append(bOut, bm)
+	}
+	for _, gm := range gLink.mods {
+		if q := gByKey[gm.key]; len(q) > 0 {
+			gOut = append(gOut, q[0])
+			gByKey[gm.key] = q[1:]
+			bOut = append(bOut, savedLTOMod{key: gm.key, inputBC: gm.inputBC, memberName: gm.memberName})
+		}
+	}
+	return gOut, bOut
+}
 
-func runSaveTempsLink(ctx context.Context, spec platformSpec, tc *toolchain, goodBuild, badBuild string, rec linkRec, useBad bool, workDir string) ([]savedLTOMod, error) {
+func runSaveTempsLink(ctx context.Context, spec platformSpec, tc *toolchain, goodBuild, badBuild string, rec linkRec, useBad bool, workDir string) (savedLTOLink, error) {
 	objsDir, ltoDir := filepath.Join(workDir, "objs"), filepath.Join(workDir, "lto_native")
 	if err := os.RemoveAll(workDir); err != nil {
-		return nil, err
+		return savedLTOLink{}, err
 	}
 	if err := mkdirAll(objsDir, ltoDir); err != nil {
-		return nil, err
+		return savedLTOLink{}, err
 	}
 
 	copyToOrig, origToCopy := make(map[string]string), make(map[string]string)
-	for i, badObj := range rec.ObjectFiles {
-		bad, src := filepath.Clean(badObj), filepath.Clean(badObj)
+	copyInput := func(prefix string, idx int, rawPath string) error {
+		bad := evalSymlinksExisting(rawPath)
+		if _, seen := origToCopy[bad]; seen {
+			return nil
+		}
+		rel, ok := relWithinDir(badBuild, bad)
+		if !ok {
+			return nil
+		}
+		src := bad
 		if !useBad {
-			rel, ok := relWithinDir(badBuild, bad)
-			if !ok {
-				return nil, fmt.Errorf("object %s outside badBuild", bad)
-			}
 			src = filepath.Join(goodBuild, rel)
 		}
-		cp := filepath.Join(objsDir, fmt.Sprintf("m%04d_%s", i, filepath.Base(bad)))
-		if err := copyFile(src, cp, 0); err != nil {
-			return nil, err
+		if !fileExists(src) {
+			return nil
 		}
-		copyToOrig[cp], origToCopy[bad] = bad, cp
+		cp := filepath.Join(objsDir, fmt.Sprintf("%s%04d_%s", prefix, idx, filepath.Base(bad)))
+		if err := copyFile(src, cp, 0); err != nil {
+			return err
+		}
+		copyToOrig[evalSymlinksExisting(cp)], origToCopy[bad] = bad, cp
+		return nil
+	}
+	for i, badObj := range rec.ObjectFiles {
+		if err := copyInput("m", i, badObj); err != nil {
+			return savedLTOLink{}, err
+		}
+	}
+	for i, badAr := range rec.ArchiveFiles {
+		if err := copyInput("a", i, badAr); err != nil {
+			return savedLTOLink{}, err
+		}
 	}
 
-	var args []string
-	for i := 0; i < len(rec.FullArgs); i++ {
-		a := rec.FullArgs[i]
-		if a == "-o" || a == "--ld-path" {
-			i++
-			continue
+	mapCopy := func(canon string) (string, bool) {
+		if cp, ok := origToCopy[canon]; ok {
+			return cp, true
 		}
-		if isAttachedOutputFlag(a) || strings.HasPrefix(a, "-fuse-ld=") || strings.HasPrefix(a, "--ld-path=") ||
-			strings.Contains(a, "save-temps") || strings.Contains(a, "object_path_lto") || strings.Contains(a, "lto-obj-path") {
-			continue
-		}
-		if !strings.HasPrefix(a, "-") {
-			if cp, ok := origToCopy[resolvePath(rec.CWD, a)]; ok {
-				args = append(args, cp)
-				continue
-			}
-		}
-		args = append(args, a)
+		return "", false
+	}
+	args, err := rewriteLinkArgs(rec.FullArgs, linkRewriteOpts{
+		cwd: rec.CWD, scratchDir: workDir, tag: "savetemps",
+		stripOut: true, mapObj: mapCopy, mapAr: mapCopy,
+	})
+	if err != nil {
+		return savedLTOLink{}, err
 	}
 
 	outBin, objPrefix := filepath.Join(workDir, filepath.Base(rec.Output)), filepath.Join(ltoDir, "mod")
@@ -721,76 +1006,480 @@ func runSaveTempsLink(ctx context.Context, spec platformSpec, tc *toolchain, goo
 		args = append(args, "-Wl,--save-temps", "-Wl,--lto-obj-path="+objPrefix)
 	}
 	if out, err := runToolInDir(ctx, driverFor(tc, rec.IsCXX), args, rec.CWD); err != nil {
-		return nil, fmt.Errorf("save-temps link: %w\n%s", err, out)
+		return savedLTOLink{}, fmt.Errorf("save-temps link: %w\n%s", err, out)
 	}
 
 	resTxt, err := os.ReadFile(outBin + ".resolution.txt")
 	if err != nil {
-		return nil, err
+		return savedLTOLink{}, err
 	}
 	var ordered []string
 	for _, line := range nonEmptyLines(string(resTxt)) {
 		if !strings.HasPrefix(line, "-r=") {
-			ordered = append(ordered, filepath.Clean(line))
+			ordered = append(ordered, line)
 		}
 	}
 	if len(ordered) == 0 {
-		return nil, errors.New("empty resolution.txt")
+		return savedLTOLink{}, errors.New("empty resolution.txt")
 	}
 
-	mods := make([]savedLTOMod, 0, len(ordered))
-	for i, cp := range ordered {
-		// ThinLTO module tasks start at 1; 0 is the regular LTO partition
+	var res savedLTOLink
+	// check task 0 (regular LTO / split-LTO-unit partition) if non-empty
+	var task0Native string
+	if spec.IsDarwin {
+		if c := outBin + ".lto.o"; fileNonEmpty(c) {
+			task0Native = c
+		} else if ms, _ := filepath.Glob(filepath.Join(ltoDir, "0.*.lto.o")); len(ms) > 0 && fileNonEmpty(ms[0]) {
+			task0Native = ms[0]
+		}
+	} else {
+		if fileNonEmpty(objPrefix) {
+			task0Native = objPrefix
+		} else if c := outBin + ".lto.o"; fileNonEmpty(c) {
+			task0Native = c
+		}
+	}
+	if task0Native != "" {
+		t0BC := ""
+		for _, c := range []string{outBin + ".0.3.import.bc", outBin + ".0.0.preopt.bc"} {
+			if fileNonEmpty(c) {
+				t0BC = c
+				break
+			}
+		}
+		res.task0 = savedLTOMod{key: "task0", inputBC: "ld-temp.o", nativeObj: task0Native, importBC: t0BC}
+	}
+
+	res.mods = make([]savedLTOMod, 0, len(ordered))
+	for i, rawLine := range ordered {
 		modIdx := i + 1
 		var native string
 		if spec.IsDarwin {
-			if c := fmt.Sprintf("%s%d.lto.o", outBin, modIdx); fileExists(c) {
+			if c := fmt.Sprintf("%s%d.lto.o", outBin, modIdx); fileNonEmpty(c) {
 				native = c
-			} else if ms, _ := filepath.Glob(filepath.Join(ltoDir, fmt.Sprintf("%d.*.lto.o", modIdx))); len(ms) > 0 {
+			} else if ms, _ := filepath.Glob(filepath.Join(ltoDir, fmt.Sprintf("%d.*.lto.o", modIdx))); len(ms) > 0 && fileNonEmpty(ms[0]) {
 				native = ms[0]
 			}
 		} else {
-			stem := strings.TrimSuffix(filepath.Base(cp), filepath.Ext(cp))
-			if c := fmt.Sprintf("%s%d", objPrefix, modIdx); fileExists(c) {
+			if c := fmt.Sprintf("%s%d", objPrefix, modIdx); fileNonEmpty(c) {
 				native = c
-			} else if c := filepath.Join(filepath.Dir(cp), fmt.Sprintf("%s.lto.%s.o", filepath.Base(outBin), stem)); fileExists(c) {
-				native = c
+			} else {
+				cleanLine := filepath.Clean(rawLine)
+				stem := strings.TrimSuffix(filepath.Base(cleanLine), filepath.Ext(cleanLine))
+				if c := filepath.Join(filepath.Dir(cleanLine), fmt.Sprintf("%s.lto.%s.o", filepath.Base(outBin), stem)); fileNonEmpty(c) {
+					native = c
+				}
 			}
 		}
-		if native == "" {
-			return nil, fmt.Errorf("missing native LTO object for module %d", modIdx)
-		}
 		importBC := ""
-		if c := cp + ".3.import.bc"; fileExists(c) {
-			importBC = c
+		for _, cand := range []string{rawLine + ".3.import.bc", filepath.Clean(rawLine) + ".3.import.bc"} {
+			if fileNonEmpty(cand) {
+				importBC = cand
+				break
+			}
 		}
-		mods = append(mods, savedLTOMod{inputBC: firstNonEmpty(copyToOrig[cp], cp), nativeObj: native, importBC: importBC})
+		arPath, memName := parseResolutionArchive(rawLine)
+		var key, inputBC string
+		if arPath != "" {
+			origAr := firstNonEmpty(copyToOrig[evalSymlinksExisting(arPath)], arPath)
+			key = origAr + "(" + memName + ")"
+			inputBC = origAr
+		} else {
+			orig := firstNonEmpty(copyToOrig[evalSymlinksExisting(rawLine)], filepath.Clean(rawLine))
+			key = orig
+			inputBC = orig
+		}
+		res.mods = append(res.mods, savedLTOMod{key: key, inputBC: inputBC, memberName: memName, nativeObj: native, importBC: importBC})
 	}
-	return mods, nil
+	return res, nil
 }
 
-func buildNativeRelinkArgs(rec linkRec, inputSet map[string]int, pick func(int) string) []string {
-	var out []string
-	replaced := false
-	for _, a := range rec.FullArgs {
-		if strings.HasPrefix(a, "-flto") || strings.Contains(a, "thinlto-jobs") ||
-			strings.Contains(a, "save-temps") || strings.Contains(a, "object_path_lto") || strings.Contains(a, "lto-obj-path") {
+func parseResolutionArchive(line string) (arPath, memberName string) {
+	// ELF uses "ar.a(member.o at off)" while MachO uses "ar.a(member.o)off"
+	trimmed := strings.TrimRight(line, "0123456789")
+	if !strings.HasSuffix(trimmed, ")") {
+		return "", ""
+	}
+	lp := strings.LastIndexByte(trimmed, '(')
+	if lp <= 0 {
+		return "", ""
+	}
+	ar := filepath.Clean(trimmed[:lp])
+	if !strings.EqualFold(filepath.Ext(ar), ".a") {
+		return "", ""
+	}
+	inside := trimmed[lp+1 : len(trimmed)-1]
+	if before, _, ok := strings.Cut(inside, " at "); ok {
+		inside = before
+	}
+	return ar, filepath.Base(strings.TrimSpace(inside))
+}
+
+func buildNativeRelinkArgs(rec linkRec, bitcodeObjs map[string]bool, stripAr map[string]string, numUnits int, pick func(int) string, scratchDir, tag string) ([]string, error) {
+	insertObjs := make([]string, 0, numUnits)
+	for i := range numUnits {
+		if obj := pick(i); obj != "" {
+			insertObjs = append(insertObjs, obj)
+		}
+	}
+	return rewriteLinkArgs(rec.FullArgs, linkRewriteOpts{
+		cwd: rec.CWD, scratchDir: scratchDir, tag: tag, stripLTO: true,
+		mapObj: func(canon string) (string, bool) {
+			if bitcodeObjs[canon] {
+				return "", true
+			}
+			return "", false
+		},
+		mapAr: func(canon string) (string, bool) {
+			if repl, ok := stripAr[canon]; ok {
+				return repl, true
+			}
+			return "", false
+		},
+		insertObjs: insertObjs,
+	})
+}
+
+type linkRewriteOpts struct {
+	cwd        string
+	scratchDir string
+	tag        string
+	stripLTO   bool
+	stripOut   bool
+	newLinker  string
+	mapObj     func(string) (string, bool)
+	mapAr      func(string) (string, bool)
+	insertObjs []string
+}
+
+func rewriteLinkArgs(rawArgs []string, opts linkRewriteOpts) ([]string, error) {
+	expanded := expandResponseFiles(opts.cwd, rawArgs)
+	libDirs := collectLinkLibDirs(opts.cwd, expanded)
+	out := make([]string, 0, len(expanded)+len(opts.insertObjs))
+	flSeq := 0
+	inserted := false
+	staticOnly := false
+
+	emitInsert := func() {
+		if len(opts.insertObjs) > 0 && !inserted {
+			out = append(out, opts.insertObjs...)
+			inserted = true
+		}
+	}
+	applyMap := func(p string) (string, bool) {
+		canon := evalSymlinksExisting(p)
+		if opts.mapObj != nil {
+			if repl, ok := opts.mapObj(canon); ok {
+				return repl, true
+			}
+		}
+		if opts.mapAr != nil {
+			if repl, ok := opts.mapAr(canon); ok {
+				return repl, true
+			}
+		}
+		return "", false
+	}
+	makeFilelist := func(orig string) (string, int, bool, error) {
+		if opts.scratchDir != "" {
+			if err := os.MkdirAll(opts.scratchDir, 0o755); err != nil {
+				return "", 0, false, err
+			}
+		}
+		dst := filepath.Join(opts.scratchDir, fmt.Sprintf("filelist_%s_%d.txt", opts.tag, flSeq))
+		flSeq++
+		kept, mapped, err := rewriteFilelistMapped(resolvePath(opts.cwd, orig), opts.cwd, dst, applyMap)
+		return dst, kept, mapped, err
+	}
+	rewriteLinkerToks := func(toks []string) ([]string, error) {
+		toks = expandLinkerTokens(opts.cwd, toks, 0)
+		var kept []string
+		for j := 0; j < len(toks); j++ {
+			t := toks[j]
+			switch {
+			case isSaveTempsLinkerTok(t):
+				continue
+			case (t == "-object_path_lto" || t == "--lto-obj-path") && j+1 < len(toks):
+				j++
+				continue
+			case opts.stripLTO && strings.HasPrefix(t, "--thinlto-jobs="):
+				continue
+			case t == "-Bstatic" || t == "-dn" || t == "-non_shared" || t == "-static":
+				staticOnly = true
+				kept = append(kept, t)
+			case t == "-Bdynamic" || t == "-dy" || t == "-call_shared":
+				staticOnly = false
+				kept = append(kept, t)
+			case t == "-filelist" && j+1 < len(toks):
+				j++
+				dst, nKept, mapped, err := makeFilelist(toks[j])
+				if err != nil {
+					return nil, err
+				}
+				if mapped {
+					emitInsert()
+				}
+				if nKept > 0 || !mapped {
+					kept = append(kept, "-filelist", dst)
+				}
+			case t == "-force_load" && j+1 < len(toks):
+				j++
+				if repl, ok := applyMap(resolvePath(opts.cwd, toks[j])); ok {
+					emitInsert()
+					if repl != "" {
+						kept = append(kept, "-force_load", repl)
+					}
+				} else {
+					kept = append(kept, "-force_load", toks[j])
+				}
+			case t == "-l" && j+1 < len(toks):
+				j++
+				if ar := resolveLibArchive(libDirs, toks[j], staticOnly); ar != "" {
+					if repl, ok := applyMap(ar); ok {
+						emitInsert()
+						if repl != "" {
+							kept = append(kept, repl)
+						}
+						continue
+					}
+				}
+				kept = append(kept, "-l", toks[j])
+			case strings.HasPrefix(t, "-l") && len(t) > 2:
+				if ar := resolveLibArchive(libDirs, t[2:], staticOnly); ar != "" {
+					if repl, ok := applyMap(ar); ok {
+						emitInsert()
+						if repl != "" {
+							kept = append(kept, repl)
+						}
+						continue
+					}
+				}
+				kept = append(kept, t)
+			case !strings.HasPrefix(t, "-"):
+				if repl, ok := applyMap(resolvePath(opts.cwd, t)); ok {
+					emitInsert()
+					if repl != "" {
+						kept = append(kept, repl)
+					}
+				} else {
+					kept = append(kept, t)
+				}
+			default:
+				kept = append(kept, t)
+			}
+		}
+		return kept, nil
+	}
+
+	for i := 0; i < len(expanded); i++ {
+		a := expanded[i]
+		if a == "-o" {
+			if opts.stripOut {
+				i++
+				continue
+			}
+			out = append(out, a)
+			if i+1 < len(expanded) {
+				i++
+				out = append(out, expanded[i])
+			}
+			continue
+		}
+		if opts.stripOut && isAttachedOutputFlag(a) {
+			continue
+		}
+		if opts.stripOut || opts.newLinker != "" {
+			if a == "--ld-path" {
+				i++
+				continue
+			}
+			if strings.HasPrefix(a, "--ld-path=") || strings.HasPrefix(a, "-fuse-ld=") {
+				continue
+			}
+		}
+		if isSaveTempsFlag(a) {
+			continue
+		}
+		if opts.stripLTO && (a == "-flto" || strings.HasPrefix(a, "-flto=")) {
+			continue
+		}
+		if a == "-static" {
+			staticOnly = true
+			out = append(out, a)
+			continue
+		}
+		if a == "-filelist" && i+1 < len(expanded) {
+			dst, nKept, mapped, err := makeFilelist(expanded[i+1])
+			if err != nil {
+				return nil, err
+			}
+			if mapped {
+				emitInsert()
+			}
+			if nKept > 0 || !mapped {
+				out = append(out, "-filelist", dst)
+			}
+			i++
+			continue
+		}
+		if a == "-force_load" && i+1 < len(expanded) {
+			if repl, ok := applyMap(resolvePath(opts.cwd, expanded[i+1])); ok {
+				emitInsert()
+				if repl != "" {
+					out = append(out, "-force_load", repl)
+				}
+			} else {
+				out = append(out, a, expanded[i+1])
+			}
+			i++
+			continue
+		}
+		if a == "-l" && i+1 < len(expanded) {
+			if ar := resolveLibArchive(libDirs, expanded[i+1], staticOnly); ar != "" {
+				if repl, ok := applyMap(ar); ok {
+					emitInsert()
+					if repl != "" {
+						out = append(out, repl)
+					}
+					i++
+					continue
+				}
+			}
+			out = append(out, a, expanded[i+1])
+			i++
+			continue
+		}
+		if strings.HasPrefix(a, "-l") && len(a) > 2 {
+			if ar := resolveLibArchive(libDirs, a[2:], staticOnly); ar != "" {
+				if repl, ok := applyMap(ar); ok {
+					emitInsert()
+					if repl != "" {
+						out = append(out, repl)
+					}
+					continue
+				}
+			}
+			out = append(out, a)
+			continue
+		}
+		if strings.HasPrefix(a, "-Wl,") {
+			kept, err := rewriteLinkerToks(strings.Split(a[4:], ","))
+			if err != nil {
+				return nil, err
+			}
+			if len(kept) > 0 {
+				out = append(out, "-Wl,"+strings.Join(kept, ","))
+			}
+			continue
+		}
+		if a == "-Xlinker" && i+1 < len(expanded) {
+			var xl []string
+			for i+1 < len(expanded) && expanded[i] == "-Xlinker" {
+				xl = append(xl, expanded[i+1])
+				i += 2
+			}
+			i--
+			kept, err := rewriteLinkerToks(xl)
+			if err != nil {
+				return nil, err
+			}
+			for _, k := range kept {
+				out = append(out, "-Xlinker", k)
+			}
+			continue
+		}
+		if twoArgClangFlags[a] || a == "-x" {
+			out = append(out, a)
+			if i+1 < len(expanded) {
+				i++
+				out = append(out, expanded[i])
+			}
 			continue
 		}
 		if !strings.HasPrefix(a, "-") {
-			if idx, ok := inputSet[resolvePath(rec.CWD, a)]; ok {
-				out, replaced = append(out, pick(idx)), true
+			if repl, ok := applyMap(resolvePath(opts.cwd, a)); ok {
+				emitInsert()
+				if repl != "" {
+					out = append(out, repl)
+				}
 				continue
 			}
 		}
 		out = append(out, a)
 	}
-	if !replaced {
-		for i := range len(inputSet) {
-			out = append(out, pick(i))
+	if len(opts.insertObjs) > 0 && !inserted {
+		out = append(out, opts.insertObjs...)
+	}
+	if opts.newLinker != "" {
+		out = append(out, linkerFlag(opts.newLinker))
+	}
+	return out, nil
+}
+
+func collectLinkLibDirs(cwd string, expanded []string) []string {
+	var dirs []string
+	addToks := func(toks []string) {
+		toks = expandLinkerTokens(cwd, toks, 0)
+		for j := 0; j < len(toks); j++ {
+			t := toks[j]
+			if t == "-L" && j+1 < len(toks) {
+				j++
+				dirs = append(dirs, resolvePath(cwd, toks[j]))
+			} else if strings.HasPrefix(t, "-L") && len(t) > 2 {
+				dirs = append(dirs, resolvePath(cwd, t[2:]))
+			}
 		}
 	}
-	return out
+	for i := 0; i < len(expanded); i++ {
+		a := expanded[i]
+		switch {
+		case a == "-L" && i+1 < len(expanded):
+			i++
+			dirs = append(dirs, resolvePath(cwd, expanded[i]))
+		case strings.HasPrefix(a, "-L") && len(a) > 2:
+			dirs = append(dirs, resolvePath(cwd, a[2:]))
+		case strings.HasPrefix(a, "-Wl,"):
+			addToks(strings.Split(a[4:], ","))
+		case a == "-Xlinker" && i+1 < len(expanded):
+			var xl []string
+			for i+1 < len(expanded) && expanded[i] == "-Xlinker" {
+				xl = append(xl, expanded[i+1])
+				i += 2
+			}
+			i--
+			addToks(xl)
+		}
+	}
+	return dirs
+}
+
+func isSaveTempsFlag(a string) bool {
+	return a == "-save-temps" || a == "--save-temps" ||
+		strings.HasPrefix(a, "-save-temps=") || strings.HasPrefix(a, "--save-temps=")
+}
+
+func isSaveTempsLinkerTok(t string) bool {
+	return t == "-save-temps" || t == "--save-temps" ||
+		strings.HasPrefix(t, "-save-temps=") || strings.HasPrefix(t, "--save-temps=") ||
+		strings.HasPrefix(t, "--lto-obj-path=") || strings.HasPrefix(t, "-object_path_lto=")
+}
+
+func isBitcodeFile(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	var hdr [4]byte
+	if _, err := io.ReadFull(f, hdr[:]); err != nil {
+		return false
+	}
+	return hdr == [4]byte{'B', 'C', 0xc0, 0xde} || hdr == [4]byte{0xde, 0xc0, 0x17, 0x0b}
+}
+
+func fileNonEmpty(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir() && info.Size() > 0
 }
 
 type arMember struct{ name, path, sha256 string }
@@ -882,21 +1571,32 @@ func createStaticArchive(ctx context.Context, arTool, ranlibTool, outAr string, 
 	return nil
 }
 
-func rewriteFilelist(orig, cwd, dst string, directIdx map[string]int, pick func(int) string) error {
+func rewriteFilelistMapped(orig, cwd, dst string, mapFn func(string) (string, bool)) (int, bool, error) {
 	raw, err := os.ReadFile(orig)
 	if err != nil {
-		return err
+		return 0, false, err
 	}
 	var b bytes.Buffer
+	kept := 0
+	mapped := false
 	for _, line := range nonEmptyLines(string(raw)) {
-		if idx, ok := directIdx[resolvePath(cwd, line)]; ok {
-			b.WriteString(pick(idx))
+		if repl, ok := mapFn(resolvePath(cwd, line)); ok {
+			mapped = true
+			if repl != "" {
+				b.WriteString(repl)
+				b.WriteByte('\n')
+				kept++
+			}
 		} else {
 			b.WriteString(line)
+			b.WriteByte('\n')
+			kept++
 		}
-		b.WriteByte('\n')
 	}
-	return os.WriteFile(dst, b.Bytes(), 0o644)
+	if err := os.WriteFile(dst, b.Bytes(), 0o644); err != nil {
+		return 0, false, err
+	}
+	return kept, mapped, nil
 }
 
 type passEntry struct {
@@ -952,10 +1652,56 @@ type passBisectResult struct {
 	CulpritPass, CulpritFunc                    string
 	BeforeIRPath, AfterIRPath                   string
 	BeforeFullIRPath, AfterFullIRPath, PassDiff string
-	IsCodeGenPass                               bool
+	BeforeAsmPath, AfterAsmPath                 string
+	IsCodeGenPass, IsInterprocedural            bool
+}
+
+func isInterproceduralPass(passName, target string) bool {
+	t := strings.TrimSpace(target)
+	if strings.HasPrefix(t, "(") && strings.HasSuffix(t, ")") {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(passName)) {
+	case "inlinerpass", "alwaysinlinerpass", "moduleinlinerpass", "partialinlinerpass",
+		"postorderfunctionattrspass", "reversepostorderfunctionattrspass", "inferfunctionattrspass",
+		"argumentpromotionpass", "deadargumenteliminationpass", "ipsccppass",
+		"globaloptpass", "globaldcepass", "attributorpass", "attributorcgsccpass",
+		"functionspecializationpass", "mergefunctionspass",
+		"inline", "always-inline", "function-attrs", "argpromotion", "deadargelim",
+		"ipsccp", "globalopt", "globaldce", "attributor":
+		return true
+	}
+	return false
+}
+
+func hasLTOFlag(args []string) bool {
+	return slices.ContainsFunc(args, func(a string) bool {
+		return a == "-flto" || strings.HasPrefix(a, "-flto=")
+	})
+}
+
+func tuCodegenFlags(args []string, cwd string) []string {
+	var out []string
+	for _, a := range expandResponseFiles(cwd, args) {
+		switch a {
+		case "-fPIC", "-fpic", "-fno-PIC", "-fno-pic", "-fPIE", "-fpie", "-fno-PIE", "-fno-pie":
+			if !slices.Contains(out, a) {
+				out = append(out, a)
+			}
+		default:
+			if (strings.HasPrefix(a, "-mcmodel=") || strings.HasPrefix(a, "-ffp-contract=")) && !slices.Contains(out, a) {
+				out = append(out, a)
+			}
+		}
+	}
+	return out
 }
 
 func bisectPass(ctx context.Context, spec platformSpec, badTC *toolchain, culprit *compiledObj, scratchDir string, relinkAndTest func(context.Context, string) (bool, string, error)) (*passBisectResult, error) {
+	return bisectPassMode(ctx, spec, badTC, culprit, scratchDir, relinkAndTest, false)
+}
+
+func bisectPassMode(ctx context.Context, spec platformSpec, badTC *toolchain, culprit *compiledObj, scratchDir string, relinkAndTest func(context.Context, string) (bool, string, error), keepLTO bool) (*passBisectResult, error) {
 	if badTC == nil || culprit == nil || relinkAndTest == nil {
 		return nil, errors.New("bad toolchain, culprit, and relinkAndTest are required")
 	}
@@ -963,7 +1709,7 @@ func bisectPass(ctx context.Context, spec platformSpec, badTC *toolchain, culpri
 		return nil, err
 	}
 	allObj := filepath.Join(scratchDir, "pass_limit_all.o")
-	stderrAll, err := compileCulpritWithBisect(ctx, spec, badTC, culprit, -1, "obj", allObj)
+	stderrAll, err := compileCulpritWithBisect(ctx, spec, badTC, culprit, -1, "obj", allObj, keepLTO)
 	if err != nil {
 		return nil, fmt.Errorf("enumerate passes (-opt-bisect-limit=-1): %w", err)
 	}
@@ -979,12 +1725,15 @@ func bisectPass(ctx context.Context, spec platformSpec, badTC *toolchain, culpri
 	if pass, _, err := relinkAndTest(ctx, allObj); err != nil {
 		return nil, fmt.Errorf("test full pass pipeline: %w", err)
 	} else if pass {
+		if !keepLTO && culprit.BadImportBC == "" && hasLTOFlag(culprit.Args) {
+			return bisectPassMode(ctx, spec, badTC, culprit, scratchDir, relinkAndTest, true)
+		}
 		return nil, errors.New("culprit TU passed at -opt-bisect-limit=-1")
 	}
 
 	testLimit := func(limit int) (bool, error) {
 		cand := filepath.Join(scratchDir, fmt.Sprintf("cand_limit_%d.o", limit))
-		if _, err := compileCulpritWithBisect(ctx, spec, badTC, culprit, limit, "obj", cand); err != nil {
+		if _, err := compileCulpritWithBisect(ctx, spec, badTC, culprit, limit, "obj", cand, keepLTO); err != nil {
 			return false, fmt.Errorf("compile culprit at limit=%d: %w", limit, err)
 		}
 		pass, _, err := relinkAndTest(ctx, cand)
@@ -999,35 +1748,42 @@ func bisectPass(ctx context.Context, spec platformSpec, badTC *toolchain, culpri
 	if !zeroPass && culprit.BadImportBC != "" && len(culprit.Args) > 0 {
 		srcCopy := *culprit
 		srcCopy.BadImportBC = ""
-		if srcRes, err := bisectPass(ctx, spec, badTC, &srcCopy, scratchDir, relinkAndTest); err == nil {
+		if srcRes, err := bisectPassMode(ctx, spec, badTC, &srcCopy, scratchDir, relinkAndTest, false); err == nil {
 			return srcRes, nil
 		}
 	}
 
 	culpritIdx := 0
 	if zeroPass && maxPass > 0 {
-		idx, err := bisectFirstFail(maxPass, func(i int) (bool, error) {
-			pass, err := testLimit(i + 1)
+		culpritIdx, err = bisectFirstFail(maxPass+1, func(limit int) (bool, error) {
+			if limit == 0 {
+				return false, nil
+			}
+			pass, err := testLimit(limit)
 			return !pass, err
 		})
 		if err != nil {
 			return nil, err
 		}
-		culpritIdx = idx + 1
 	}
 
 	entry, ok := byIndex[culpritIdx]
 	if !ok && culpritIdx == 0 {
 		entry = passEntry{PassName: "frontend-irgen"}
 	}
-	res := &passBisectResult{CulpritPassIndex: culpritIdx, CulpritPass: entry.PassName, CulpritFunc: entry.Func}
-	if err := capturePassIRAndDiff(ctx, spec, badTC, culprit, scratchDir, res); err != nil {
+	res := &passBisectResult{
+		CulpritPassIndex:  culpritIdx,
+		CulpritPass:       entry.PassName,
+		CulpritFunc:       entry.Func,
+		IsInterprocedural: isInterproceduralPass(entry.PassName, entry.Target),
+	}
+	if err := capturePassIRAndDiff(ctx, spec, badTC, culprit, scratchDir, res, keepLTO); err != nil {
 		return nil, err
 	}
 	return res, nil
 }
 
-func compileCulpritWithBisect(ctx context.Context, spec platformSpec, tc *toolchain, culprit *compiledObj, limit int, mode, outPath string) (string, error) {
+func compileCulpritWithBisect(ctx context.Context, spec platformSpec, tc *toolchain, culprit *compiledObj, limit int, mode, outPath string, keepLTO bool) (string, error) {
 	compiler := driverFor(tc, culprit.IsCXX && culprit.BadImportBC == "")
 	modeFlags := []string{"-c"}
 	if mode == "ir" {
@@ -1040,6 +1796,11 @@ func compileCulpritWithBisect(ctx context.Context, spec platformSpec, tc *toolch
 		args = append(args, crossTargetArgs(spec)...)
 		args = append(args, "-O3", "-Wno-error")
 		args = append(args, spec.BaselineFlags...)
+		cgArgs := culprit.Args
+		if len(cgArgs) == 0 {
+			cgArgs = culprit.CompileRec.FullArgs
+		}
+		args = append(args, tuCodegenFlags(cgArgs, culprit.WorkDir)...)
 		if spec.IsDarwin && tc.SDKRoot != "" {
 			args = append(args, "-isysroot", tc.SDKRoot)
 		}
@@ -1047,7 +1808,7 @@ func compileCulpritWithBisect(ctx context.Context, spec platformSpec, tc *toolch
 		args = append(args, modeFlags...)
 		args = append(args, culprit.BadImportBC)
 	} else {
-		args = append(bisectCompileArgs(culprit.Args), modeFlags...)
+		args = append(bisectCompileArgs(culprit.Args, culprit.WorkDir, keepLTO && mode != "asm"), modeFlags...)
 	}
 	args = append(args, "-o", outPath, "-mllvm", fmt.Sprintf("-opt-bisect-limit=%d", limit))
 	out, err := runToolInDir(ctx, compiler, args, culprit.WorkDir)
@@ -1057,52 +1818,37 @@ func compileCulpritWithBisect(ctx context.Context, spec platformSpec, tc *toolch
 	return out, nil
 }
 
-func bisectCompileArgs(in []string) []string {
+func bisectCompileArgs(in []string, cwd string, keepLTO bool) []string {
+	mask := stripMode | stripOutput | stripDep | stripLink | stripOptBisect
+	if !keepLTO {
+		mask |= stripLTO
+	}
 	var out []string
-	for _, a := range stripFlags(in, stripMode|stripOutput|stripDep|stripLink|stripLTO|stripOptBisect, "") {
-		if !strings.HasPrefix(a, "-save-temps") && !strings.HasPrefix(a, "--save-temps") && !strings.HasPrefix(a, "-opt-bisect-limit") {
+	for _, a := range stripFlags(in, mask, cwd) {
+		if !isSaveTempsFlag(a) && !strings.HasPrefix(a, "-opt-bisect-limit") {
 			out = append(out, a)
 		}
 	}
 	return out
 }
 
-func capturePassIRAndDiff(ctx context.Context, spec platformSpec, tc *toolchain, culprit *compiledObj, scratchDir string, res *passBisectResult) error {
+func capturePassIRAndDiff(ctx context.Context, spec platformSpec, tc *toolchain, culprit *compiledObj, scratchDir string, res *passBisectResult, keepLTO bool) error {
 	bLim, aLim := max(0, res.CulpritPassIndex-1), res.CulpritPassIndex
 	bFull, aFull := filepath.Join(scratchDir, "before_full.ll"), filepath.Join(scratchDir, "after_full.ll")
-	if _, err := compileCulpritWithBisect(ctx, spec, tc, culprit, bLim, "ir", bFull); err != nil {
+	if _, err := compileCulpritWithBisect(ctx, spec, tc, culprit, bLim, "ir", bFull, keepLTO); err != nil {
 		return fmt.Errorf("dump before_full.ll: %w", err)
 	}
-	stderrAfter, err := compileCulpritWithBisect(ctx, spec, tc, culprit, aLim, "ir", aFull)
+	stderrAfter, err := compileCulpritWithBisect(ctx, spec, tc, culprit, aLim, "ir", aFull, keepLTO)
 	if err != nil {
 		return fmt.Errorf("dump after_full.ll: %w", err)
 	}
 	res.BeforeFullIRPath, res.AfterFullIRPath = bFull, aFull
 
-	bIR, aIR := filepath.Join(scratchDir, "before.ll"), filepath.Join(scratchDir, "after.ll")
-	extractOrCopy := func(in, out string) error {
-		if res.CulpritFunc != "" && tc.LLVMExtract != "" {
-			if _, err := runToolInDir(ctx, tc.LLVMExtract, []string{"--func=" + res.CulpritFunc, "-S", in, "-o", out}, ""); err == nil {
-				if info, err := os.Stat(out); err == nil && info.Size() > 0 {
-					return nil
-				}
-			}
-		}
-		return copyFile(in, out, 0o644)
-	}
-	if err := extractOrCopy(bFull, bIR); err != nil {
-		return err
-	}
-	if err := extractOrCopy(aFull, aIR); err != nil {
-		return err
-	}
-	res.BeforeIRPath, res.AfterIRPath = bIR, aIR
-
-	bRaw, err := os.ReadFile(bIR)
+	bFullRaw, err := os.ReadFile(bFull)
 	if err != nil {
 		return err
 	}
-	aRaw, err := os.ReadFile(aIR)
+	aFullRaw, err := os.ReadFile(aFull)
 	if err != nil {
 		return err
 	}
@@ -1111,12 +1857,16 @@ func capturePassIRAndDiff(ctx context.Context, spec platformSpec, tc *toolchain,
 	if len(irEntries) > 0 {
 		maxIR = irEntries[len(irEntries)-1].Index
 	}
-	bClean, aClean := cleanIR(string(bRaw)), cleanIR(string(aRaw))
-	if res.CulpritPassIndex > maxIR && bClean == aClean {
+	bIR, aIR := filepath.Join(scratchDir, "before.ll"), filepath.Join(scratchDir, "after.ll")
+	if res.CulpritPassIndex > maxIR && cleanIR(string(bFullRaw)) == cleanIR(string(aFullRaw)) {
 		res.IsCodeGenPass = true
+		_ = os.Remove(bIR)
+		_ = os.Remove(aIR)
+		res.BeforeIRPath, res.AfterIRPath = "", ""
 		bAsm, aAsm := filepath.Join(scratchDir, "before.s"), filepath.Join(scratchDir, "after.s")
-		if _, e1 := compileCulpritWithBisect(ctx, spec, tc, culprit, bLim, "asm", bAsm); e1 == nil {
-			if _, e2 := compileCulpritWithBisect(ctx, spec, tc, culprit, aLim, "asm", aAsm); e2 == nil {
+		if _, e1 := compileCulpritWithBisect(ctx, spec, tc, culprit, bLim, "asm", bAsm, false); e1 == nil {
+			if _, e2 := compileCulpritWithBisect(ctx, spec, tc, culprit, aLim, "asm", aAsm, false); e2 == nil {
+				res.BeforeAsmPath, res.AfterAsmPath = bAsm, aAsm
 				bS, _ := os.ReadFile(bAsm)
 				aS, _ := os.ReadFile(aAsm)
 				res.PassDiff = unifiedDiff(ctx, fmt.Sprintf("before.s (limit=%d)", bLim), string(bS),
@@ -1124,8 +1874,47 @@ func capturePassIRAndDiff(ctx context.Context, spec platformSpec, tc *toolchain,
 				return nil
 			}
 		}
+		return nil
 	}
 
+	if res.IsInterprocedural {
+		// avoid single-function extraction and skip alive-tv IR drop for interprocedural passes
+		_ = os.Remove(bIR)
+		_ = os.Remove(aIR)
+		res.BeforeIRPath, res.AfterIRPath = bFull, aFull
+	} else {
+		extracted := false
+		if res.CulpritFunc != "" && tc.LLVMExtract != "" {
+			tryExtract := func(in, out string) bool {
+				if _, err := runToolInDir(ctx, tc.LLVMExtract, []string{"--func=" + res.CulpritFunc, "-S", in, "-o", out}, ""); err == nil {
+					return fileNonEmpty(out)
+				}
+				return false
+			}
+			if tryExtract(bFull, bIR) && tryExtract(aFull, aIR) {
+				extracted = true
+			}
+		}
+		if !extracted {
+			if err := copyFile(bFull, bIR, 0o644); err != nil {
+				return err
+			}
+			if err := copyFile(aFull, aIR, 0o644); err != nil {
+				return err
+			}
+		}
+		res.BeforeIRPath, res.AfterIRPath = bIR, aIR
+	}
+
+	bRaw, err := os.ReadFile(res.BeforeIRPath)
+	if err != nil {
+		return err
+	}
+	aRaw, err := os.ReadFile(res.AfterIRPath)
+	if err != nil {
+		return err
+	}
+	bClean, aClean := cleanIR(string(bRaw)), cleanIR(string(aRaw))
 	bDiff, aDiff := cleanIRForDiff(string(bRaw)), cleanIRForDiff(string(aRaw))
 	if bDiff == aDiff {
 		bDiff, aDiff = bClean, aClean
@@ -1217,8 +2006,9 @@ func bisectCommit(ctx context.Context, o commitBisectOpts) (string, string, erro
 	if err := os.MkdirAll(objDir, 0o755); err != nil {
 		return "", "", err
 	}
+	_, _ = gitOut(ctx, o.LLVMSrcDir, "worktree", "prune")
 	_ = os.RemoveAll(wtDir)
-	if _, err := gitOut(ctx, o.LLVMSrcDir, "worktree", "add", "--detach", wtDir, commits[len(commits)/2]); err != nil {
+	if _, err := gitOut(ctx, o.LLVMSrcDir, "worktree", "add", "--detach", wtDir, badFull); err != nil {
 		return "", "", err
 	}
 	defer func() {
@@ -1243,8 +2033,25 @@ func bisectCommit(ctx context.Context, o commitBisectOpts) (string, string, erro
 		}
 	}
 
-	cIdx, err := bisectFirstFail(len(commits), func(mid int) (bool, error) {
-		sha := commits[mid]
+	// verify bad endpoint reproduces before bisecting so broken harnesses fail fast
+	badBin, err := buildFn(ctx, wtDir, buildDir, badFull)
+	if err != nil {
+		return "", "", fmt.Errorf("build bad commit %s: %w", shortSHA(badFull), err)
+	}
+	badPass, _, err := testFn(ctx, badBin, badFull)
+	if err != nil {
+		return "", "", fmt.Errorf("test bad commit %s: %w", shortSHA(badFull), err)
+	}
+	if badPass {
+		return "", "", fmt.Errorf("bad commit %s passed during commit bisect", shortSHA(badFull))
+	}
+
+	revs := append([]string{goodFull}, commits...)
+	cIdx, err := bisectFirstFail(len(revs), func(mid int) (bool, error) {
+		if mid == len(revs)-1 {
+			return true, nil
+		}
+		sha := revs[mid]
 		if _, err := gitOut(ctx, wtDir, "checkout", "--force", "--detach", sha); err != nil {
 			return false, fmt.Errorf("checkout %s: %w", sha, err)
 		}
@@ -1261,21 +2068,21 @@ func bisectCommit(ctx context.Context, o commitBisectOpts) (string, string, erro
 	if err != nil {
 		return "", "", err
 	}
-	sha := commits[cIdx]
+	sha := revs[cIdx]
 	subj, _ := gitOut(ctx, o.LLVMSrcDir, "show", "-s", "--format=%s", sha)
 	return sha, subj, nil
 }
 
 func compileSingleTUWithClang(ctx context.Context, clangBin string, spec platformSpec, sdkRoot string, culprit *compiledObj, outObj string) error {
 	driver := clangBin
-	if culprit.IsCXX && culprit.BadImportBC == "" {
+	if culprit.IsCXX && len(culprit.Args) > 0 {
 		if cxx := filepath.Join(filepath.Dir(clangBin), "clang++"); fileExists(cxx) {
 			driver = cxx
 		}
 	}
 	var args []string
 	if len(culprit.Args) > 0 {
-		args = bisectCompileArgs(culprit.Args)
+		args = bisectCompileArgs(culprit.Args, culprit.WorkDir, false)
 		if culprit.IsCXX && filepath.Base(driver) == "clang" {
 			args = append([]string{"--driver-mode=g++"}, args...)
 		}
@@ -1284,6 +2091,7 @@ func compileSingleTUWithClang(ctx context.Context, clangBin string, spec platfor
 		args = append(args, crossTargetArgs(spec)...)
 		args = append(args, "-O3", "-Wno-error")
 		args = append(args, spec.BaselineFlags...)
+		args = append(args, tuCodegenFlags(culprit.CompileRec.FullArgs, culprit.WorkDir)...)
 		if spec.IsDarwin && sdkRoot != "" {
 			args = append(args, "-isysroot", sdkRoot)
 		}
@@ -1301,12 +2109,13 @@ func buildClangInWorktree(ctx context.Context, wtDir, buildDir string, spec plat
 	if jobs <= 0 {
 		jobs = runtime.NumCPU()
 	}
-	if !fileExists(filepath.Join(buildDir, "build.ninja")) {
+	llvmDir := filepath.Join(wtDir, "llvm")
+	configure := func() error {
 		if err := os.MkdirAll(buildDir, 0o755); err != nil {
-			return "", err
+			return err
 		}
 		args := []string{
-			"-G", "Ninja", "-S", filepath.Join(wtDir, "llvm"), "-B", buildDir,
+			"-G", "Ninja", "-S", llvmDir, "-B", buildDir,
 			"-DCMAKE_BUILD_TYPE=Release", "-DLLVM_ENABLE_ASSERTIONS=OFF",
 			"-DLLVM_TARGETS_TO_BUILD=" + firstNonEmpty(spec.LLVMTarget, "Native"), "-DLLVM_ENABLE_PROJECTS=clang",
 			"-DLLVM_APPEND_VC_REV=OFF", "-DCLANG_ENABLE_CIR=OFF", "-DCLANG_ENABLE_STATIC_ANALYZER=OFF",
@@ -1322,10 +2131,32 @@ func buildClangInWorktree(ctx context.Context, wtDir, buildDir string, spec plat
 			}
 		}
 		if out, err := runToolInDir(ctx, "cmake", args, ""); err != nil {
-			return "", fmt.Errorf("cmake configure clang: %w\n%s", err, tailText(out, 4096))
+			return fmt.Errorf("cmake configure clang: %w\n%s", err, tailText(out, 4096))
+		}
+		return nil
+	}
+
+	needCfg := !fileExists(filepath.Join(buildDir, "build.ninja"))
+	if !needCfg {
+		if raw, err := os.ReadFile(filepath.Join(buildDir, "CMakeCache.txt")); err != nil || !strings.Contains(string(raw), llvmDir) {
+			needCfg = true
 		}
 	}
-	if out, err := runToolInDir(ctx, "ninja", []string{"-C", buildDir, "-j", strconv.Itoa(jobs), "clang"}, ""); err != nil {
+	if needCfg {
+		_ = os.RemoveAll(buildDir)
+		if err := configure(); err != nil {
+			return "", err
+		}
+	}
+	out, err := runToolInDir(ctx, "ninja", []string{"-C", buildDir, "-j", strconv.Itoa(jobs), "clang"}, "")
+	if err != nil && !needCfg && isStaleNinjaError(out) {
+		_ = os.RemoveAll(buildDir)
+		if cfgErr := configure(); cfgErr != nil {
+			return "", cfgErr
+		}
+		out, err = runToolInDir(ctx, "ninja", []string{"-C", buildDir, "-j", strconv.Itoa(jobs), "clang"}, "")
+	}
+	if err != nil {
 		return "", fmt.Errorf("ninja clang: %w\n%s", err, tailText(out, 4096))
 	}
 	clangBin := filepath.Join(buildDir, "bin", "clang")
@@ -1336,6 +2167,10 @@ func buildClangInWorktree(ctx context.Context, wtDir, buildDir string, spec plat
 		_ = os.Symlink("clang", filepath.Join(buildDir, "bin", "clang++"))
 	}
 	return clangBin, nil
+}
+
+func isStaleNinjaError(out string) bool {
+	return containsAny(out, []string{"ninja: error:", "build.ninja", "CMake Error", "re-run cmake", "multiple rules generate"})
 }
 
 func gitListCommits(ctx context.Context, repoDir, goodSHA, badSHA string) ([]string, error) {
@@ -1379,13 +2214,21 @@ func driverFor(tc *toolchain, isCXX bool) string {
 func stripLinkLibs(args []string) []string {
 	var out []string
 	for i := 0; i < len(args); i++ {
-		if args[i] == "-l" || args[i] == "-L" {
+		a := args[i]
+		if a == "-l" || a == "-L" || a == "-force_load" || a == "-filelist" {
 			i++
 			continue
 		}
-		if !strings.HasPrefix(args[i], "-l") && !strings.HasPrefix(args[i], "-L") {
-			out = append(out, args[i])
+		if strings.HasPrefix(a, "-l") || strings.HasPrefix(a, "-L") {
+			continue
 		}
+		if !strings.HasPrefix(a, "-") {
+			switch ext := strings.ToLower(filepath.Ext(a)); {
+			case ext == ".o" || ext == ".lo" || ext == ".obj" || ext == ".bc" || ext == ".a" || ext == ".so" || ext == ".dylib" || strings.Contains(filepath.Base(a), ".so."):
+				continue
+			}
+		}
+		out = append(out, a)
 	}
 	return out
 }
@@ -1400,7 +2243,11 @@ func mkdirAll(dirs ...string) error {
 }
 
 func relWithinDir(root, target string) (string, bool) {
-	rel, err := filepath.Rel(root, filepath.Clean(target))
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(target))
+	if err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return rel, true
+	}
+	rel, err = filepath.Rel(evalSymlinksExisting(root), evalSymlinksExisting(target))
 	return rel, err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 

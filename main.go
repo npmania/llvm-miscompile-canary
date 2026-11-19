@@ -380,6 +380,23 @@ type regressionTarget struct {
 	FailedTests []string `json:"failed_tests,omitempty"`
 }
 
+func capRegressions(regs []regressionTarget, maxCount, maxBytes int) []regressionTarget {
+	if maxCount > 0 && len(regs) > maxCount {
+		regs = regs[:maxCount]
+	}
+	if maxBytes <= 0 {
+		return regs
+	}
+	for len(regs) > 0 {
+		raw, err := json.Marshal(regs)
+		if err == nil && len(raw) <= maxBytes {
+			break
+		}
+		regs = regs[:len(regs)-1]
+	}
+	return regs
+}
+
 func cmdAggregate(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("aggregate", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -438,15 +455,35 @@ func cmdAggregate(args []string, stdout, stderr io.Writer) error {
 		}
 	}
 
-	regs := make([]regressionTarget, 0)
-	for _, r := range results {
-		if r.Status == statusTestFail {
-			regs = append(regs, regressionTarget{
-				Package: r.Package, Platform: r.Platform, Profile: r.Profile,
-				GoodSHA: st.goodSHAFor(r.Package, r.Platform, r.Profile), BadSHA: *sha, FailedTests: r.FailedTests,
-			})
+	const (
+		maxRegressionTargets = 64
+		maxRegressionsBytes  = 60000
+	)
+	openCovered := make(map[string]bool)
+	for _, inc := range incs {
+		if inc == nil || inc.Status != incidentOpen {
+			continue
+		}
+		for _, a := range inc.Affected {
+			openCovered[targetKey(a.Package, a.Platform, a.Profile)] = true
 		}
 	}
+
+	regs := make([]regressionTarget, 0)
+	for _, r := range results {
+		if r.Status != statusTestFail || openCovered[targetKey(r.Package, r.Platform, r.Profile)] {
+			continue
+		}
+		var failed []string
+		if len(r.FailedTests) > 0 {
+			failed = r.FailedTests[:1]
+		}
+		regs = append(regs, regressionTarget{
+			Package: r.Package, Platform: r.Platform, Profile: r.Profile,
+			GoodSHA: st.goodSHAFor(r.Package, r.Platform, r.Profile), BadSHA: *sha, FailedTests: failed,
+		})
+	}
+	regs = capRegressions(regs, maxRegressionTargets, maxRegressionsBytes)
 
 	prevSHA := *prev
 	if prevSHA == "" {

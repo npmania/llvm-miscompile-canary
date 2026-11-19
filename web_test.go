@@ -18,6 +18,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 )
@@ -35,6 +36,7 @@ func TestSanitize(t *testing.T) {
 		{"unclosedFence", "Revert \"```\" by @nikic on llvm/llvm-project@0212d77fa269abcdef0123456789abcdef012345", []string{"by nikic", "`0212d77fa269`"}, []string{`@nikic`, `llvm/llvm-project`}},
 		{"linksAndHex", "Commit [view](https://github.com/llvm/llvm-project/commit/0212d77fa269abcdef) raw 11223344556677889900aabbccddeeff00112233 " + sha64 + " " + bundleURL, []string{"`0212d77fa269`", "`112233445566`", sha64, bundleURL}, []string{`github\.com/llvm`, `11223344556677889900aabbccddeeff00112233`}},
 		{"codeAndEmail", "Author `@LebedevRI` <author@example.org> fixed [PR](https://github.com/llvm/llvm-project/pull/99999)", []string{"`LebedevRI`", "author[at]example.org"}, []string{`@[A-Za-z0-9_-]+`, `github\.com/llvm`}},
+		{"mixedCaseGH", "See https://GitHub.com/LLVM/llvm-project/Commit/0212d77fa269abcdef and https://GitHub.com/llvm/circt/pull/1 and https://GitHub.com/other/repo/Issues/1 and [link](https://GITHUB.COM/other/repo/Pull/9)", []string{"`0212d77fa269`", "link"}, []string{`(?i)github\.com/llvm`, `(?i)github\.com/other`}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -54,15 +56,57 @@ func TestSanitize(t *testing.T) {
 			}
 		})
 	}
-	ir := sanitizeCode("; https://github.com/llvm/llvm-project/issues/123 llvm/llvm-project#456\ndefine i32 @foo(i32 %x) {\n  ret i32 %x\n}")
+	ir := sanitizeCode("; https://GitHub.com/LLVM/llvm-project/issues/123 https://GitHub.com/other/repo/issues/9 llvm/llvm-project#456\ndefine i32 @foo(i32 %x) {\n  ret i32 %x\n}")
 	doc := "Header\n```llvm\n" + ir + "\n```\nFooter"
-	if err := checkNoCrossRefs(doc); err != nil || !strings.Contains(doc, "define i32 @foo(i32 %x)") {
+	if err := checkNoCrossRefs(doc); err != nil || !strings.Contains(doc, "define i32 @foo(i32 %x)") || strings.Contains(strings.ToLower(ir), "github.com/") {
 		t.Errorf("fenced IR failed: err=%v doc=%q", err, doc)
 	}
 	for _, bad := range []string{"https://github.com/llvm/llvm-project/issues/1", "llvm/llvm-project#123", "llvm/llvm-project@0123456789ab", "GH-1234", "Fix (#1234)", "ping @nikic", "```llvm\n@unclosed"} {
 		if err := checkNoCrossRefs(bad); err == nil {
 			t.Errorf("checkNoCrossRefs(%q) = nil, want error", bad)
 		}
+	}
+
+	angleInc := &incident{
+		ID: "inc-angle", Status: incidentOpen, BadSHA: "0212d77fa269abcdef0123456789abcdef012345",
+		CulpritPass: "InvalidateAnalysisPass<llvm::AAManager>",
+		Affected:    []affected{{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2, TestID: "suite@case (#12) GH-99"}},
+	}
+	dk := dedupKey(angleInc)
+	if strings.ContainsAny(dk, "<>@ \t\n") || keyToken(dk) != dk {
+		t.Fatalf("unsafe or non-idempotent dedupKey %q", dk)
+	}
+	angleBody := formatGroupBody([]*incident{angleInc}, dk, defaultSiteURL)
+	if err := checkNoCrossRefs(angleBody); err != nil {
+		t.Fatalf("angleBody cross-ref: %v", err)
+	}
+	if m := reDedupMarker.FindStringSubmatch(angleBody); len(m) < 2 || m[1] != dk {
+		t.Fatalf("dedup marker mismatch: got %v want %q", m, dk)
+	}
+
+	var bigAffected []affected
+	for i := range 320 {
+		bigAffected = append(bigAffected, affected{
+			Package: fmt.Sprintf("pkg-%03d", i), Platform: platLinuxX86, Profile: profDistroO2,
+			TestID: fmt.Sprintf("long_test_name_for_truncation_%03d_%s", i, strings.Repeat("x", 40)),
+		})
+	}
+	bigInc := &incident{
+		ID: "inc-big", Status: incidentOpen, BadSHA: "0212d77fa269abcdef0123456789abcdef012345",
+		CulpritSHA: "0212d77fa269abcdef0123456789abcdef012345", CulpritPass: "InstCombinePass",
+		ReducedIR: strings.Repeat("define i32 @sym_ir(i32 %x) {\n  ret i32 %x\n}\n", 300),
+		PassDiff:  strings.Repeat("+  call void @sym_diff()\n-  call void @sym_old()\n", 350),
+		Affected:  bigAffected,
+	}
+	bigBody := formatGroupBody([]*incident{bigInc}, "", defaultSiteURL)
+	if !strings.Contains(bigBody, "...(truncated)") || !utf8.ValidString(bigBody) {
+		t.Fatalf("expected valid truncated body, len=%d", len(bigBody))
+	}
+	if err := checkNoCrossRefs(bigBody); err != nil {
+		t.Fatalf("truncated body failed checkNoCrossRefs: %v", err)
+	}
+	if m := reDedupMarker.FindStringSubmatch(bigBody); len(m) < 2 || m[1] != dedupKey(bigInc) {
+		t.Fatalf("truncated body missing dedup marker: %v", m)
 	}
 }
 
@@ -133,9 +177,13 @@ func TestIssueSync(t *testing.T) {
 		reqs++
 		const prefix = "/repos/npmania/llvm-miscompile-canary/issues"
 		if r.URL.Path == prefix && r.Method == http.MethodGet {
+			stateFilter := r.URL.Query().Get("state")
+			if stateFilter != "all" {
+				t.Errorf("expected state=all, got %q", stateFilter)
+			}
 			out := []ghIssue{{Number: 999, State: "open", PullRequest: &struct{}{}}}
 			for _, iss := range issues {
-				if iss.State == "open" {
+				if stateFilter == "all" || iss.State == stateFilter {
 					out = append(out, *iss)
 				}
 			}
@@ -258,9 +306,17 @@ func TestIssueSync(t *testing.T) {
 	if a, err := syncIssues(ctx, cfg, []*incident{inc1, inc2}); err != nil || len(a) != 1 || a[0].Kind != "noop" || reqs-before != 1 {
 		t.Fatalf("noop sync a=%+v reqs=%d err=%v", a, reqs-before, err)
 	}
+	iss.Labels = append(iss.Labels, struct{ Name string }{"reported-upstream"})
+	before = reqs
+	if a, err := syncIssues(ctx, cfg, []*incident{inc1, inc2}); err != nil || len(a) != 1 || a[0].Kind != "noop" || reqs-before != 1 {
+		t.Fatalf("manual label noop a=%+v reqs=%d err=%v", a, reqs-before, err)
+	}
 	inc2.mergeAffected(affected{Package: "sqlite", Platform: platLinuxARM64, Profile: profReleaseLTO, TestID: "smoke"})
 	if a, err := syncIssues(ctx, cfg, []*incident{inc1, inc2}); err != nil || len(a) != 1 || a[0].Kind != "update" {
 		t.Fatalf("update sync a=%+v err=%v", a, err)
+	}
+	if !slices.ContainsFunc(iss.Labels, func(l struct{ Name string }) bool { return l.Name == "reported-upstream" }) {
+		t.Errorf("manual label wiped on update: %+v", iss.Labels)
 	}
 	fixed := "fedcba9876543210fedcba9876543210fedcba98"
 	inc1.Status, inc1.FixedSHA, inc2.Status, inc2.FixedSHA = incidentResolved, fixed, incidentResolved, fixed
@@ -269,6 +325,50 @@ func TestIssueSync(t *testing.T) {
 	}
 	if iss.State != "closed" || !slices.Equal(comments[inc1.IssueNumber], []string{"Fixed at `fedcba987654`."}) {
 		t.Errorf("closed state=%q comments=%v", iss.State, comments[inc1.IssueNumber])
+	}
+
+	inc3 := &incident{
+		ID: "inc-manual-close", Status: incidentOpen, Confidence: confNeedsReview,
+		GoodSHA: inc1.GoodSHA, BadSHA: inc1.BadSHA,
+		CulpritSHA: "3333333333333333333333333333333333333333", CulpritPass: "GVNPass",
+		Affected:  []affected{{Package: "lua", Platform: platLinuxX86, Profile: profDistroO2, TestID: "smoke"}},
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if a, err := syncIssues(ctx, cfg, []*incident{inc3}); err != nil || len(a) != 1 || a[0].Kind != "create" {
+		t.Fatalf("create inc3 a=%+v err=%v", a, err)
+	}
+	iss3 := issues[inc3.IssueNumber]
+	iss3.Labels = append(iss3.Labels, struct{ Name string }{"wontfix"})
+	inc3.Confidence = confConfirmed
+	if a, err := syncIssues(ctx, cfg, []*incident{inc3}); err != nil || len(a) != 1 || a[0].Kind != "update" {
+		t.Fatalf("upgrade inc3 a=%+v err=%v", a, err)
+	}
+	var gotLabels []string
+	for _, l := range iss3.Labels {
+		gotLabels = append(gotLabels, l.Name)
+	}
+	if !slices.Contains(gotLabels, "wontfix") || !slices.Contains(gotLabels, confConfirmed) || slices.Contains(gotLabels, confNeedsReview) {
+		t.Errorf("unexpected labels after confidence upgrade: %v", gotLabels)
+	}
+	iss3.State = "closed"
+	countBefore := len(issues)
+	if a, err := syncIssues(ctx, cfg, []*incident{inc3}); err != nil || len(a) != 1 || a[0].Kind != "noop" || len(issues) != countBefore {
+		t.Fatalf("manual close reopened/duplicated: a=%+v count=%d->%d err=%v", a, countBefore, len(issues), err)
+	}
+
+	inc4 := &incident{
+		ID: "inc-open-wins", Status: incidentOpen, Confidence: confConfirmed,
+		GoodSHA: inc1.GoodSHA, BadSHA: inc1.BadSHA,
+		CulpritSHA: "4444444444444444444444444444444444444444", CulpritPass: "LICMPass",
+		Affected:  []affected{{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2, TestID: "t1"}},
+		CreatedAt: now, UpdatedAt: now,
+	}
+	dk4 := dedupKey(inc4)
+	body4 := formatGroupBody([]*incident{inc4}, dk4, defaultSiteURL)
+	issues[90] = &ghIssue{Number: 90, HTMLURL: "https://github.com/npmania/llvm-miscompile-canary/issues/90", State: "closed", Title: "old", Body: body4}
+	issues[91] = &ghIssue{Number: 91, HTMLURL: "https://github.com/npmania/llvm-miscompile-canary/issues/91", State: "open", Title: formatGroupTitle([]*incident{inc4}), Body: body4, Labels: []struct{ Name string }{{confConfirmed}, {platLinuxX86}}}
+	if a, err := syncIssues(ctx, cfg, []*incident{inc4}); err != nil || len(a) != 1 || a[0].Kind != "noop" || a[0].IssueNumber != 91 {
+		t.Fatalf("expected open issue #91 to win over closed #90: a=%+v err=%v", a, err)
 	}
 }
 
@@ -396,23 +496,253 @@ func TestSiteGenerate(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(emptyOut, "corpus", "index.html")); strings.Count(string(b), "<tr>") != 43 || checkNoCrossRefs(string(b)) != nil {
 		t.Errorf("real corpus page row count = %d (want 43)", strings.Count(string(b), "<tr>"))
 	}
+
+	escStore, escOut := t.TempDir(), t.TempDir()
+	escInc := &incident{
+		ID: "inc-esc", Status: incidentOpen, Confidence: confConfirmed,
+		GoodSHA: "111111111111", BadSHA: "222222222222", CulpritSHA: "222222222222",
+		CulpritPass: "InvalidateAnalysisPass<llvm::AAManager>",
+		CulpritFunc: "ns::fn<int>(const T&)",
+		CulpritTU:   "a&b.cc",
+		BundleURL:   "javascript:alert(1)",
+		IssueNumber: 9, IssueURL: "javascript:alert(2)",
+		Affected:  []affected{{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2, TestID: "t1"}},
+		CreatedAt: t1, UpdatedAt: t1,
+	}
+	if _, err := saveIncident(escStore, escInc); err != nil {
+		t.Fatal(err)
+	}
+	if err := generateSite(escStore, escOut, corpusDir); err != nil {
+		t.Fatalf("generateSite esc: %v", err)
+	}
+	rawEsc, err := os.ReadFile(filepath.Join(escOut, "incidents", "inc-esc", "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawEscStr := string(rawEsc)
+	for _, want := range []string{
+		"<code>InvalidateAnalysisPass&lt;llvm::AAManager&gt;</code>",
+		"<code>ns::fn&lt;int&gt;(const T&amp;)</code>",
+		"<code>a&amp;b.cc</code>",
+	} {
+		if !strings.Contains(rawEscStr, want) {
+			t.Errorf("incident page missing single-escaped %q", want)
+		}
+	}
+	if strings.Contains(rawEscStr, "&amp;lt;") || strings.Contains(rawEscStr, "&amp;amp;") || strings.Contains(strings.ToLower(rawEscStr), `href="javascript:`) {
+		t.Errorf("incident page double-escaped or allowed javascript href:\n%s", rawEscStr)
+	}
+	rawIdx, err := os.ReadFile(filepath.Join(escOut, "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.ToLower(string(rawIdx)), "javascript:") {
+		t.Errorf("index page allowed javascript URL:\n%s", string(rawIdx))
+	}
+}
+
+func TestAggregateAndStoreFixes(t *testing.T) {
+	st := &state{LastGoodSHA: "good111111111111111111111111111111111111"}
+	openInc := &incident{
+		ID: "open-1", Status: incidentOpen,
+		GoodSHA: "aaaa111111111111111111111111111111111111", BadSHA: "bbbb111111111111111111111111111111111111",
+		Affected: []affected{{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2, TestID: "t1"}},
+	}
+	resolvedInc := &incident{
+		ID: "res-1", Status: incidentResolved,
+		GoodSHA: "cccc111111111111111111111111111111111111", BadSHA: "dddd111111111111111111111111111111111111",
+		FixedSHA: "eeee111111111111111111111111111111111111", IssueNumber: 7,
+		Affected: []affected{{Package: "opus", Platform: platLinuxX86, Profile: profDistroO2, TestID: "t1"}},
+	}
+	recordSweep(st, sweep{
+		LLVMCommit: "ice0000000000000000000000000000000000000",
+		Results: []pkgResult{
+			{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2, Status: statusBuildFail},
+		},
+	}, []*incident{openInc, resolvedInc})
+	if st.LastGoodSHA != "good111111111111111111111111111111111111" {
+		t.Fatalf("build_fail overwrote LastGoodSHA: %q", st.LastGoodSHA)
+	}
+	if !slices.Equal(st.RetainedToolchains, []string{openInc.GoodSHA, openInc.BadSHA}) {
+		t.Fatalf("RetainedToolchains = %v, want only open incident SHAs", st.RetainedToolchains)
+	}
+
+	storeDir := t.TempDir()
+	t0 := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	resOrig := &incident{
+		ID: "zstd-12345678", Status: incidentResolved, FixedSHA: "ffff111111111111111111111111111111111111",
+		IssueNumber: 42, ResolvedAt: &t0,
+		GoodSHA: openInc.GoodSHA, BadSHA: openInc.BadSHA, CulpritSHA: "1234567890ab1234567890ab1234567890ab1234",
+		Affected: []affected{{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2, TestID: "t1"}},
+	}
+	if _, err := saveIncident(storeDir, resOrig); err != nil {
+		t.Fatal(err)
+	}
+	reopen := &incident{
+		ID: "zstd-12345678", Status: incidentOpen,
+		GoodSHA: openInc.GoodSHA, BadSHA: openInc.BadSHA, CulpritSHA: "1234567890ab1234567890ab1234567890ab1234",
+		Affected: []affected{{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2, TestID: "t1"}},
+	}
+	saved, err := mergeIncident(storeDir, reopen)
+	if err != nil || saved.ID != "zstd-12345678-2" {
+		t.Fatalf("resolved collision: saved=%+v err=%v", saved, err)
+	}
+	var checkOrig incident
+	if err := readJSON(filepath.Join(storeDir, "incidents", "zstd-12345678.json"), &checkOrig); err != nil {
+		t.Fatal(err)
+	}
+	if checkOrig.Status != incidentResolved || checkOrig.FixedSHA != resOrig.FixedSHA || checkOrig.IssueNumber != 42 {
+		t.Fatalf("resolved incident overwritten: %+v", checkOrig)
+	}
+
+	passA := &incident{
+		ID: "lua-aaaa1111", Status: incidentOpen, BadSHA: openInc.BadSHA, CulpritPass: "InstCombinePass",
+		Affected: []affected{{Package: "lua", Platform: platLinuxX86, Profile: profDistroO2, TestID: "t1"}},
+	}
+	passB := &incident{
+		ID: "lua-aaaa1111", Status: incidentOpen, BadSHA: openInc.BadSHA, CulpritPass: "GVNPass",
+		Affected: []affected{{Package: "lua", Platform: platLinuxX86, Profile: profDistroO2, TestID: "t1"}},
+	}
+	if _, err := mergeIncident(storeDir, passA); err != nil {
+		t.Fatal(err)
+	}
+	savedB, err := mergeIncident(storeDir, passB)
+	if err != nil || savedB.ID != "lua-aaaa1111-2" {
+		t.Fatalf("distinct passes merged: savedB=%+v err=%v", savedB, err)
+	}
+
+	aggStore := t.TempDir()
+	if _, err := saveIncident(aggStore, openInc); err != nil {
+		t.Fatal(err)
+	}
+	fragsDir := t.TempDir()
+	results := []pkgResult{
+		{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2, Status: statusTestFail, FailedTests: []string{"t1", "t2"}},
+	}
+	for i := range 80 {
+		results = append(results, pkgResult{
+			Package: fmt.Sprintf("pkg-%02d", i), Platform: platLinuxX86, Profile: profDistroO2,
+			Status: statusTestFail, FailedTests: []string{"first", "second", "third"},
+		})
+	}
+	if err := writeResultFragment(filepath.Join(fragsDir, "all.json"), results); err != nil {
+		t.Fatal(err)
+	}
+	regOut := filepath.Join(t.TempDir(), "regressions.json")
+	var out, errBuf bytes.Buffer
+	if code := runCLI(context.Background(), []string{
+		"lmc", "aggregate", "-frags", fragsDir, "-store", aggStore,
+		"-sha", "9999999999999999999999999999999999999999", "-reg-out", regOut,
+	}, &out, &errBuf); code != 0 {
+		t.Fatalf("aggregate failed (%d): %s", code, errBuf.String())
+	}
+	var regs []regressionTarget
+	if err := readJSON(regOut, &regs); err != nil {
+		t.Fatal(err)
+	}
+	if len(regs) != 64 {
+		t.Fatalf("len(regs) = %d, want 64", len(regs))
+	}
+	for _, r := range regs {
+		if r.Package == "zstd" {
+			t.Errorf("open incident target should have been skipped: %+v", r)
+		}
+		if len(r.FailedTests) != 1 || r.FailedTests[0] != "first" {
+			t.Errorf("FailedTests not trimmed to 1: %+v", r)
+		}
+	}
+
+	var hugeRegs []regressionTarget
+	for i := range 64 {
+		hugeRegs = append(hugeRegs, regressionTarget{
+			Package: fmt.Sprintf("p%02d", i), Platform: platLinuxX86, Profile: profDistroO2,
+			GoodSHA: strings.Repeat("a", 40), BadSHA: strings.Repeat("b", 40),
+			FailedTests: []string{strings.Repeat("x", 2000)},
+		})
+	}
+	capped := capRegressions(hugeRegs, 64, 60000)
+	raw, err := json.Marshal(capped)
+	if err != nil || len(raw) > 60000 || len(capped) == 0 || len(capped) >= 64 {
+		t.Fatalf("capRegressions len=%d bytes=%d err=%v", len(capped), len(raw), err)
+	}
+
+	rvOnly := &incident{
+		ID: "rv-1", Status: incidentOpen, BadSHA: openInc.BadSHA, CulpritSHA: "5555555555555555555555555555555555555555",
+		ASanUBSanClean: false,
+		Affected:       []affected{{Package: "zstd", Platform: platLinuxRISCV64, Profile: profDistroO2, TestID: "t1"}},
+	}
+	x86Clean := &incident{
+		ID: "x86-1", Status: incidentOpen, BadSHA: openInc.BadSHA, CulpritSHA: rvOnly.CulpritSHA,
+		ASanUBSanClean: true,
+		Affected:       []affected{{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2, TestID: "t1"}},
+	}
+	x86Fail := &incident{
+		ID: "x86-2", Status: incidentOpen, BadSHA: openInc.BadSHA, CulpritSHA: rvOnly.CulpritSHA,
+		ASanUBSanClean: false,
+		Affected:       []affected{{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2, TestID: "t1"}},
+	}
+	sanRow := func(incs []*incident, htmlMode bool) string {
+		for _, r := range incidentMetaRows(incs, htmlMode, defaultSiteURL) {
+			if r[0] == "Sanitizers" {
+				return r[1]
+			}
+		}
+		return ""
+	}
+	if got := sanRow([]*incident{rvOnly}, false); got != "`ubsan` clean (asan disabled)" {
+		t.Errorf("riscv64 md Sanitizers = %q", got)
+	}
+	if got := sanRow([]*incident{rvOnly}, true); got != "<code>ubsan</code> clean (asan disabled)" {
+		t.Errorf("riscv64 html Sanitizers = %q", got)
+	}
+	if got := sanRow([]*incident{rvOnly, x86Clean}, false); got != "`asan,ubsan` clean" {
+		t.Errorf("mixed riscv64+x86 clean Sanitizers = %q", got)
+	}
+	if got := sanRow([]*incident{rvOnly, x86Fail}, false); got != "`asan,ubsan` failed" {
+		t.Errorf("mixed riscv64+x86 fail Sanitizers = %q", got)
+	}
+
+	sanStore := t.TempDir()
+	if _, err := mergeIncident(sanStore, rvOnly); err != nil {
+		t.Fatal(err)
+	}
+	mergedSan, err := mergeIncident(sanStore, x86Clean)
+	if err != nil || !mergedSan.ASanUBSanClean || len(mergedSan.Affected) != 2 {
+		t.Fatalf("merge riscv64 then x86 did not upgrade ASanUBSanClean: %+v err=%v", mergedSan, err)
+	}
 }
 
 func TestWorkflowsAndInitScript(t *testing.T) {
 	checks := map[string][]string{
 		"ci.yml":        {"go build -o lmc .", "validate-corpus -corpus corpus -require 42"},
-		"toolchain.yml": {"'53 3,9,15,21 * * *'", "fail-fast: false", "--target master", "| zstd ", "GH_REPO: ${{ github.repository }}"},
-		"sweep.yml":     {"corpus-matrix -corpus corpus", "fail-fast: false", "zstd -dc", "| tar -xf -", "GH_REPO: ${{ github.repository }}"},
-		"triage.yml":    {"./lmc alive-check", "--target master", "BUILD_ALIVE2_LLVM=1", "GH_REPO: ${{ github.repository }}"},
+		"toolchain.yml": {"'53 3,9,15,21 * * *'", "fail-fast: false", "--target master", "| zstd ", "GH_REPO: ${{ github.repository }}", "git ls-remote --exit-code --heads", `select(.status == "open")`, "grep -Fxq", "--limit 500"},
+		"sweep.yml":     {"corpus-matrix -corpus corpus", "fail-fast: false", "zstd -dc", "| tar -xf -", "GH_REPO: ${{ github.repository }}", "if: always() && !cancelled()", "LLVM_SUBJ: ${{ steps.meta.outputs.subject }}", "./lmc site -store _data -out _site -corpus corpus"},
+		"triage.yml":    {"./lmc alive-check", "--target master", "BUILD_ALIVE2_LLVM=1", "GH_REPO: ${{ github.repository }}", "TEST_ID: ${{ matrix.test_id }}", "-print -quit", "Free runner disk space", "Fallback download raw triage artifacts"},
 	}
 	for name, wants := range checks {
 		raw, err := os.ReadFile(filepath.Join(".github", "workflows", name))
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)
 		}
-		var doc map[string]any
-		if err := yaml.Unmarshal(raw, &doc); err != nil || doc["jobs"] == nil {
+		var doc struct {
+			Jobs map[string]struct {
+				Steps []struct {
+					Name string `yaml:"name"`
+					Run  string `yaml:"run"`
+				} `yaml:"steps"`
+			} `yaml:"jobs"`
+		}
+		if err := yaml.Unmarshal(raw, &doc); err != nil || len(doc.Jobs) == 0 {
 			t.Fatalf("invalid YAML in %s: %v", name, err)
+		}
+		if name != "ci.yml" {
+			for jn, j := range doc.Jobs {
+				for _, st := range j.Steps {
+					if strings.Contains(st.Run, "${{") {
+						t.Errorf("%s job %s step %q interpolates ${{ in run", name, jn, st.Name)
+					}
+				}
+			}
 		}
 		s := string(raw)
 		if strings.Contains(s, "./cmd/lmc") || strings.Contains(s, "miscompile proven by alive-tv") {

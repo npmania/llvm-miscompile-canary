@@ -404,25 +404,48 @@ func copyFile(src, dst string, mode os.FileMode) error {
 		return err
 	}
 	defer in.Close()
-	if mode == 0 {
-		if info, err := in.Stat(); err == nil {
-			mode = info.Mode().Perm()
-		} else {
-			mode = 0o644
-		}
-	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
-	}
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	inInfo, err := in.Stat()
 	if err != nil {
 		return err
 	}
+	if dstInfo, err := os.Stat(dst); err == nil && os.SameFile(inInfo, dstInfo) {
+		return nil
+	}
+	if mode == 0 {
+		mode = inInfo.Mode().Perm()
+	}
+	dir := filepath.Dir(dst)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	out, err := os.CreateTemp(dir, ".lmc-copy-*")
+	if err != nil {
+		return err
+	}
+	tmp := out.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmp)
+		}
+	}()
 	_, copyErr := io.Copy(out, in)
-	if closeErr := out.Close(); copyErr == nil {
+	chmodErr := out.Chmod(mode)
+	closeErr := out.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	if chmodErr != nil {
+		return chmodErr
+	}
+	if closeErr != nil {
 		return closeErr
 	}
-	return copyErr
+	if err := os.Rename(tmp, dst); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
 }
 
 func resolvePath(cwd, p string) string {
@@ -435,7 +458,34 @@ func resolvePath(cwd, p string) string {
 	return filepath.Clean(filepath.Join(cwd, p))
 }
 
+func evalSymlinksExisting(p string) string {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return filepath.Clean(p)
+	}
+	cur := abs
+	var tail []string
+	for {
+		if real, err := filepath.EvalSymlinks(cur); err == nil {
+			for i := len(tail) - 1; i >= 0; i-- {
+				real = filepath.Join(real, tail[i])
+			}
+			return real
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return abs
+		}
+		tail = append(tail, filepath.Base(cur))
+		cur = parent
+	}
+}
+
 func isWithinDir(root, cand string) bool {
 	rel, err := filepath.Rel(root, cand)
+	if err == nil && (rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))) {
+		return true
+	}
+	rel, err = filepath.Rel(evalSymlinksExisting(root), evalSymlinksExisting(cand))
 	return err == nil && (rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))))
 }

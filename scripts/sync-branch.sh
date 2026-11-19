@@ -9,13 +9,24 @@ msg=${4:-}
 case "$cmd" in
 checkout)
 	remote="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-	git init "$dir"
-	git -C "$dir" remote add origin "$remote"
-	if git -C "$dir" fetch --depth=1 origin "refs/heads/${branch}:refs/heads/${branch}" 2>/dev/null; then
+	rc=0
+	git ls-remote --exit-code --heads "$remote" "refs/heads/${branch}" >/dev/null || rc=$?
+	case "$rc" in
+	0)
+		git init "$dir"
+		git -C "$dir" remote add origin "$remote"
+		git -C "$dir" fetch --depth=1 origin "refs/heads/${branch}:refs/heads/${branch}"
 		git -C "$dir" checkout "$branch"
-	else
+		;;
+	2)
+		git init "$dir"
+		git -C "$dir" remote add origin "$remote"
 		git -C "$dir" checkout --orphan "$branch"
-	fi
+		;;
+	*)
+		exit "$rc"
+		;;
+	esac
 	;;
 push)
 	git -C "$dir" config user.name "github-actions[bot]"
@@ -23,7 +34,17 @@ push)
 	git -C "$dir" add -A
 	if ! git -C "$dir" diff --cached --quiet; then
 		git -C "$dir" commit -m "$msg"
-		git -C "$dir" push origin "HEAD:refs/heads/${branch}"
+		i=1
+		while true; do
+			if git -C "$dir" push origin "HEAD:refs/heads/${branch}"; then
+				break
+			fi
+			if [ "$i" -ge 3 ]; then
+				exit 1
+			fi
+			sleep $((i * 5))
+			i=$((i + 1))
+		done
 	fi
 	;;
 *)

@@ -3,16 +3,42 @@ set -eu
 
 test_id="${1:?usage: test_one.sh <test_id>}"
 
-# *-cmp checks MD5 of output from the base test, so re-run the producer first
-case "$test_id" in
-  *-cmp)
-    prod="${test_id%-cmp}"
-    prod_esc=$(printf '%s' "$prod" | sed 's/[][\\.^$*+?()|{}]/\\&/g')
-    if ctest --test-dir "$BUILD_DIR" -N -R "^${prod_esc}$" 2>/dev/null | grep -q "Test  *#"; then
-      ctest --test-dir "$BUILD_DIR" --output-on-failure --no-tests=error -R "^${prod_esc}$"
-    fi
-    ;;
-esac
+# resolve transitive ctest DEPENDS so producers run before dependent tests
+plan=$(python3 - "$BUILD_DIR" "$test_id" <<'PY'
+import json, subprocess, sys
 
-escaped=$(printf '%s' "$test_id" | sed 's/[][\\.^$*+?()|{}]/\\&/g')
-exec ctest --test-dir "$BUILD_DIR" --output-on-failure --no-tests=error -R "^${escaped}$"
+build_dir, target = sys.argv[1], sys.argv[2]
+raw = subprocess.check_output(
+    ["ctest", "--test-dir", build_dir, "--show-only=json-v1"],
+    text=True,
+)
+deps = {}
+for t in json.loads(raw).get("tests", []):
+    d = []
+    for p in t.get("properties", []):
+        if p.get("name") == "DEPENDS":
+            v = p.get("value", [])
+            d.extend([v] if isinstance(v, str) else v)
+    deps[t["name"]] = d
+
+seen = set()
+order = []
+def walk(name):
+    if name in seen:
+        return
+    seen.add(name)
+    for dep in deps.get(name, ()):
+        walk(dep)
+    order.append(name)
+
+walk(target)
+for name in order:
+    print(name)
+PY
+)
+
+printf '%s\n' "$plan" | while IFS= read -r t; do
+  [ -n "$t" ] || continue
+  escaped=$(printf '%s' "$t" | sed 's/[][\\.^$*+?()|{}]/\\&/g')
+  ctest --test-dir "$BUILD_DIR" --output-on-failure --no-tests=error -R "^${escaped}$"
+done

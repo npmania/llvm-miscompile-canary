@@ -19,14 +19,19 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
+const maxCmdOutput = 8 << 20
+
 var (
-	sha256HexRe = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
-	cmdSepRe    = regexp.MustCompile(`[;&|()]+`)
+	sha256HexRe  = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
+	cmdSepRe     = regexp.MustCompile(`[;&|()]+`)
+	ctestStartRe = regexp.MustCompile(`^\s*Start\s+(\d+):\s+(.+?)\s*$`)
+	ctestDoneRe  = regexp.MustCompile(`^\s*\d+/\d+\s+Test\s+#(\d+):\s+(.+?)\s+\.{2,}(.+)$`)
 )
 
 type cmakeSpec struct {
@@ -275,31 +280,59 @@ func fetchSource(ctx context.Context, r *recipe, cacheDir, mirror string, client
 }
 
 func downloadVerified(ctx context.Context, client *http.Client, srcURL, dst, wantSHA string) error {
+	if !strings.HasPrefix(srcURL, "http://") && !strings.HasPrefix(srcURL, "https://") {
+		_, err := downloadVerifiedOnce(ctx, client, srcURL, dst, wantSHA)
+		return err
+	}
+	backoffs := []time.Duration{2 * time.Second, 5 * time.Second}
+	var err error
+	for attempt := 0; attempt <= len(backoffs); attempt++ {
+		if attempt > 0 {
+			timer := time.NewTimer(backoffs[attempt-1])
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
+		}
+		var retry bool
+		retry, err = downloadVerifiedOnce(ctx, client, srcURL, dst, wantSHA)
+		if err == nil || !retry || ctx.Err() != nil {
+			return err
+		}
+	}
+	return err
+}
+
+func downloadVerifiedOnce(ctx context.Context, client *http.Client, srcURL, dst, wantSHA string) (bool, error) {
 	var rb [6]byte
 	_, _ = rand.Read(rb[:])
 	tmp := fmt.Sprintf("%s.tmp.%d.%s", dst, os.Getpid(), hex.EncodeToString(rb[:]))
 	defer func() { _ = os.Remove(tmp) }()
 
+	isHTTP := strings.HasPrefix(srcURL, "http://") || strings.HasPrefix(srcURL, "https://")
 	var body io.ReadCloser
-	if strings.HasPrefix(srcURL, "http://") || strings.HasPrefix(srcURL, "https://") {
+	if isHTTP {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, srcURL, nil)
 		if err != nil {
-			return err
+			return false, err
 		}
 		req.Header.Set("User-Agent", "llvm-miscompile-canary/1.0")
 		resp, err := client.Do(req)
 		if err != nil {
-			return err
+			return true, err
 		}
 		if resp.StatusCode != http.StatusOK {
 			_ = resp.Body.Close()
-			return fmt.Errorf("HTTP %d", resp.StatusCode)
+			retry := resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
+			return retry, fmt.Errorf("HTTP %d", resp.StatusCode)
 		}
 		body = resp.Body
 	} else {
 		f, err := os.Open(strings.TrimPrefix(srcURL, "file://"))
 		if err != nil {
-			return err
+			return false, err
 		}
 		body = f
 	}
@@ -307,19 +340,19 @@ func downloadVerified(ctx context.Context, client *http.Client, srcURL, dst, wan
 
 	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
-		return err
+		return false, err
 	}
 	h := sha256.New()
 	_, copyErr := io.Copy(io.MultiWriter(out, h), body)
 	if closeErr := out.Close(); copyErr != nil {
-		return copyErr
+		return isHTTP, copyErr
 	} else if closeErr != nil {
-		return closeErr
+		return false, closeErr
 	}
 	if got := hex.EncodeToString(h.Sum(nil)); !strings.EqualFold(got, wantSHA) {
-		return fmt.Errorf("sha256 mismatch: got %s, want %s", got, wantSHA)
+		return false, fmt.Errorf("sha256 mismatch: got %s, want %s", got, wantSHA)
 	}
-	return os.Rename(tmp, dst)
+	return false, os.Rename(tmp, dst)
 }
 
 func verifyFileSHA256(path, wantHex string) (bool, error) {
@@ -499,10 +532,15 @@ func (r *runner) wireWorkspace(absWork, srcDir string, cfg runConfig) (*workspac
 	}
 	overrides = append(overrides, cfg.ExtraEnv...)
 
+	drop := []string{"CFLAGS", "CXXFLAGS", "LDFLAGS", "CPPFLAGS"}
+	if !isCross(cfg.Spec) {
+		drop = append(drop, "CMAKE_TOOLCHAIN_FILE")
+	}
+
 	return &workspace{
 		Spec: cfg.Spec, WorkDir: absWork, SrcDir: srcDir, BuildDir: buildDir,
 		ManifestDir: manifestDir, WrapperDir: wrapperDir, TmpDir: tmpDir,
-		Env: mergeEnv(os.Environ(), overrides),
+		Env: mergeEnv(stripEnv(os.Environ(), drop...), overrides),
 	}, nil
 }
 
@@ -531,11 +569,9 @@ func (r *runner) build(ctx context.Context, cfg runConfig) (*workspace, runOut, 
 }
 
 func (r *runner) runCMakeBuild(ctx context.Context, cm *cmakeSpec, tc *toolchain, ws *workspace, timeout time.Duration) runOut {
-	runCtx := ctx
-	var cancel context.CancelFunc
+	var deadline time.Time
 	if timeout > 0 {
-		runCtx, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
+		deadline = time.Now().Add(timeout)
 	}
 
 	srcDir := ws.SrcDir
@@ -566,9 +602,17 @@ func (r *runner) runCMakeBuild(ctx context.Context, cm *cmakeSpec, tc *toolchain
 	}
 	cfgArgs = append(cfgArgs, cm.Flags...)
 
-	cfgOut := runCmd(runCtx, cfgArgs, ws.BuildDir, ws.Env, 0)
+	cfgOut := runCmd(ctx, cfgArgs, ws.BuildDir, ws.Env, timeout)
 	if !cfgOut.Passed {
 		return cfgOut
+	}
+
+	var rem time.Duration
+	if !deadline.IsZero() {
+		rem = time.Until(deadline)
+		if rem <= 0 {
+			return runOut{ExitCode: 124, Output: cfgOut.Output, Err: fmt.Errorf("cmake timed out after %s", timeout)}
+		}
 	}
 
 	buildArgs := []string{"cmake", "--build", ws.BuildDir, "-j", strconv.Itoa(r.jobs())}
@@ -576,7 +620,7 @@ func (r *runner) runCMakeBuild(ctx context.Context, cm *cmakeSpec, tc *toolchain
 		buildArgs = append(buildArgs, "--target")
 		buildArgs = append(buildArgs, cm.Targets...)
 	}
-	bOut := runCmd(runCtx, buildArgs, ws.BuildDir, ws.Env, 0)
+	bOut := runCmd(ctx, buildArgs, ws.BuildDir, ws.Env, rem)
 	bOut.Output = cfgOut.Output + bOut.Output
 	return bOut
 }
@@ -597,7 +641,18 @@ func (r *runner) testAll(ctx context.Context, rec *recipe, ws *workspace, extraE
 			failIDs = parseFailIDs(out.Output)
 		}
 	case rec.CTest != nil:
-		args := []string{"ctest", "--test-dir", ws.BuildDir, "--output-on-failure", "--no-tests=error", "-j", strconv.Itoa(r.jobs())}
+		_ = os.Remove(filepath.Join(ws.BuildDir, "Testing", "Temporary", "LastTestsFailed.log"))
+		perTest := crossTimeout(ws.Spec, 3*time.Minute)
+		if headroom := timeout - 30*time.Second; headroom > 0 {
+			perTest = min(perTest, headroom)
+		} else {
+			perTest = max(timeout/2, time.Second)
+		}
+		perTestSec := max(int(perTest/time.Second), 1)
+		args := []string{
+			"ctest", "--test-dir", ws.BuildDir, "--output-on-failure", "--no-tests=error",
+			"--timeout", strconv.Itoa(perTestSec), "-j", strconv.Itoa(r.jobs()),
+		}
 		if rec.CTest.Regex != "" {
 			args = append(args, "-R", rec.CTest.Regex)
 		}
@@ -606,7 +661,7 @@ func (r *runner) testAll(ctx context.Context, rec *recipe, ws *workspace, extraE
 		}
 		out = runCmd(ctx, args, ws.BuildDir, mergeEnv(ws.Env, append(mapEnv(rec.CTest.Env), extraEnv...)), timeout)
 		if !out.Passed {
-			failIDs = readCTestFailures(ws.BuildDir)
+			failIDs = readCTestFailures(ws.BuildDir, out.Output)
 		}
 	default:
 		out = runOut{ExitCode: 1, Err: fmt.Errorf("%s: missing test_all.sh and ctest config", rec.Name)}
@@ -676,6 +731,96 @@ func (r *runner) sweepPackage(ctx context.Context, cfg runConfig) pkgResult {
 	return res
 }
 
+func setCmdProcessGroup(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+	cmd.WaitDelay = 5 * time.Second
+}
+
+type boundedBuf struct {
+	head    []byte
+	tail    []byte
+	headCap int
+	tailCap int
+	tailPos int
+	tailLen int
+	dropped int64
+}
+
+func newBoundedBuf(limit int) *boundedBuf {
+	h := limit / 2
+	return &boundedBuf{headCap: h, tailCap: limit - h}
+}
+
+func (b *boundedBuf) Write(p []byte) (int, error) {
+	n := len(p)
+	if rem := b.headCap - len(b.head); rem > 0 {
+		take := min(rem, len(p))
+		b.head = append(b.head, p[:take]...)
+		p = p[take:]
+	}
+	if len(p) == 0 {
+		return n, nil
+	}
+	if b.tailCap <= 0 {
+		b.dropped += int64(len(p))
+		return n, nil
+	}
+	if len(b.tail) == 0 {
+		b.tail = make([]byte, b.tailCap)
+	}
+	if len(p) >= b.tailCap {
+		b.dropped += int64(b.tailLen) + int64(len(p)-b.tailCap)
+		copy(b.tail, p[len(p)-b.tailCap:])
+		b.tailPos = 0
+		b.tailLen = b.tailCap
+		return n, nil
+	}
+	if over := b.tailLen + len(p) - b.tailCap; over > 0 {
+		b.dropped += int64(over)
+	}
+	first := min(len(p), b.tailCap-b.tailPos)
+	copy(b.tail[b.tailPos:], p[:first])
+	if first < len(p) {
+		copy(b.tail, p[first:])
+	}
+	b.tailPos = (b.tailPos + len(p)) % b.tailCap
+	b.tailLen = min(b.tailCap, b.tailLen+len(p))
+	return n, nil
+}
+
+func (b *boundedBuf) String() string {
+	if b.tailLen == 0 {
+		return string(b.head)
+	}
+	var marker string
+	if b.dropped > 0 {
+		marker = fmt.Sprintf("\n... [truncated %d bytes] ...\n", b.dropped)
+	}
+	var sb strings.Builder
+	sb.Grow(len(b.head) + len(marker) + b.tailLen)
+	sb.Write(b.head)
+	if marker != "" {
+		sb.WriteString(marker)
+	}
+	if b.tailLen < b.tailCap {
+		sb.Write(b.tail[:b.tailLen])
+	} else {
+		sb.Write(b.tail[b.tailPos:])
+		sb.Write(b.tail[:b.tailPos])
+	}
+	return sb.String()
+}
+
 func runCmd(ctx context.Context, argv []string, dir string, env []string, timeout time.Duration) runOut {
 	runCtx := ctx
 	var cancel context.CancelFunc
@@ -683,23 +828,40 @@ func runCmd(ctx context.Context, argv []string, dir string, env []string, timeou
 		runCtx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
+	start := time.Now()
 	cmd := exec.CommandContext(runCtx, argv[0], argv[1:]...)
 	cmd.Dir, cmd.Env = dir, env
-	var buf bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &buf, &buf
+	setCmdProcessGroup(cmd)
+	buf := newBoundedBuf(maxCmdOutput)
+	cmd.Stdout, cmd.Stderr = buf, buf
 	err := cmd.Run()
 	out := buf.String()
 	if err == nil {
 		return runOut{Passed: true, Output: out}
 	}
 	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
-		return runOut{ExitCode: 124, Output: out, Err: fmt.Errorf("%s timed out after %s", filepath.Base(argv[0]), timeout)}
+		d := timeout
+		if d <= 0 {
+			d = time.Since(start).Round(time.Millisecond)
+		}
+		return runOut{ExitCode: 124, Output: out, Err: fmt.Errorf("%s timed out after %s", filepath.Base(argv[0]), d)}
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
 		return runOut{ExitCode: exitErr.ExitCode(), Output: out, Err: err}
 	}
 	return runOut{ExitCode: 1, Output: out, Err: err}
+}
+
+func stripEnv(env []string, drop ...string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if k, _, ok := strings.Cut(kv, "="); ok && slices.Contains(drop, k) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 func mapEnv(m map[string]string) []string {
@@ -718,19 +880,59 @@ func mapEnv(m map[string]string) []string {
 	return out
 }
 
-func readCTestFailures(buildDir string) []string {
-	data, err := os.ReadFile(filepath.Join(buildDir, "Testing", "Temporary", "LastTestsFailed.log"))
-	if err != nil {
-		return nil
-	}
+func readCTestFailures(buildDir, output string) []string {
 	var ids []string
 	seen := make(map[string]bool)
-	for _, line := range strings.Split(string(data), "\n") {
-		if _, name, ok := strings.Cut(strings.TrimSpace(line), ":"); ok {
-			if name = strings.TrimSpace(name); name != "" && !seen[name] {
-				seen[name] = true
-				ids = append(ids, name)
+	add := func(name string) {
+		if name = strings.TrimSpace(name); name != "" && !seen[name] {
+			seen[name] = true
+			ids = append(ids, name)
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(buildDir, "Testing", "Temporary", "LastTestsFailed.log")); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			if _, name, ok := strings.Cut(strings.TrimSpace(line), ":"); ok {
+				add(name)
 			}
+		}
+	}
+	if len(ids) > 0 {
+		return ids
+	}
+
+	var startedOrder []string
+	startedName := make(map[string]string)
+	done := make(map[string]bool)
+	for _, line := range strings.Split(output, "\n") {
+		if m := ctestStartRe.FindStringSubmatch(line); m != nil {
+			if !done[m[1]] && startedName[m[1]] == "" {
+				startedOrder = append(startedOrder, m[1])
+				startedName[m[1]] = m[2]
+			}
+			continue
+		}
+		if m := ctestDoneRe.FindStringSubmatch(line); m != nil {
+			status := strings.TrimSpace(m[3])
+			isPass := strings.HasPrefix(status, "Passed") ||
+				strings.HasPrefix(status, "***Skipped") ||
+				strings.HasPrefix(status, "***Disabled") ||
+				strings.HasPrefix(status, "***Not Run (Disabled)")
+			isFail := !isPass && strings.Contains(status, "***")
+			if isPass || isFail {
+				done[m[1]] = true
+				if isFail {
+					name := startedName[m[1]]
+					if name == "" {
+						name = m[2]
+					}
+					add(name)
+				}
+			}
+		}
+	}
+	for _, num := range startedOrder {
+		if !done[num] {
+			add(startedName[num])
 		}
 	}
 	return ids

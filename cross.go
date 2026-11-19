@@ -69,7 +69,7 @@ func isLinkingProbe(args []string, parsed parsedClangArgs) bool {
 		return false
 	}
 	hasInput := len(parsed.sources) > 0 || len(parsed.objectFiles) > 0 || len(parsed.archiveFiles) > 0 ||
-		len(parsed.sharedLibs) > 0 || parsed.hasStdin || parsed.hasFilelist
+		len(parsed.sharedLibs) > 0 || parsed.hasStdin || parsed.hasFilelist || parsed.hasResponseFile
 	hasLinkerFlag := false
 	for i := 0; i < len(args); i++ {
 		a := args[i]

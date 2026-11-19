@@ -37,13 +37,25 @@ jobs:
       previous_sha: ${{ steps.decide.outputs.previous_sha }}
     steps:
       - name: Checkout data branch if present
-        run: |
-          git init _data
-          if git -C _data fetch --depth=1 "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" refs/heads/data:refs/heads/data 2>/dev/null; then
-            git -C _data checkout data
-          fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          remote="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git init _data
+          rc=0
+          git ls-remote --exit-code --heads "${remote}" refs/heads/data >/dev/null || rc=$?
+          case "${rc}" in
+            0)
+              git -C _data fetch --depth=1 "${remote}" refs/heads/data:refs/heads/data
+              git -C _data checkout data
+              ;;
+            2)
+              ;;
+            *)
+              exit "${rc}"
+              ;;
+          esac
 
       - name: Compare against data/state.json
         id: decide
@@ -115,9 +127,11 @@ jobs:
 
       - name: Install build dependencies (Linux)
         if: runner.os == 'Linux'
+        env:
+          PLAT: ${{ matrix.platform }}
         run: |
           pkgs="ccache clang lld ninja-build"
-          if [ "${{ matrix.platform }}" = "linux-x86_64" ]; then
+          if [ "${PLAT}" = "linux-x86_64" ]; then
             pkgs="$pkgs libc6-dev-riscv64-cross libstdc++-13-dev-riscv64-cross libgcc-13-dev-riscv64-cross"
           fi
           sudo apt-get -o Acquire::Retries=5 update -qq
@@ -136,10 +150,12 @@ jobs:
             ccache-toolchain-${{ matrix.platform }}-
 
       - name: Fetch LLVM source at ${{ needs.check.outputs.llvm_sha12 }}
+        env:
+          LLVM_SHA: ${{ needs.check.outputs.llvm_sha }}
         run: |
           git init llvm-project
           git -C llvm-project remote add origin https://github.com/llvm/llvm-project.git
-          git -C llvm-project fetch --filter=blob:none --depth=1 origin "${{ needs.check.outputs.llvm_sha }}"
+          git -C llvm-project fetch --filter=blob:none --depth=1 origin "${LLVM_SHA}"
           git -C llvm-project checkout --detach FETCH_HEAD
 
       - name: Configure & build toolchain + ASan/UBSan runtimes
@@ -162,9 +178,12 @@ jobs:
           ccache -s || true
 
       - name: Stage & package llvm-${{ needs.check.outputs.llvm_sha12 }}-${{ matrix.platform }}.tar.zst
+        env:
+          SHA12: ${{ needs.check.outputs.llvm_sha12 }}
+          PLAT: ${{ matrix.platform }}
         run: |
           set -euo pipefail
-          stage="llvm-${{ needs.check.outputs.llvm_sha12 }}-${{ matrix.platform }}"
+          stage="llvm-${SHA12}-${PLAT}"
           mkdir -p "${stage}/bin" "${stage}/lib"
 
           for tool in \
@@ -226,39 +245,56 @@ jobs:
       - name: Prune unreferenced toolchain snapshots older than 14 days
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA12: ${{ needs.check.outputs.llvm_sha12 }}
         run: |
           set -euo pipefail
-          git init _data
-          keep_prefixes=""
-          if git -C _data fetch --depth=1 "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" refs/heads/data:refs/heads/data 2>/dev/null; then
-            git -C _data checkout data
-            if [ -f _data/state.json ]; then
-              keep_prefixes="$(jq -r '
-                [
-                  .last_sweep_sha,
-                  .last_good_sha,
-                  (.retained_toolchains // [])[],
-                  (.last_good_by_target // {} | values[])
-                ]
-                | map(select(. != null and . != "") | .[0:12])
-                | unique | .[]
-              ' _data/state.json)"
-            fi
-            if compgen -G "_data/incidents/*.json" >/dev/null; then
-              inc_prefixes="$(jq -r '[.good_sha, .bad_sha, .culprit_sha] | map(select(. != null and . != "") | .[0:12]) | .[]' _data/incidents/*.json)"
-              keep_prefixes="$(printf '%s\n%s\n' "${keep_prefixes}" "${inc_prefixes}" | sort -u)"
-            fi
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          keep_file="$(mktemp)"
+          trap 'rm -f "${keep_file}"' EXIT
+          if [ -n "${SHA12}" ]; then
+            printf '%s\n' "${SHA12}" >> "${keep_file}"
           fi
 
+          git init _data
+          rc=0
+          git ls-remote --exit-code --heads "${remote}" refs/heads/data >/dev/null || rc=$?
+          case "${rc}" in
+            0)
+              git -C _data fetch --depth=1 "${remote}" refs/heads/data:refs/heads/data
+              git -C _data checkout data
+              if [ -f _data/state.json ]; then
+                jq -r '
+                  [
+                    .last_sweep_sha,
+                    .last_good_sha,
+                    (.retained_toolchains // [])[],
+                    (.last_good_by_target // {} | values[])
+                  ]
+                  | map(select(. != null and . != "") | .[0:12])
+                  | unique | .[]
+                ' _data/state.json >> "${keep_file}"
+              fi
+              if compgen -G "_data/incidents/*.json" >/dev/null; then
+                jq -r 'select(.status == "open") | [.good_sha, .bad_sha, .culprit_sha] | map(select(. != null and . != "") | .[0:12]) | .[]' _data/incidents/*.json >> "${keep_file}"
+              fi
+              ;;
+            2)
+              ;;
+            *)
+              exit "${rc}"
+              ;;
+          esac
+          sort -u -o "${keep_file}" "${keep_file}"
+
           cutoff_epoch="$(date -u -d '14 days ago' +%s)"
-          gh release list --limit 200 --json tagName,createdAt | jq -c '.[]' | while IFS= read -r rel; do
+          gh release list --limit 500 --json tagName,createdAt | jq -c '.[]' | while IFS= read -r rel; do
             tag="$(printf '%s' "${rel}" | jq -r '.tagName')"
             case "${tag}" in
               toolchain-*) ;;
               *) continue ;;
             esac
             sha12="${tag#toolchain-}"
-            if printf '%s\n' "${keep_prefixes}" | grep -Fxq "${sha12}"; then
+            if grep -Fxq "${sha12}" "${keep_file}"; then
               continue
             fi
             created="$(printf '%s' "${rel}" | jq -r '.createdAt')"
@@ -272,8 +308,10 @@ jobs:
       - name: Trigger sweep.yml
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LLVM_SHA: ${{ needs.check.outputs.llvm_sha }}
+          PREV_SHA: ${{ needs.check.outputs.previous_sha }}
         run: |
           gh workflow run sweep.yml \
             --ref master \
-            -f llvm_sha="${{ needs.check.outputs.llvm_sha }}" \
-            -f previous_sha="${{ needs.check.outputs.previous_sha }}"
+            -f llvm_sha="${LLVM_SHA}" \
+            -f previous_sha="${PREV_SHA}"

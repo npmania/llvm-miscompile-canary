@@ -11,15 +11,18 @@ print_failed() {
   fi
 }
 
-if ! ctest --test-dir "$BUILD_DIR" --output-on-failure --no-tests=error -E "^psa_crypto" -j "$JOBS"; then
+rm -f "$fail_log"
+if ! ctest --test-dir "$BUILD_DIR" --output-on-failure --no-tests=error -E "^(psa_crypto|psa_its)" -j "$JOBS"; then
   print_failed
   status=1
 fi
 
 # psa suites share *.psa_its files in $BUILD_DIR/tests and must run serially
-if ! ctest --test-dir "$BUILD_DIR" --output-on-failure --no-tests=error -R "^psa_crypto" -j 1; then
+rm -f "$fail_log" "$BUILD_DIR"/tests/*.psa_its
+if ! ctest --test-dir "$BUILD_DIR" --output-on-failure --no-tests=error -R "^(psa_crypto|psa_its)" -j 1; then
   print_failed
   status=1
 fi
+rm -f "$BUILD_DIR"/tests/*.psa_its
 
 exit "$status"

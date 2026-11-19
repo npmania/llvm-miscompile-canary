@@ -181,10 +181,12 @@ type wrapPlan struct {
 	objectFiles   []string
 	archiveFiles  []string
 	output        string
+	explicitOut   string
 	randomSeed    string
 	isShared      bool
 	ltoTempsDir   string
 	captureMatch  bool
+	captureSrc    string
 	captureSrcOut string
 	captureBCOut  string
 }
@@ -221,31 +223,53 @@ func runWrapper(ctx context.Context, argv0 string, args []string, cwd string, en
 	if plan.captureMatch && len(plan.sources) > 0 {
 		preprocPath, bcPath, err = runTUCapture(ctx, plan, childEnv)
 		if err != nil {
-			return 1, fmt.Errorf("capture TU %q: %w", plan.sources[0], err)
+			return 1, fmt.Errorf("capture TU %q: %w", firstNonEmpty(plan.captureSrc, plan.sources[0]), err)
 		}
 	}
 
 	if cfg.ManifestDir != "" {
 		now := time.Now().UTC()
+		snapFull := snapshotManifestFiles(cfg.ManifestDir, cwd, plan.fullArgs)
 		if plan.mode == "compile" || plan.mode == "compile_link" {
-			primary := ""
-			if len(plan.sources) > 0 {
-				primary = plan.sources[0]
-			}
-			if err := appendManifest(cfg.ManifestDir, compileManifestFile, compileRec{
-				ID: plan.randomSeed, CWD: cwd, Compiler: plan.compiler, IsCXX: isCXX,
-				Source: primary, Sources: slices.Clone(plan.sources), Output: plan.output,
-				RawArgs: slices.Clone(plan.rawArgs), FullArgs: slices.Clone(plan.fullArgs),
-				RandomSeed: plan.randomSeed, PreprocessedPath: preprocPath, BitcodePath: bcPath, Timestamp: now,
-			}); err != nil {
-				return 1, err
+			if plan.mode == "compile" && plan.explicitOut == "" && len(plan.sources) > 1 {
+				baseArgs := stripFlags(snapFull, stripSources, cwd, plan.sources...)
+				for _, src := range plan.sources {
+					base := filepath.Base(src)
+					outPath := resolvePath(cwd, strings.TrimSuffix(base, filepath.Ext(base))+".o")
+					srcArgs := append(slices.Clone(baseArgs), src)
+					pPath, bPath := "", ""
+					if src == plan.captureSrc {
+						pPath, bPath = preprocPath, bcPath
+					}
+					if err := appendManifest(cfg.ManifestDir, compileManifestFile, compileRec{
+						ID: plan.randomSeed, CWD: cwd, Compiler: plan.compiler, IsCXX: isCXX,
+						Source: src, Sources: []string{src}, Output: outPath,
+						RawArgs: slices.Clone(plan.rawArgs), FullArgs: srcArgs,
+						RandomSeed: plan.randomSeed, PreprocessedPath: pPath, BitcodePath: bPath, Timestamp: now,
+					}); err != nil {
+						return 1, err
+					}
+				}
+			} else {
+				primary := ""
+				if len(plan.sources) > 0 {
+					primary = plan.sources[0]
+				}
+				if err := appendManifest(cfg.ManifestDir, compileManifestFile, compileRec{
+					ID: plan.randomSeed, CWD: cwd, Compiler: plan.compiler, IsCXX: isCXX,
+					Source: primary, Sources: slices.Clone(plan.sources), Output: plan.output,
+					RawArgs: slices.Clone(plan.rawArgs), FullArgs: snapFull,
+					RandomSeed: plan.randomSeed, PreprocessedPath: preprocPath, BitcodePath: bcPath, Timestamp: now,
+				}); err != nil {
+					return 1, err
+				}
 			}
 		}
 		if plan.mode == "link" || plan.mode == "compile_link" {
 			if err := appendManifest(cfg.ManifestDir, linkManifestFile, linkRec{
 				CWD: cwd, Compiler: plan.compiler, IsCXX: isCXX, Output: plan.output,
 				ObjectFiles: slices.Clone(plan.objectFiles), ArchiveFiles: slices.Clone(plan.archiveFiles),
-				RawArgs: slices.Clone(plan.rawArgs), FullArgs: slices.Clone(plan.fullArgs),
+				RawArgs: slices.Clone(plan.rawArgs), FullArgs: snapFull,
 				IsShared: plan.isShared, LTOTempsDir: plan.ltoTempsDir, Timestamp: now,
 			}); err != nil {
 				return 1, err
@@ -356,8 +380,15 @@ func planWrap(cfg wrapConfig, isCXX bool, cwd string, args []string) (*wrapPlan,
 	}
 	injected = append(injected, "-Wno-error")
 
-	var capSrc, capBC string
+	var capMatchSrc, capSrc, capBC string
 	if captureMatch && len(parsed.sources) > 0 && mode != "link" && !parsed.isAssemblyOnly {
+		capMatchSrc = parsed.sources[0]
+		for _, s := range parsed.sources {
+			if matchesCaptureTU(cfg.CaptureTU, []string{s}, "") {
+				capMatchSrc = s
+				break
+			}
+		}
 		outDir := cwd
 		if cfg.CaptureOutDir != "" {
 			outDir = resolvePath(cwd, cfg.CaptureOutDir)
@@ -365,12 +396,15 @@ func planWrap(cfg wrapConfig, isCXX bool, cwd string, args []string) (*wrapPlan,
 			outDir = filepath.Dir(out)
 		}
 		ext := ".c"
-		if isCXX || isCXXExt(filepath.Ext(parsed.sources[0])) {
+		if isCXX || isCXXExt(filepath.Ext(capMatchSrc)) {
 			ext = ".cpp"
 		}
 		stem := sanitizeStem(filepath.Base(out))
+		if len(parsed.sources) > 1 && parsed.output == "" {
+			stem = sanitizeStem(filepath.Base(capMatchSrc))
+		}
 		if stem == "" {
-			stem = sanitizeStem(filepath.Base(parsed.sources[0]))
+			stem = sanitizeStem(filepath.Base(capMatchSrc))
 		}
 		capSrc = filepath.Join(outDir, stem+".standalone"+ext)
 		capBC = filepath.Join(outDir, stem+".preopt.bc")
@@ -383,8 +417,8 @@ func planWrap(cfg wrapConfig, isCXX bool, cwd string, args []string) (*wrapPlan,
 		rawArgs: slices.Clone(args), fullArgs: appendBeforeDashDash(args, injected),
 		extraEnv: append(baseEnv, "SOURCE_DATE_EPOCH=0"),
 		sources:  parsed.sources, objectFiles: parsed.objectFiles, archiveFiles: parsed.archiveFiles,
-		output: out, randomSeed: seed, isShared: parsed.isShared, ltoTempsDir: ltoTempsDir,
-		captureMatch: captureMatch, captureSrcOut: capSrc, captureBCOut: capBC,
+		output: out, explicitOut: parsed.output, randomSeed: seed, isShared: parsed.isShared, ltoTempsDir: ltoTempsDir,
+		captureMatch: captureMatch, captureSrc: capMatchSrc, captureSrcOut: capSrc, captureBCOut: capBC,
 	}, nil
 }
 
@@ -406,7 +440,7 @@ func isProbe(cwd string, args []string, parsed parsedClangArgs, captureMatch boo
 		}
 	}
 	return len(parsed.sources) == 0 && len(parsed.objectFiles) == 0 && len(parsed.archiveFiles) == 0 &&
-		len(parsed.sharedLibs) == 0 && !parsed.hasStdin && !parsed.hasFilelist
+		len(parsed.sharedLibs) == 0 && !parsed.hasStdin && !parsed.hasFilelist && !parsed.hasResponseFile
 }
 
 func hasProbeMarker(s string) bool {
@@ -429,7 +463,12 @@ func runTUCapture(ctx context.Context, plan *wrapPlan, childEnv []string) (strin
 	if err := os.MkdirAll(filepath.Dir(plan.captureSrcOut), 0o755); err != nil {
 		return "", "", err
 	}
-	base := stripFlags(plan.fullArgs, stripMode|stripOutput|stripDep|stripLink, "")
+	var base []string
+	if len(plan.sources) > 1 && plan.captureSrc != "" {
+		base = append(stripFlags(plan.fullArgs, stripMode|stripOutput|stripDep|stripLink|stripSources, plan.cwd, plan.sources...), plan.captureSrc)
+	} else {
+		base = stripFlags(plan.fullArgs, stripMode|stripOutput|stripDep|stripLink, plan.cwd)
+	}
 
 	preArgs := append(slices.Clone(base), "-E", "-frewrite-includes", "-o", plan.captureSrcOut)
 	var buf bytes.Buffer
@@ -438,7 +477,7 @@ func runTUCapture(ctx context.Context, plan *wrapPlan, childEnv []string) (strin
 	}
 
 	buf.Reset()
-	bcArgs := append(stripFlags(base, stripLTO, ""), "-Xclang", "-disable-llvm-passes", "-emit-llvm", "-c", "-o", plan.captureBCOut)
+	bcArgs := append(stripFlags(base, stripLTO, plan.cwd), "-Xclang", "-disable-llvm-passes", "-emit-llvm", "-c", "-o", plan.captureBCOut)
 	if code, err := execCompiler(ctx, plan.compiler, bcArgs, plan.cwd, childEnv, nil, io.Discard, &buf); err != nil || code != 0 {
 		return "", "", fmt.Errorf("-emit-llvm exit %d (%v): %s", code, err, strings.TrimSpace(buf.String()))
 	}
@@ -455,6 +494,7 @@ func standaloneCompileArgs(rec compileRec, src, outObj string, portable bool) []
 }
 
 func stripFlags(args []string, mask uint, cwd string, dropSources ...string) []string {
+	args = expandResponseFiles(cwd, args)
 	out := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -490,12 +530,15 @@ func stripFlags(args []string, mask uint, cwd string, dropSources ...string) []s
 			}
 		}
 		if mask&stripInclude != 0 {
-			if a == "-I" || a == "-isystem" || a == "-iquote" || a == "-idirafter" || a == "-include" || a == "-imacros" {
+			if a == "-I" || a == "-isystem" || a == "-isystem-after" || a == "-iquote" ||
+				a == "-idirafter" || a == "-include" || a == "-imacros" || a == "-include-pch" ||
+				a == "-objc-isystem" || a == "-objcxx-isystem" {
 				i++
 				continue
 			}
 			if strings.HasPrefix(a, "-I") || strings.HasPrefix(a, "-isystem") ||
-				strings.HasPrefix(a, "-iquote") || strings.HasPrefix(a, "-idirafter") {
+				strings.HasPrefix(a, "-iquote") || strings.HasPrefix(a, "-idirafter") ||
+				strings.HasPrefix(a, "-include") || strings.HasPrefix(a, "-imacros") {
 				continue
 			}
 		}
@@ -513,7 +556,7 @@ func stripFlags(args []string, mask uint, cwd string, dropSources ...string) []s
 			continue
 		}
 		if mask&stripLink != 0 {
-			if a == "--ld-path" {
+			if a == "--ld-path" || a == "-Xlinker" {
 				i++
 				continue
 			}
@@ -544,32 +587,116 @@ func stripFlags(args []string, mask uint, cwd string, dropSources ...string) []s
 }
 
 func isAttachedOutputFlag(a string) bool {
-	return strings.HasPrefix(a, "-o") && len(a) > 2 && !strings.HasPrefix(a, "-object-file-name=") && a != "-objc"
+	if !strings.HasPrefix(a, "-o") || len(a) <= 2 {
+		return false
+	}
+	switch a {
+	case "-objc", "-object", "-object-file-name", "-order_file",
+		"-objc-isystem", "-objcxx-isystem",
+		"-opt-record-file", "-opt-record-passes", "-opt-record-format":
+		return false
+	}
+	if strings.HasPrefix(a, "-object-file-name=") || strings.HasPrefix(a, "-opt-record-") {
+		return false
+	}
+	return true
 }
 
 type parsedClangArgs struct {
-	compileOnly, preprocessOnly, isShared, hasSysroot, hasTarget, hasLinkerFlag, hasRandomSeed, hasStdin, hasFilelist, isAssemblyOnly bool
-	output                                                                                                                            string
-	sources, objectFiles, archiveFiles, sharedLibs                                                                                    []string
+	compileOnly, preprocessOnly, isShared, hasSysroot, hasTarget, hasLinkerFlag, hasRandomSeed, hasStdin, hasFilelist, hasResponseFile, isAssemblyOnly bool
+	output                                                                                                                                             string
+	sources, objectFiles, archiveFiles, sharedLibs                                                                                                     []string
 }
 
 var twoArgClangFlags = map[string]bool{
-	"-I": true, "-isystem": true, "-iquote": true, "-idirafter": true,
-	"-include": true, "-imacros": true, "-isysroot": true, "-D": true, "-U": true,
-	"-MF": true, "-MT": true, "-MQ": true, "-MJ": true,
-	"-L": true, "-l": true, "-F": true, "-framework": true, "-weak_framework": true,
-	"-mllvm": true, "-Xclang": true, "-Xlinker": true, "-Xpreprocessor": true,
+	"-I": true, "-isystem": true, "-isystem-after": true, "-iquote": true, "-idirafter": true,
+	"-include": true, "-imacros": true, "-include-pch": true, "-isysroot": true, "--sysroot": true,
+	"-D": true, "-U": true, "-MF": true, "-MT": true, "-MQ": true, "-MJ": true,
+	"-L": true, "-l": true, "-F": true, "-iframework": true, "-ivfsoverlay": true,
+	"-framework": true, "-weak_framework": true, "-force_load": true,
+	"-mllvm": true, "-Xclang": true, "-Xlinker": true, "-Xpreprocessor": true, "-Xassembler": true,
+	"--param": true, "-u": true, "-T": true, "-e": true, "-B": true,
 	"-target": true, "--target": true, "--ld-path": true, "-arch": true, "-rpath": true,
 	"-install_name": true, "-current_version": true, "-compatibility_version": true,
 	"-exported_symbols_list": true, "-unexported_symbols_list": true,
 	"-bundle_loader": true, "-order_file": true, "-serialize-diagnostics": true,
+	"-objc-isystem": true, "-objcxx-isystem": true, "-object-file-name": true,
+	"-opt-record-file": true, "-opt-record-passes": true, "-opt-record-format": true,
+}
+
+type libRef struct {
+	name       string
+	staticOnly bool
 }
 
 func parseClangArgs(cwd string, args []string) parsedClangArgs {
 	var p parsedClangArgs
 	explicitLang := ""
 	afterDash := false
+	staticOnly := false
+	var libDirs []string
+	var libRefs []libRef
+
+	for _, a := range args {
+		if strings.HasPrefix(a, "@") && len(a) > 1 {
+			p.hasResponseFile = true
+		}
+	}
 	expanded := expandResponseFiles(cwd, args)
+
+	addFilelist := func(listPath string) {
+		p.hasFilelist = true
+		for _, f := range readFilelistObjects(cwd, listPath) {
+			if strings.EqualFold(filepath.Ext(f), ".a") {
+				p.archiveFiles = append(p.archiveFiles, f)
+			} else {
+				p.objectFiles = append(p.objectFiles, f)
+			}
+		}
+	}
+	parseLinkerToks := func(toks []string) {
+		for _, tok := range toks {
+			if strings.HasPrefix(tok, "@") && len(tok) > 1 {
+				p.hasResponseFile = true
+			}
+		}
+		toks = expandLinkerTokens(cwd, toks, 0)
+		for j := 0; j < len(toks); j++ {
+			t := toks[j]
+			switch {
+			case t == "-filelist" && j+1 < len(toks):
+				j++
+				addFilelist(toks[j])
+			case t == "-force_load" && j+1 < len(toks):
+				j++
+				p.archiveFiles = append(p.archiveFiles, resolvePath(cwd, toks[j]))
+			case t == "-L" && j+1 < len(toks):
+				j++
+				libDirs = append(libDirs, resolvePath(cwd, toks[j]))
+			case strings.HasPrefix(t, "-L") && len(t) > 2:
+				libDirs = append(libDirs, resolvePath(cwd, t[2:]))
+			case t == "-l" && j+1 < len(toks):
+				j++
+				libRefs = append(libRefs, libRef{name: toks[j], staticOnly: staticOnly})
+			case strings.HasPrefix(t, "-l") && len(t) > 2:
+				libRefs = append(libRefs, libRef{name: t[2:], staticOnly: staticOnly})
+			case t == "-Bstatic" || t == "-dn" || t == "-non_shared" || t == "-static":
+				staticOnly = true
+			case t == "-Bdynamic" || t == "-dy" || t == "-call_shared":
+				staticOnly = false
+			case !strings.HasPrefix(t, "-"):
+				res := resolvePath(cwd, t)
+				switch ext := strings.ToLower(filepath.Ext(t)); {
+				case ext == ".o" || ext == ".lo" || ext == ".obj" || ext == ".bc":
+					p.objectFiles = append(p.objectFiles, res)
+				case ext == ".a":
+					p.archiveFiles = append(p.archiveFiles, res)
+				case ext == ".so" || ext == ".dylib" || strings.Contains(filepath.Base(t), ".so."):
+					p.sharedLibs = append(p.sharedLibs, res)
+				}
+			}
+		}
+	}
 
 	for i := 0; i < len(expanded); i++ {
 		a := expanded[i]
@@ -588,6 +715,9 @@ func parseClangArgs(cwd string, args []string) parsedClangArgs {
 			case "-shared", "-dynamiclib", "-bundle":
 				p.isShared = true
 				continue
+			case "-static":
+				staticOnly = true
+				continue
 			case "-":
 				p.hasStdin = true
 				continue
@@ -604,14 +734,50 @@ func parseClangArgs(cwd string, args []string) parsedClangArgs {
 				}
 				continue
 			case "-filelist":
-				p.hasFilelist = true
 				if i+1 < len(expanded) {
 					i++
-					p.objectFiles = append(p.objectFiles, readFilelistObjects(cwd, expanded[i])...)
+					addFilelist(expanded[i])
+				} else {
+					p.hasFilelist = true
 				}
 				continue
+			case "-force_load":
+				if i+1 < len(expanded) {
+					i++
+					p.archiveFiles = append(p.archiveFiles, resolvePath(cwd, expanded[i]))
+				}
+				continue
+			case "-L":
+				if i+1 < len(expanded) {
+					i++
+					libDirs = append(libDirs, resolvePath(cwd, expanded[i]))
+				}
+				continue
+			case "-l":
+				if i+1 < len(expanded) {
+					i++
+					libRefs = append(libRefs, libRef{name: expanded[i], staticOnly: staticOnly})
+				}
+				continue
+			case "-Xlinker":
+				var xl []string
+				for i+1 < len(expanded) && expanded[i] == "-Xlinker" {
+					xl = append(xl, expanded[i+1])
+					i += 2
+				}
+				i--
+				parseLinkerToks(xl)
+				continue
 			}
-			if a == "-isysroot" || strings.HasPrefix(a, "--sysroot=") || strings.HasPrefix(a, "-isysroot=") {
+			if strings.HasPrefix(a, "-L") && len(a) > 2 {
+				libDirs = append(libDirs, resolvePath(cwd, a[2:]))
+				continue
+			}
+			if strings.HasPrefix(a, "-l") && len(a) > 2 {
+				libRefs = append(libRefs, libRef{name: a[2:], staticOnly: staticOnly})
+				continue
+			}
+			if a == "-isysroot" || a == "--sysroot" || strings.HasPrefix(a, "--sysroot=") || strings.HasPrefix(a, "-isysroot=") {
 				p.hasSysroot = true
 			}
 			if a == "-target" || a == "--target" || strings.HasPrefix(a, "--target=") || strings.HasPrefix(a, "-target=") {
@@ -632,14 +798,7 @@ func parseClangArgs(cwd string, args []string) parsedClangArgs {
 				p.hasRandomSeed = true
 			}
 			if strings.HasPrefix(a, "-Wl,") {
-				parts := strings.Split(a[4:], ",")
-				for j := 0; j+1 < len(parts); j++ {
-					if parts[j] == "-filelist" {
-						p.hasFilelist = true
-						p.objectFiles = append(p.objectFiles, readFilelistObjects(cwd, parts[j+1])...)
-						j++
-					}
-				}
+				parseLinkerToks(strings.Split(a[4:], ","))
 				continue
 			}
 			if strings.HasPrefix(a, "-") {
@@ -667,6 +826,12 @@ func parseClangArgs(cwd string, args []string) parsedClangArgs {
 		}
 	}
 
+	for _, ref := range libRefs {
+		if ar := resolveLibArchive(libDirs, ref.name, ref.staticOnly); ar != "" && !slices.Contains(p.archiveFiles, ar) {
+			p.archiveFiles = append(p.archiveFiles, ar)
+		}
+	}
+
 	if len(p.sources) > 0 {
 		p.isAssemblyOnly = explicitLang == "assembler" || explicitLang == "assembler-with-cpp" ||
 			!slices.ContainsFunc(p.sources, func(s string) bool {
@@ -677,13 +842,175 @@ func parseClangArgs(cwd string, args []string) parsedClangArgs {
 	return p
 }
 
+func resolveLibArchive(libDirs []string, lib string, staticOnly bool) string {
+	if lib == "" {
+		return ""
+	}
+	for _, dir := range libDirs {
+		if strings.HasPrefix(lib, ":") {
+			cand := filepath.Join(dir, lib[1:])
+			if fileExists(cand) {
+				if strings.EqualFold(filepath.Ext(cand), ".a") {
+					return cand
+				}
+				return ""
+			}
+			continue
+		}
+		if !staticOnly {
+			for _, ext := range []string{".so", ".dylib"} {
+				if fileExists(filepath.Join(dir, "lib"+lib+ext)) {
+					return ""
+				}
+			}
+		}
+		cand := filepath.Join(dir, "lib"+lib+".a")
+		if fileExists(cand) {
+			return cand
+		}
+	}
+	return ""
+}
+
 func expandResponseFiles(cwd string, args []string) []string {
+	return expandResponseFilesDepth(cwd, args, 0)
+}
+
+func expandResponseFilesDepth(cwd string, args []string, depth int) []string {
+	if depth > 8 {
+		return slices.Clone(args)
+	}
 	var out []string
 	for _, a := range args {
 		if strings.HasPrefix(a, "@") && len(a) > 1 {
 			if data, err := os.ReadFile(resolvePath(cwd, a[1:])); err == nil {
-				out = append(out, splitFlags(string(data))...)
+				out = append(out, expandResponseFilesDepth(cwd, splitFlags(string(data)), depth+1)...)
 				continue
+			}
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+func expandLinkerTokens(cwd string, tokens []string, depth int) []string {
+	if depth > 8 {
+		return slices.Clone(tokens)
+	}
+	var out []string
+	for _, tok := range tokens {
+		if strings.HasPrefix(tok, "@") && len(tok) > 1 {
+			if data, err := os.ReadFile(resolvePath(cwd, tok[1:])); err == nil {
+				out = append(out, expandLinkerTokens(cwd, splitFlags(string(data)), depth+1)...)
+				continue
+			}
+		}
+		out = append(out, tok)
+	}
+	return out
+}
+
+func snapshotManifestFiles(manifestDir, cwd string, args []string) []string {
+	rspDir := filepath.Join(manifestDir, "rsp")
+	writeSnap := func(data []byte, ext string) string {
+		if err := os.MkdirAll(rspDir, 0o755); err != nil {
+			return ""
+		}
+		sum := sha256.Sum256(data)
+		dst := filepath.Join(rspDir, hex.EncodeToString(sum[:8])+ext)
+		if fileExists(dst) {
+			return dst
+		}
+		f, err := os.CreateTemp(rspDir, ".snap-*")
+		if err != nil {
+			return ""
+		}
+		tmp := f.Name()
+		if _, err := f.Write(data); err != nil {
+			_ = f.Close()
+			_ = os.Remove(tmp)
+			return ""
+		}
+		if err := f.Close(); err != nil {
+			_ = os.Remove(tmp)
+			return ""
+		}
+		if err := os.Rename(tmp, dst); err != nil {
+			_ = os.Remove(tmp)
+			return ""
+		}
+		return dst
+	}
+	snapRsp := func(p string, linker bool) string {
+		if !fileExists(resolvePath(cwd, p)) {
+			return ""
+		}
+		var flat []string
+		if linker {
+			flat = expandLinkerTokens(cwd, []string{"@" + p}, 0)
+		} else {
+			flat = expandResponseFiles(cwd, []string{"@" + p})
+		}
+		return writeSnap([]byte(joinFlags(flat)+"\n"), ".rsp")
+	}
+	snapRaw := func(p, ext string) string {
+		data, err := os.ReadFile(resolvePath(cwd, p))
+		if err != nil {
+			return ""
+		}
+		return writeSnap(data, ext)
+	}
+
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if strings.HasPrefix(a, "@") && len(a) > 1 {
+			if dst := snapRsp(a[1:], false); dst != "" {
+				out = append(out, "@"+dst)
+				continue
+			}
+		}
+		if a == "-filelist" && i+1 < len(args) {
+			if dst := snapRaw(args[i+1], ".filelist"); dst != "" {
+				out = append(out, a, dst)
+				i++
+				continue
+			}
+		}
+		if strings.HasPrefix(a, "-Wl,") {
+			parts := strings.Split(a[4:], ",")
+			changed := false
+			for j := 0; j < len(parts); j++ {
+				if strings.HasPrefix(parts[j], "@") && len(parts[j]) > 1 {
+					if dst := snapRsp(parts[j][1:], true); dst != "" {
+						parts[j], changed = "@"+dst, true
+					}
+				} else if parts[j] == "-filelist" && j+1 < len(parts) {
+					if dst := snapRaw(parts[j+1], ".filelist"); dst != "" {
+						parts[j+1], changed = dst, true
+						j++
+					}
+				}
+			}
+			if changed {
+				out = append(out, "-Wl,"+strings.Join(parts, ","))
+				continue
+			}
+		}
+		if a == "-Xlinker" && i+1 < len(args) {
+			if strings.HasPrefix(args[i+1], "@") && len(args[i+1]) > 1 {
+				if dst := snapRsp(args[i+1][1:], true); dst != "" {
+					out = append(out, a, "@"+dst)
+					i++
+					continue
+				}
+			}
+			if args[i+1] == "-filelist" && i+3 < len(args) && args[i+2] == "-Xlinker" {
+				if dst := snapRaw(args[i+3], ".filelist"); dst != "" {
+					out = append(out, "-Xlinker", "-filelist", "-Xlinker", dst)
+					i += 3
+					continue
+				}
 			}
 		}
 		out = append(out, a)

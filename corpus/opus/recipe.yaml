@@ -22,3 +22,5 @@ cmake:
     - -DBUILD_SHARED_LIBS=OFF
 ctest:
   exclude: "^test_opus_encode$"
+  env:
+    SEED: "1"

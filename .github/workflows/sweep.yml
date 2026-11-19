@@ -65,13 +65,16 @@ jobs:
 
       - name: Install build tools (Linux)
         if: runner.os == 'Linux'
+        env:
+          PKG: ${{ matrix.package }}
+          PLAT: ${{ matrix.platform }}
         run: |
           pkgs=""
           command -v ninja >/dev/null 2>&1 || pkgs="$pkgs ninja-build"
-          if [ "${{ matrix.package }}" = "dav1d" ]; then
+          if [ "${PKG}" = "dav1d" ]; then
             command -v meson >/dev/null 2>&1 || pkgs="$pkgs meson"
           fi
-          if [ "${{ matrix.platform }}" = "linux-riscv64" ]; then
+          if [ "${PLAT}" = "linux-riscv64" ]; then
             pkgs="$pkgs libc6-dev-riscv64-cross libstdc++-13-dev-riscv64-cross libgcc-13-dev-riscv64-cross"
           fi
           if [ -n "$pkgs" ]; then
@@ -120,17 +123,21 @@ jobs:
           key: corpus-src-v1-${{ matrix.package }}-${{ hashFiles(format('corpus/{0}/recipe.yaml', matrix.package)) }}
 
       - name: Run distro-O2 and release-lto (--thinlto-jobs=4)
+        env:
+          LLVM_SHA: ${{ inputs.llvm_sha }}
+          PKG: ${{ matrix.package }}
+          PLAT: ${{ matrix.platform }}
         run: |
           ./lmc sweep \
             -corpus corpus \
-            -pkg "${{ matrix.package }}" \
-            -plat "${{ matrix.platform }}" \
+            -pkg "${PKG}" \
+            -plat "${PLAT}" \
             -prof distro-O2,release-lto \
             -tc "${RUNNER_TEMP}/tc/bin" \
-            -sha "${{ inputs.llvm_sha }}" \
+            -sha "${LLVM_SHA}" \
             -dir "${RUNNER_TEMP}/lmc-work" \
             -cache "${RUNNER_TEMP}/lmc-cache" \
-            -frag "fragments/${{ matrix.package }}-${{ matrix.platform }}.json"
+            -frag "fragments/${PKG}-${PLAT}.json"
 
       - name: Upload result JSON fragment
         if: always()
@@ -144,7 +151,7 @@ jobs:
   aggregate:
     name: Aggregate Sweep, Update data & gh-pages
     needs: sweep
-    if: always()
+    if: always() && !cancelled()
     runs-on: ubuntu-24.04
     concurrency:
       group: data-gh-pages-write
@@ -157,23 +164,38 @@ jobs:
         with:
           ref: master
 
-      - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          check-latest: true
-
-      - name: Build lmc
-        run: go build -o lmc .
-
       - name: Download result fragments
+        continue-on-error: true
         uses: actions/download-artifact@v8
         with:
           pattern: fragment-*
           merge-multiple: true
           path: fragments
 
+      - name: Check fragments
+        id: frags
+        run: |
+          mkdir -p fragments
+          if [ -n "$(find fragments -name '*.json' -print -quit)" ]; then
+            echo "has_frags=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::no sweep fragments found; skipping publish"
+            echo "has_frags=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Go
+        if: steps.frags.outputs.has_frags == 'true'
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Build lmc
+        if: steps.frags.outputs.has_frags == 'true'
+        run: go build -o lmc .
+
       - name: Checkout orphan data and gh-pages branches
+        if: steps.frags.outputs.has_frags == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -181,6 +203,7 @@ jobs:
           ./scripts/sync-branch.sh checkout gh-pages _site
 
       - name: Fetch commit subject
+        if: steps.frags.outputs.has_frags == 'true'
         id: meta
         env:
           LLVM_SHA: ${{ inputs.llvm_sha }}
@@ -197,30 +220,41 @@ jobs:
             echo "EOF_SUBJ"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Aggregate fragments, update store & render static site
+      - name: Aggregate fragments & update store
+        if: steps.frags.outputs.has_frags == 'true'
+        env:
+          LLVM_SHA: ${{ inputs.llvm_sha }}
+          LLVM_SUBJ: ${{ steps.meta.outputs.subject }}
+          PREV_SHA: ${{ inputs.previous_sha }}
         run: |
           ./lmc aggregate \
             -frags fragments \
             -store _data \
-            -sha "${{ inputs.llvm_sha }}" \
-            -subj "${{ steps.meta.outputs.subject }}" \
-            -prev "${{ inputs.previous_sha }}" \
-            -out _site \
-            -corpus corpus \
+            -sha "${LLVM_SHA}" \
+            -subj "${LLVM_SUBJ}" \
+            -prev "${PREV_SHA}" \
             -reg-out regressions.json
-          test "$(tr -d '\r\n' < _site/CNAME)" = "llvm-miscompile-canary.glendalab.com"
 
       - name: Sync issues
+        if: steps.frags.outputs.has_frags == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LLVM_SHA: ${{ inputs.llvm_sha }}
         run: |
           ./lmc sync-issues \
             -store _data \
-            -repo "${{ github.repository }}" \
+            -repo "${GH_REPO}" \
             -url "https://llvm-miscompile-canary.glendalab.com" \
-            -sha "${{ inputs.llvm_sha }}"
+            -sha "${LLVM_SHA}"
+
+      - name: Build site
+        if: steps.frags.outputs.has_frags == 'true'
+        run: |
+          ./lmc site -store _data -out _site -corpus corpus
+          test "$(tr -d '\r\n' < _site/CNAME)" = "llvm-miscompile-canary.glendalab.com"
 
       - name: Commit & push data and gh-pages
+        if: steps.frags.outputs.has_frags == 'true'
         env:
           LLVM_SHA: ${{ inputs.llvm_sha }}
         run: |
@@ -229,12 +263,14 @@ jobs:
           ./scripts/sync-branch.sh push gh-pages _site "site: render dashboard for ${sha12}"
 
       - name: Trigger triage.yml on test_fail regressions
+        if: steps.frags.outputs.has_frags == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LLVM_SHA: ${{ inputs.llvm_sha }}
         run: |
           if [ -f regressions.json ] && [ "$(jq 'length' regressions.json)" -gt 0 ]; then
             gh workflow run triage.yml \
               --ref master \
-              -f bad_sha="${{ inputs.llvm_sha }}" \
+              -f bad_sha="${LLVM_SHA}" \
               -f regressions_json="$(jq -c . regressions.json)"
           fi

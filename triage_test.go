@@ -26,9 +26,8 @@ func TestBisectFirstFail(t *testing.T) {
 		skip    map[int]bool
 		want    int
 	}{
-		{name: "single", n: 1, badFrom: 0, want: 0},
-		{name: "two-first", n: 2, badFrom: 0, want: 0},
 		{name: "two-second", n: 2, badFrom: 1, want: 1},
+		{name: "first-after-base", n: 9, badFrom: 1, want: 1},
 		{name: "middle", n: 9, badFrom: 5, want: 5},
 		{name: "last", n: 9, badFrom: 8, want: 8},
 		{name: "skip-before", n: 9, badFrom: 5, skip: map[int]bool{3: true}, want: 5},
@@ -50,6 +49,26 @@ func TestBisectFirstFail(t *testing.T) {
 				t.Fatalf("got %d, want %d", got, tc.want)
 			}
 		})
+	}
+
+	if _, err := bisectFirstFail(1, func(int) (bool, error) { return true, nil }); err == nil {
+		t.Fatal("expected error for n < 2")
+	}
+	if _, err := bisectFirstFail(9, func(int) (bool, error) { return false, nil }); err == nil {
+		t.Fatal("expected error when all probes pass")
+	}
+	if _, err := bisectFirstFail(9, func(int) (bool, error) { return true, nil }); err == nil {
+		t.Fatal("expected error when all probes fail")
+	}
+	if _, err := bisectFirstFail(5, func(int) (bool, error) { return false, errBisectSkip }); err == nil {
+		t.Fatal("expected error when all probes skip")
+	}
+	probes := 0
+	if _, err := bisectFirstFail(64, func(int) (bool, error) {
+		probes++
+		return false, errBisectSkip
+	}); err == nil || probes > maxBisectConsecSkips {
+		t.Fatalf("expected skip-cap error in <= %d probes, got err=%v probes=%d", maxBisectConsecSkips, err, probes)
 	}
 }
 
@@ -272,35 +291,149 @@ func TestThinLTOModuleBisect(t *testing.T) {
 	srcDir := filepath.Join(t.TempDir(), "src")
 	writeSixTUs(t, srcDir)
 
-	ctx := context.Background()
-	goodB, _, _ := buildMultiTU(t, spec, profReleaseLTO, goodTC, srcDir, t.TempDir(), false)
-	badB, badM, app := buildMultiTU(t, spec, profReleaseLTO, &badTC, srcDir, t.TempDir(), false)
-	testFn := func(ctx context.Context) (bool, string, error) {
-		out, err := exec.CommandContext(ctx, app).CombinedOutput()
-		return err == nil, string(out), nil
+	for _, useArchive := range []bool{false, true} {
+		name := "direct"
+		if useArchive {
+			name = "archive"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			goodB, _, _ := buildMultiTU(t, spec, profReleaseLTO, goodTC, srcDir, t.TempDir(), useArchive)
+			badB, badM, app := buildMultiTU(t, spec, profReleaseLTO, &badTC, srcDir, t.TempDir(), useArchive)
+			testFn := func(ctx context.Context) (bool, string, error) {
+				out, err := exec.CommandContext(ctx, app).CombinedOutput()
+				return err == nil, string(out), nil
+			}
+
+			bcRes, err := bisectObjects(ctx, objectBisectOpts{
+				Spec: spec, Profile: profReleaseLTO, GoodTC: goodTC, BadTC: &badTC,
+				GoodBuildDir: goodB, BadBuildDir: badB, BadManifestDir: badM,
+				ScratchDir: filepath.Join(t.TempDir(), "lto-bc"), Test: testFn,
+			})
+			if err != nil || !strings.HasSuffix(bcRes.Culprit.SourceFile, "culprit.c") {
+				t.Fatalf("ThinLTO bitcode bisect: res=%+v err=%v", bcRes, err)
+			}
+
+			natRes, err := bisectObjects(ctx, objectBisectOpts{
+				Spec: spec, Profile: profReleaseLTO, GoodTC: goodTC, BadTC: &badTC,
+				GoodBuildDir: goodB, BadBuildDir: badB, BadManifestDir: badM,
+				ScratchDir: filepath.Join(t.TempDir(), "lto-nat"), ForceNativeLTO: true, Test: testFn,
+			})
+			if err != nil || !natRes.UsedNativeLTO || !strings.HasSuffix(natRes.Culprit.SourceFile, "culprit.c") {
+				t.Fatalf("ThinLTO native bisect: res=%+v err=%v", natRes, err)
+			}
+
+			passRes, err := bisectPass(ctx, spec, &badTC, natRes.Culprit, filepath.Join(t.TempDir(), "lto-pass"), natRes.relinkSingle)
+			if err != nil || passRes.CulpritPassIndex != 10 {
+				t.Fatalf("ThinLTO bisectPass: res=%+v err=%v", passRes, err)
+			}
+		})
+	}
+}
+
+func TestMultiBinarySetLinkUsesGoodTC(t *testing.T) {
+	spec, goodTC := hostToolchainOrSkip(t)
+	tmp := t.TempDir()
+	selfExe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srcDir := filepath.Join(tmp, "src")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(srcDir, "helper.c"), []byte("int main(void) { return 0; }\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(srcDir, "a.c"), []byte("int fa(void) { return 1; }\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(srcDir, "b.c"), []byte("int fb(void) { return 2; }\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(srcDir, "app1.c"), []byte("extern int fa(void); int main(void) { return fa() == 1 ? 0 : 1; }\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(srcDir, "app2.c"), []byte("extern int fb(void); int main(void) { return fb() == 2 ? 0 : 1; }\n"), 0o644)
+
+	linkerLog := filepath.Join(tmp, "linker.log")
+	goodLinker := filepath.Join(tmp, "good-ld")
+	badLinker := filepath.Join(tmp, "bad-ld")
+	_ = os.WriteFile(goodLinker, []byte(fmt.Sprintf("#!/bin/sh\necho good >> %s\nexec %s \"$@\"\n", shQuote(linkerLog), shQuote(goodTC.Linker))), 0o755)
+	_ = os.WriteFile(badLinker, []byte(fmt.Sprintf("#!/bin/sh\necho bad >> %s\nexec %s \"$@\"\n", shQuote(linkerLog), shQuote(goodTC.Linker))), 0o755)
+
+	gTC := *goodTC
+	gTC.Linker = goodLinker
+	bTC := *goodTC
+	bTC.Linker = badLinker
+	badClang := filepath.Join(tmp, "bad-cc")
+	_ = os.WriteFile(badClang, []byte(fmt.Sprintf(`#!/bin/sh
+for a in "$@"; do
+  case "$a" in *b.c) exec %s -DFB_BAD=1 "$@" ;; esac
+done
+exec %s "$@"
+`, shQuote(goodTC.Clang), shQuote(goodTC.Clang))), 0o755)
+	bTC.Clang = badClang
+	_ = os.WriteFile(filepath.Join(srcDir, "b.c"), []byte("#ifdef FB_BAD\nint fb(void) { return 9; }\n#else\nint fb(void) { return 2; }\n#endif\n"), 0o644)
+
+	buildTwo := func(tc *toolchain, work string, dropHelperObj bool) (string, string, string) {
+		bDir, mDir, wDir := filepath.Join(work, "build"), filepath.Join(work, "manifest"), filepath.Join(work, "wrap")
+		if err := mkdirAll(bDir, mDir); err != nil {
+			t.Fatal(err)
+		}
+		if err := setupWrapperDir(wDir, selfExe); err != nil {
+			t.Fatal(err)
+		}
+		env := mergeEnv(os.Environ(), wrapEnv(wrapConfig{
+			RealCC: tc.Clang, RealCXX: tc.ClangXX, Linker: tc.Linker,
+			Platform: spec.ID, Profile: profDistroO2, SDKRoot: tc.SDKRoot, ManifestDir: mDir,
+		}))
+		cc := filepath.Join(wDir, "clang")
+		run := func(args ...string) {
+			cmd := exec.Command(cc, args...)
+			cmd.Dir, cmd.Env = bDir, env
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("cc %v: %v\n%s", args, err, out)
+			}
+		}
+		for _, f := range []string{"helper", "a", "b", "app1", "app2"} {
+			run("-c", filepath.Join(srcDir, f+".c"), "-o", filepath.Join(bDir, f+".o"))
+		}
+		run(filepath.Join(bDir, "helper.o"), "-o", filepath.Join(bDir, "helper"))
+		run(filepath.Join(bDir, "a.o"), filepath.Join(bDir, "app1.o"), "-o", filepath.Join(bDir, "app1"))
+		run(filepath.Join(bDir, "b.o"), filepath.Join(bDir, "app2.o"), "-o", filepath.Join(bDir, "app2"))
+		if dropHelperObj {
+			_ = os.Remove(filepath.Join(bDir, "helper.o"))
+		}
+		return bDir, mDir, filepath.Join(bDir, "app2")
 	}
 
-	bcRes, err := bisectObjects(ctx, objectBisectOpts{
-		Spec: spec, Profile: profReleaseLTO, GoodTC: goodTC, BadTC: &badTC,
+	goodB, _, _ := buildTwo(&gTC, filepath.Join(tmp, "good"), false)
+	badB, badM, app2 := buildTwo(&bTC, filepath.Join(tmp, "bad"), true)
+	_ = os.Remove(linkerLog)
+
+	res, err := bisectObjects(context.Background(), objectBisectOpts{
+		Spec: spec, Profile: profDistroO2, GoodTC: &gTC, BadTC: &bTC,
 		GoodBuildDir: goodB, BadBuildDir: badB, BadManifestDir: badM,
-		ScratchDir: filepath.Join(t.TempDir(), "lto-bc"), Test: testFn,
+		ScratchDir: filepath.Join(tmp, "scratch"),
+		Test: func(ctx context.Context) (bool, string, error) {
+			out, err := exec.CommandContext(ctx, app2).CombinedOutput()
+			return err == nil, string(out), nil
+		},
 	})
-	if err != nil || !strings.HasSuffix(bcRes.Culprit.SourceFile, "culprit.c") {
-		t.Fatalf("ThinLTO bitcode bisect: res=%+v err=%v", bcRes, err)
+	if err != nil {
+		t.Fatalf("bisectObjects multi-binary: %v", err)
+	}
+	if !strings.HasSuffix(res.Culprit.SourceFile, "b.c") {
+		t.Fatalf("culprit = %q, want *b.c", res.Culprit.SourceFile)
+	}
+	logRaw, _ := os.ReadFile(linkerLog)
+	if !strings.Contains(string(logRaw), "good") {
+		t.Fatalf("expected setLink to invoke GoodTC linker, log=%q", string(logRaw))
 	}
 
-	natRes, err := bisectObjects(ctx, objectBisectOpts{
-		Spec: spec, Profile: profReleaseLTO, GoodTC: goodTC, BadTC: &badTC,
+	_, err = bisectObjects(context.Background(), objectBisectOpts{
+		Spec: spec, Profile: profDistroO2, GoodTC: &gTC, BadTC: &bTC,
 		GoodBuildDir: goodB, BadBuildDir: badB, BadManifestDir: badM,
-		ScratchDir: filepath.Join(t.TempDir(), "lto-nat"), ForceNativeLTO: true, Test: testFn,
+		ScratchDir: filepath.Join(tmp, "scratch-fail"),
+		Test: func(context.Context) (bool, string, error) {
+			return false, "always fails", nil
+		},
 	})
-	if err != nil || !natRes.UsedNativeLTO || !strings.HasSuffix(natRes.Culprit.SourceFile, "culprit.c") {
-		t.Fatalf("ThinLTO native bisect: res=%+v err=%v", natRes, err)
-	}
-
-	passRes, err := bisectPass(ctx, spec, &badTC, natRes.Culprit, filepath.Join(t.TempDir(), "lto-pass"), natRes.relinkSingle)
-	if err != nil || passRes.CulpritPassIndex != 10 {
-		t.Fatalf("ThinLTO bisectPass: res=%+v err=%v", passRes, err)
+	if err == nil {
+		t.Fatal("expected error when allGood fails on multi-binary package")
 	}
 }
 
@@ -394,6 +527,68 @@ func TestAliveTV(t *testing.T) {
 	if rCrash.Status != formalUnsupported || rCrash.ProvesBug {
 		t.Fatalf("got %+v, want unsupported", rCrash)
 	}
+
+	summaryCases := []struct {
+		name     string
+		out      string
+		err      error
+		timedOut bool
+		want     string
+		proves   bool
+	}{
+		{
+			name: "clean-summary",
+			out:  "Transformation seems to be correct!\nSummary:\n  2 correct transformations\n  0 incorrect transformations\n  0 failed-to-prove transformations\n  0 Alive2 errors\n",
+			want: aliveVerified,
+		},
+		{
+			name: "mixed-correct-and-failed",
+			out:  "Transformation seems to be correct!\nSummary:\n  1 correct transformations\n  0 incorrect transformations\n  1 failed-to-prove transformations\n  0 Alive2 errors\n",
+			want: formalTimeout,
+		},
+		{
+			name: "mixed-correct-and-error",
+			out:  "Transformation seems to be correct!\nSummary:\n  1 correct transformations\n  0 incorrect transformations\n  0 failed-to-prove transformations\n  1 Alive2 errors\n",
+			err:  errors.New("exit 1"),
+			want: formalUnsupported,
+		},
+		{
+			name: "zero-functions-not-timeout",
+			out:  "Summary:\n  0 correct transformations\n  0 incorrect transformations\n  0 failed-to-prove transformations\n  0 Alive2 errors\n",
+			want: formalUnsupported,
+		},
+		{
+			name: "error-with-zero-failed-to-prove",
+			out:  "ERROR: Unsupported instruction\nSummary:\n  0 correct transformations\n  0 incorrect transformations\n  0 failed-to-prove transformations\n  1 Alive2 errors\n",
+			err:  errors.New("exit 1"),
+			want: formalUnsupported,
+		},
+		{
+			name: "unknown-exit-0",
+			out:  "some unexpected banner",
+			want: formalUnsupported,
+		},
+		{
+			name:     "deadline",
+			out:      "",
+			timedOut: true,
+			want:     formalTimeout,
+		},
+		{
+			name:   "summary-incorrect",
+			out:    "Summary:\n  0 correct transformations\n  1 incorrect transformations\n  0 failed-to-prove transformations\n  0 Alive2 errors\n",
+			want:   aliveMiscompile,
+			proves: true,
+		},
+	}
+	for _, tc := range summaryCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseAliveTVOutput(tc.out, tc.err, tc.timedOut)
+			if got.Status != tc.want || got.ProvesBug != tc.proves {
+				t.Fatalf("parseAliveTVOutput = %+v, want status=%q proves=%v", got, tc.want, tc.proves)
+			}
+		})
+	}
 }
 
 func TestLLUBI(t *testing.T) {
@@ -438,6 +633,22 @@ exit 1`)
 	if r := runLLUBI(ctx, mSc, "", "", bSc, aSc, "scalar_fn", 5*time.Second); r.Status != llubiMismatch || !r.ProvesBug {
 		t.Fatalf("scalar mismatch: got %+v", r)
 	}
+
+	for _, msg := range []string{
+		"Unrecognized instruction: %1 = call i32 @ext()",
+		"Error: Exceeded maximum number of execution steps.",
+		"Error: Maximum stack depth exceeded.",
+		"Error: Insufficient stack space.",
+		"Error: Insufficient heap space.",
+		"Error: Unsupported constant: ptr @g.",
+	} {
+		if !isLLUBIUnsupported(msg) {
+			t.Fatalf("isLLUBIUnsupported(%q) = false, want true", msg)
+		}
+	}
+	if isLLUBIUnsupported("Immediate UB detected: signed integer overflow.") {
+		t.Fatal("isLLUBIUnsupported false-positived on Immediate UB")
+	}
 }
 
 func TestReduceCheck(t *testing.T) {
@@ -451,19 +662,17 @@ func TestReduceCheck(t *testing.T) {
 	mockClang := filepath.Join(tmp, "mock-clang")
 	script := fmt.Sprintf(`#!/bin/sh
 set -eu
-limit=-1
+has_o2=0
 prev=""
 ir=""
 out=""
 for a in "$@"; do
-  if [ "$prev" = "-mllvm" ]; then
-    case "$a" in -opt-bisect-limit=*) limit="${a#-opt-bisect-limit=}" ;; esac
-  fi
+  if [ "$a" = "-O2" ]; then has_o2=1; fi
   if [ "$prev" = "-o" ]; then out="$a"; fi
   case "$a" in *.ll) ir="$a" ;; esac
   prev="$a"
 done
-if [ "$limit" -ge 5 ] && grep -q "ret i32 0" "$ir"; then
+if [ "$has_o2" -eq 1 ] && grep -q "ret i32 0" "$ir"; then
   mod="${out}.mod.ll"
   sed 's/ret i32 0/ret i32 1/' "$ir" > "$mod"
   first=1
@@ -487,10 +696,10 @@ exec %s "$@"
 	}
 	rs := reduceSpec{
 		reduceRelink: reduceRelink{LinkDriver: tc.Clang, LinkDir: tmp, LinkArgs: linkArgs, CandObj: candObj},
-		Clang:        mockClang,
-		IRFlags:      irCompileFlags(spec, profDistroO2, tc),
-		BeforeLim:    4,
-		AfterLim:     5,
+		BeforeClang:  mockClang,
+		AfterClang:   mockClang,
+		BeforeFlags:  irO0CompileFlags(spec, profDistroO2, tc),
+		AfterFlags:   irCompileFlags(spec, profDistroO2, tc),
 		TestCmd:      []string{appBin},
 		TestDir:      tmp,
 		TestEnv:      os.Environ(),
@@ -505,6 +714,61 @@ exec %s "$@"
 	}
 	if err := cmdReduceCheck(context.Background(), []string{"-spec", specPath, badIR}, io.Discard); !errors.Is(err, errNotInteresting) {
 		t.Fatalf("expected errNotInteresting, got %v", err)
+	}
+
+	rsGoodBad := rs
+	rsGoodBad.BeforeClang = tc.Clang
+	rsGoodBad.BeforeFlags = irCompileFlags(spec, profDistroO2, tc)
+	if !evalReduceCheck(context.Background(), rsGoodBad, goodIR) {
+		t.Fatal("expected GoodTC vs BadTC reduce-check to succeed")
+	}
+}
+
+func TestTriageHelpers(t *testing.T) {
+	if !isInterproceduralPass("InlinerPass", "(caller)") ||
+		!isInterproceduralPass("PostOrderFunctionAttrsPass", "(foo, bar)") ||
+		!isInterproceduralPass("GlobalOptPass", "[module]") ||
+		!isInterproceduralPass("SomeCustomCGSCCPass", "(fn)") {
+		t.Fatal("expected interprocedural/CGSCC passes to be detected")
+	}
+	if isInterproceduralPass("InstCombinePass", "foo") || isInterproceduralPass("GVNPass", "function (bar)") {
+		t.Fatal("function pass falsely flagged as interprocedural")
+	}
+
+	gMem := []arMember{{name: "b.o", path: "/g/b.o"}, {name: "a.o", path: "/g/a.o"}, {name: "x.o", path: "/g/x.o"}}
+	bMem := []arMember{{name: "a.o", path: "/b/a.o"}, {name: "b.o", path: "/b/b.o"}, {name: "y.o", path: "/b/y.o"}}
+	pair := pairArchiveMembers(gMem, bMem)
+	if pair[0] != 1 || pair[1] != 0 || pair[2] != 2 {
+		t.Fatalf("pairArchiveMembers = %v, want [1 0 2]", pair)
+	}
+
+	cg := tuCodegenFlags([]string{"-O3", "-fPIC", "-mcmodel=large", "-ffp-contract=off", "-Wall", "-fPIC"}, "")
+	if len(cg) != 3 || cg[0] != "-fPIC" || cg[1] != "-mcmodel=large" || cg[2] != "-ffp-contract=off" {
+		t.Fatalf("tuCodegenFlags = %v", cg)
+	}
+
+	tmp := t.TempDir()
+	realDir := filepath.Join(tmp, "real")
+	linkDir := filepath.Join(tmp, "link")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realDir, linkDir); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(evalSymlinksExisting(realDir), "sub", "app.o")
+	if rel, ok := relWithinDir(linkDir, target); !ok || rel != filepath.Join("sub", "app.o") {
+		t.Fatalf("relWithinDir(%q, %q) = (%q, %v)", linkDir, target, rel, ok)
+	}
+
+	if ar, mem := parseResolutionArchive("/tmp/a0000_libfoo.a(culprit.o at 8)"); ar != "/tmp/a0000_libfoo.a" || mem != "culprit.o" {
+		t.Fatalf("ELF parseResolutionArchive = (%q, %q)", ar, mem)
+	}
+	if ar, mem := parseResolutionArchive("/tmp/a0000_libfoo.a(culprit.o)1234"); ar != "/tmp/a0000_libfoo.a" || mem != "culprit.o" {
+		t.Fatalf("MachO parseResolutionArchive = (%q, %q)", ar, mem)
+	}
+	if ar, mem := parseResolutionArchive("/tmp/m0000_main.o"); ar != "" || mem != "" {
+		t.Fatalf("direct obj parseResolutionArchive = (%q, %q)", ar, mem)
 	}
 }
 

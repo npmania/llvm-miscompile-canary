@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -31,9 +32,9 @@ type rxRepl struct {
 }
 
 var (
-	reMDGHLink     = regexp.MustCompile(`\[([^\]\n]*)\]\(\s*(?:https?://)?(?:www\.)?github\.com/(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(?:issues|pull|discussions|commits?)/([^\s)]*)|llvm/[^\s)]*)\s*\)`)
-	reGHCommitURL  = regexp.MustCompile(`(?:https?://)?(?:www\.)?github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/commits?/([0-9a-fA-F]{7,40})[^\s)>\]]*`)
-	reGHBlockURL   = regexp.MustCompile(`(?:https?://)?(?:www\.)?github\.com/(?:llvm/[^\s)>\]]*|[A-Za-z0-9_.-]*/?llvm-project[^\s)>\]]*|[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(?:issues|pull|discussions)/[^\s)>\]]*)`)
+	reMDGHLink     = regexp.MustCompile(`(?i)\[([^\]\n]*)\]\(\s*(?:https?://)?(?:www\.)?github\.com/(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(?:issues|pull|discussions|commits?)/([^\s)]*)|llvm/[^\s)]*)\s*\)`)
+	reGHCommitURL  = regexp.MustCompile(`(?i)(?:https?://)?(?:www\.)?github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/commits?/([0-9a-fA-F]{7,40})[^\s)>\]]*`)
+	reGHBlockURL   = regexp.MustCompile(`(?i)(?:https?://)?(?:www\.)?github\.com/(?:llvm/[^\s)>\]]*|[A-Za-z0-9_.-]*/?llvm-project[^\s)>\]]*|[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(?:issues|pull|discussions)/[^\s)>\]]*)`)
 	reRepoSHA      = regexp.MustCompile(`[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@([0-9a-fA-F]{7,40})`)
 	reRepoNum      = regexp.MustCompile(`[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#\d+`)
 	rePRParen      = regexp.MustCompile(`[ \t]*\(\s*#\d+\s*\)`)
@@ -131,6 +132,20 @@ func sanitizeCode(s string) string {
 	return s
 }
 
+func parseFence(line string, closing bool) (byte, int, bool) {
+	line = strings.TrimRight(line, "\r")
+	trim := strings.TrimLeft(line, " ")
+	if len(line)-len(trim) >= 4 || len(trim) < 3 || (trim[0] != '`' && trim[0] != '~') {
+		return 0, 0, false
+	}
+	ch, n := trim[0], 0
+	for n < len(trim) && trim[n] == ch {
+		n++
+	}
+	rest := trim[n:]
+	return ch, n, n >= 3 && ((closing && strings.TrimSpace(rest) == "") || (!closing && (ch != '`' || !strings.ContainsRune(rest, '`'))))
+}
+
 func checkNoCrossRefs(s string) error {
 	if strings.Contains(strings.ToLower(s), "github.com/llvm/") {
 		return errors.New("disallowed github.com/llvm URL")
@@ -140,23 +155,10 @@ func checkNoCrossRefs(s string) error {
 			return fmt.Errorf("disallowed cross-reference: %q", m)
 		}
 	}
-	fence := func(line string, closing bool) (byte, int, bool) {
-		line = strings.TrimRight(line, "\r")
-		trim := strings.TrimLeft(line, " ")
-		if len(line)-len(trim) >= 4 || len(trim) < 3 || (trim[0] != '`' && trim[0] != '~') {
-			return 0, 0, false
-		}
-		ch, n := trim[0], 0
-		for n < len(trim) && trim[n] == ch {
-			n++
-		}
-		rest := trim[n:]
-		return ch, n, n >= 3 && ((closing && strings.TrimSpace(rest) == "") || (!closing && (ch != '`' || !strings.ContainsRune(rest, '`'))))
-	}
 	lines := strings.Split(s, "\n")
 	for i := 0; i < len(lines); i++ {
-		if ch, n, ok := fence(lines[i], false); ok {
-			if j := slices.IndexFunc(lines[i+1:], func(l string) bool { c, m, ok := fence(l, true); return ok && c == ch && m >= n }); j >= 0 {
+		if ch, n, ok := parseFence(lines[i], false); ok {
+			if j := slices.IndexFunc(lines[i+1:], func(l string) bool { c, m, ok := parseFence(l, true); return ok && c == ch && m >= n }); j >= 0 {
 				i += j + 1
 				continue
 			}
@@ -272,18 +274,59 @@ func formatTargets(targets []affected, htmlMode bool) string {
 	return strings.Join(out, "; ")
 }
 
+func isSafeHTTPURL(u string) bool {
+	low := strings.ToLower(strings.TrimSpace(u))
+	return strings.HasPrefix(low, "http://") || strings.HasPrefix(low, "https://")
+}
+
+func platformHasASan(plat string) bool {
+	spec, err := lookupPlatform(plat)
+	if err != nil {
+		return true
+	}
+	flags, err := profileCompilerFlags(profDiagSan, spec)
+	if err != nil {
+		return true
+	}
+	return slices.ContainsFunc(flags, func(f string) bool { return strings.Contains(f, "address") })
+}
+
+func isUBSanOnlyIncident(inc *incident) bool {
+	if inc == nil || len(inc.Affected) == 0 {
+		return false
+	}
+	for _, a := range inc.Affected {
+		if a.Platform == "" || platformHasASan(a.Platform) {
+			return false
+		}
+	}
+	return true
+}
+
 func incidentMetaRows(incs []*incident, htmlMode bool, siteURL string) [][2]string {
 	primary := pickPrimary(incs)
-	asanClean, consIndep := true, false
+	var hasASanClean, hasASanFail, hasUBSanOnly, consIndep bool
 	for _, inc := range incs {
-		asanClean = asanClean && inc.ASanUBSanClean
+		if inc.ASanUBSanClean {
+			hasASanClean = true
+		} else if isUBSanOnlyIncident(inc) {
+			hasUBSanOnly = true
+		} else {
+			hasASanFail = true
+		}
 		consIndep = consIndep || inc.ConservativeFlagIndependent
 	}
+	raw := func(s string) string {
+		return pick(htmlMode, sanitizeText(strings.TrimSpace(s)), escapeCell(s))
+	}
 	txt := func(s string) string {
-		return pick(htmlMode, html.EscapeString(sanitizeText(strings.TrimSpace(s))), escapeCell(s))
+		return pick(htmlMode, html.EscapeString(raw(s)), raw(s))
 	}
 	code := func(s string) string { return pick(htmlMode, "<code>"+html.EscapeString(s)+"</code>", "`"+s+"`") }
 	link := func(lbl, href string) string {
+		if !isSafeHTTPURL(href) {
+			return pick(htmlMode, html.EscapeString(lbl), lbl)
+		}
 		return pick(htmlMode, fmt.Sprintf(`<a href="%s">%s</a>`, html.EscapeString(href), html.EscapeString(lbl)), fmt.Sprintf("[%s](%s)", lbl, href))
 	}
 	sha := func(s string) string { return pick(htmlMode, cmp.Or(hexSHA(s), shortSHA(s)), hexSHA(s)) }
@@ -303,10 +346,10 @@ func incidentMetaRows(incs []*incident, htmlMode bool, siteURL string) [][2]stri
 	if g, bad := sha(primary.GoodSHA), sha(primary.BadSHA); g != "" && bad != "" {
 		add("Range", code(g)+" .. "+code(bad))
 	}
-	if pass := txt(primary.CulpritPass); pass != "" {
+	if pass := raw(primary.CulpritPass); pass != "" {
 		add("Pass", code(pass)+pick(primary.CulpritPassIndex > 0, " ("+code(fmt.Sprintf("-opt-bisect-limit=%d", primary.CulpritPassIndex))+")", ""))
 	}
-	if fn, tu := txt(primary.CulpritFunc), txt(primary.CulpritTU); fn != "" && tu != "" {
+	if fn, tu := raw(primary.CulpritFunc), raw(primary.CulpritTU); fn != "" && tu != "" {
 		add("Function", code(fn)+" ("+code(tu)+")")
 	} else if v := cmp.Or(fn, tu); v != "" {
 		add("Function", code(v))
@@ -314,7 +357,13 @@ func incidentMetaRows(incs []*incident, htmlMode bool, siteURL string) [][2]stri
 	if tgt := formatTargets(mergedAffected(incs), htmlMode); tgt != "" {
 		add(pick(htmlMode, "Targets", "Target"), tgt)
 	}
-	add("Sanitizers", code("asan,ubsan")+pick(asanClean, " clean", " failed"))
+	sanVal := code("asan,ubsan") + " clean"
+	if hasASanFail {
+		sanVal = code("asan,ubsan") + " failed"
+	} else if !hasASanClean && hasUBSanOnly {
+		sanVal = code("ubsan") + " clean (asan disabled)"
+	}
+	add("Sanitizers", sanVal)
 	add("Conservative", pick(consIndep, "reproduces ("+code("-fno-strict-aliasing -fwrapv -ftrivial-auto-var-init=zero")+")", "masked"))
 	if !isOmittedFormalStatus(primary.AliveTVStatus) {
 		add(code("alive-tv"), txt(primary.AliveTVStatus))
@@ -443,9 +492,9 @@ func syncIssues(ctx context.Context, cfg issueSyncCfg, incs []*incident) ([]issu
 	if !cfg.DryRun || (cfg.APIBase != defaultAPIBase && cfg.Token != "") {
 		for page := 1; page <= 10; page++ {
 			var batch []ghIssue
-			if err := cli.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/issues?state=open&per_page=100&page=%d", cfg.Repo, page), nil, &batch); err != nil {
+			if err := cli.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/issues?state=all&per_page=100&page=%d", cfg.Repo, page), nil, &batch); err != nil {
 				if !cfg.DryRun {
-					return nil, fmt.Errorf("list open issues: %w", err)
+					return nil, fmt.Errorf("list issues: %w", err)
 				}
 				break
 			}
@@ -456,7 +505,10 @@ func syncIssues(ctx context.Context, cfg issueSyncCfg, incs []*incident) ([]issu
 				iss := item
 				byNum[iss.Number] = &iss
 				if m := reDedupMarker.FindStringSubmatch(iss.Body); len(m) >= 2 {
-					byKey[m[1]] = &iss
+					cur := byKey[m[1]]
+					if cur == nil || (!strings.EqualFold(cur.State, "open") && strings.EqualFold(iss.State, "open")) {
+						byKey[m[1]] = &iss
+					}
 				}
 			}
 			if len(batch) < 100 {
@@ -486,8 +538,12 @@ func syncIssues(ctx context.Context, cfg issueSyncCfg, incs []*incident) ([]issu
 		ex := byKey[key]
 		for _, inc := range grp {
 			if iss, ok := byNum[inc.IssueNumber]; inc.IssueNumber > 0 && ok {
-				ex = iss
-				break
+				if ex == nil || strings.EqualFold(iss.State, "open") || !strings.EqualFold(ex.State, "open") {
+					ex = iss
+					if strings.EqualFold(iss.State, "open") {
+						break
+					}
+				}
 			}
 		}
 		act, err := syncGroup(ctx, cli, cfg, key, grp, ex)
@@ -526,7 +582,7 @@ func syncGroup(ctx context.Context, cli *ghClient, cfg issueSyncCfg, key string,
 
 	if !slices.ContainsFunc(incs, func(i *incident) bool { return i.Status != incidentResolved }) {
 		if ex != nil {
-			if ex.State == "closed" {
+			if strings.EqualFold(ex.State, "closed") {
 				return nil, nil
 			}
 			act.IssueNumber, act.IssueURL = ex.Number, ex.HTMLURL
@@ -549,6 +605,12 @@ func syncGroup(ctx context.Context, cli *ghClient, cfg issueSyncCfg, key string,
 		return act, nil
 	}
 
+	if ex != nil && strings.EqualFold(ex.State, "closed") {
+		propagateIssueRef(cfg.StoreDir, incs, ex.Number, ex.HTMLURL)
+		act.Kind, act.IssueNumber, act.IssueURL = "noop", ex.Number, ex.HTMLURL
+		return act, nil
+	}
+
 	act.Body, act.Labels = formatGroupBody(incs, key, cfg.SiteURL), groupLabels(incs)
 	if err := errors.Join(checkNoCrossRefs(act.Title), checkNoCrossRefs(act.Body)); err != nil {
 		return nil, fmt.Errorf("issue %s: %w", key, err)
@@ -556,6 +618,7 @@ func syncGroup(ctx context.Context, cli *ghClient, cfg issueSyncCfg, key string,
 	method, path := http.MethodPost, fmt.Sprintf("/repos/%s/issues", cfg.Repo)
 	if ex != nil {
 		act.IssueNumber, act.IssueURL = ex.Number, ex.HTMLURL
+		act.Labels = mergeLabels(ex, act.Labels)
 		if ex.Title == act.Title && strings.TrimSpace(ex.Body) == strings.TrimSpace(act.Body) && sameLabels(ex, act.Labels) {
 			propagateIssueRef(cfg.StoreDir, incs, ex.Number, ex.HTMLURL)
 			act.Kind, act.Body = "noop", ""
@@ -662,17 +725,45 @@ func formatGroupBody(incs []*incident, key, siteURL string) string {
 		f := fenceFor(diff)
 		fmt.Fprintf(&b, "%sdiff\n%s\n%s\n\n", f, diff, f)
 	}
-	body := strings.TrimRight(b.String(), "\n") + "\n"
-	if len(body) > maxIssueBodyBytes {
-		body = body[:maxIssueBodyBytes] + "\n\n...(truncated)\n"
-	}
+	body := truncateBody(strings.TrimRight(b.String(), "\n")+"\n", maxIssueBodyBytes)
 	var ids []string
 	for _, inc := range incs {
 		if inc.ID != "" {
-			ids = append(ids, inc.ID)
+			ids = append(ids, keyToken(inc.ID))
 		}
 	}
 	return fmt.Sprintf("%s\n<!-- lmc-dedup-key: %s -->\n<!-- lmc-incidents: %s -->\n", body, keyToken(cmp.Or(key, dedupKey(incs[0]))), strings.Join(ids, ","))
+}
+
+func truncateBody(body string, maxBytes int) string {
+	if len(body) <= maxBytes {
+		return body
+	}
+	const suffix = "\n\n...(truncated)\n"
+	limit := max(maxBytes-len(suffix)-32, 0)
+	cut := body[:limit]
+	if nl := strings.LastIndexByte(cut, '\n'); nl >= 0 {
+		cut = cut[:nl]
+	} else {
+		for len(cut) > 0 && !utf8.ValidString(cut) {
+			cut = cut[:len(cut)-1]
+		}
+	}
+	var openCh byte
+	var openN int
+	for _, line := range strings.Split(cut, "\n") {
+		if openN == 0 {
+			if ch, n, ok := parseFence(line, false); ok {
+				openCh, openN = ch, n
+			}
+		} else if ch, n, ok := parseFence(line, true); ok && ch == openCh && n >= openN {
+			openCh, openN = 0, 0
+		}
+	}
+	if openN > 0 {
+		cut += "\n" + strings.Repeat(string(openCh), openN)
+	}
+	return strings.TrimRight(cut, "\n") + suffix
 }
 
 func formatCloseComment(incs []*incident, fallbackSHA string) string {
@@ -736,15 +827,40 @@ func propagateIssueRef(storeDir string, incs []*incident, num int, url string) {
 	}
 }
 
+func mergeLabels(iss *ghIssue, desired []string) []string {
+	out := sortedUnique(slices.Clone(desired))
+	if iss == nil {
+		return out
+	}
+	hasConf := slices.Contains(out, confConfirmed)
+	hasReview := slices.Contains(out, confNeedsReview)
+	for _, l := range iss.Labels {
+		name := strings.TrimSpace(l.Name)
+		if name == "" {
+			continue
+		}
+		if (strings.EqualFold(name, confNeedsReview) && hasConf) || (strings.EqualFold(name, confConfirmed) && hasReview) {
+			continue
+		}
+		if !slices.ContainsFunc(out, func(s string) bool { return strings.EqualFold(s, name) }) {
+			out = append(out, name)
+		}
+	}
+	return sortedUnique(out)
+}
+
 func sameLabels(iss *ghIssue, desired []string) bool {
 	if len(iss.Labels) != len(desired) {
 		return false
 	}
 	got := make([]string, len(iss.Labels))
 	for i, l := range iss.Labels {
-		got[i] = l.Name
+		got[i] = strings.ToLower(strings.TrimSpace(l.Name))
 	}
-	want := slices.Clone(desired)
+	want := make([]string, len(desired))
+	for i, l := range desired {
+		want[i] = strings.ToLower(strings.TrimSpace(l))
+	}
 	slices.Sort(got)
 	slices.Sort(want)
 	return slices.Equal(got, want)
@@ -771,5 +887,13 @@ func clipCode(s string, maxBytes int) string {
 	if len(s) <= maxBytes {
 		return s
 	}
-	return s[:maxBytes] + "\n; ... [truncated]"
+	cut := s[:maxBytes]
+	if nl := strings.LastIndexByte(cut, '\n'); nl > 0 {
+		cut = cut[:nl]
+	} else {
+		for len(cut) > 0 && !utf8.ValidString(cut) {
+			cut = cut[:len(cut)-1]
+		}
+	}
+	return cut + "\n; ... [truncated]"
 }

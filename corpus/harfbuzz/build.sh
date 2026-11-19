@@ -108,7 +108,7 @@ target_link_libraries(test-shape-subset PRIVATE harfbuzz harfbuzz-subset)
 add_test(NAME test-shape-subset COMMAND test-shape-subset "${HB_TEST_FONT}")
 EOF
 
-TEST_FONT=$(find "$SRC_DIR/test" -name "*.ttf" -print -quit)
+TEST_FONT=$(find "$SRC_DIR/test" -name "*.ttf" | LC_ALL=C sort | head -n 1)
 if [ -z "$TEST_FONT" ]; then
   echo "no bundled .ttf font found in $SRC_DIR/test" >&2
   exit 1

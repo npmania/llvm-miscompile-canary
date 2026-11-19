@@ -90,12 +90,32 @@ func TestPlatformAndFlags(t *testing.T) {
 	if !hasSanitizerReport("ubsan: signed-integer-overflow") || !hasSanitizerReport("err\nubsan: type-mismatch") {
 		t.Fatal("expected hasSanitizerReport to match ubsan minimal output")
 	}
-	if hasSanitizerReport("/tmp/work/asan-ubsan: build error") {
-		t.Fatal("hasSanitizerReport false-positived on asan-ubsan workdir path")
+	if !hasSanitizerReport("foo.c:42:10: runtime error: signed integer overflow") ||
+		!hasSanitizerReport("<unknown>: runtime error: shift exponent 40 is too large") ||
+		!hasSanitizerReport("0x100040: runtime error: load of null pointer") {
+		t.Fatal("expected hasSanitizerReport to match UBSan runtime error formats")
+	}
+	if hasSanitizerReport("/tmp/work/asan-ubsan: build error") ||
+		hasSanitizerReport("lua: runtime error: stack overflow") {
+		t.Fatal("hasSanitizerReport false-positived on non-sanitizer output")
 	}
 	repro := generateReproScript(&incident{ID: "rv-1", GoodSHA: "aaaa", BadSHA: "bbbb", CulpritPass: "instcombine", CulpritPassIndex: 5, Affected: []affected{{Package: "lua", Platform: platLinuxRISCV64}}})
-	if !strings.Contains(repro, `"$CLANG" --target=riscv64-linux-gnu -O2 -x ir`) {
-		t.Fatalf("repro script missing riscv64 target:\n%s", repro)
+	if !strings.Contains(repro, `"$CLANG" --target=riscv64-linux-gnu -O2 -x ir`) ||
+		!strings.Contains(repro, `"$CLANG" --target=riscv64-linux-gnu -O0 -x ir`) ||
+		strings.Contains(repro, "-opt-bisect-limit=5") {
+		t.Fatalf("unexpected distro-O2 repro script:\n%s", repro)
+	}
+	reproLTO := generateReproScript(&incident{ID: "rv-2", GoodSHA: "aaaa", BadSHA: "bbbb", CulpritPass: "gvn", CulpritPassIndex: 9, Affected: []affected{{Package: "zstd", Platform: platLinuxRISCV64, Profile: profReleaseLTO}}})
+	if !strings.Contains(reproLTO, `"$CLANG" --target=riscv64-linux-gnu -O3 -march=rva23u64 -x ir`) ||
+		!strings.Contains(reproLTO, `"$CLANG" --target=riscv64-linux-gnu -O0 -march=rva23u64 -x ir`) ||
+		strings.Contains(reproLTO, "-opt-bisect-limit=") {
+		t.Fatalf("unexpected release-lto repro script:\n%s", reproLTO)
+	}
+	id1 := buildIncidentID("zstd", platLinuxX86, profDistroO2, "t1", "11111111", "aaaaaaaa")
+	id2 := buildIncidentID("zstd", platDarwinARM, profReleaseLTO, "t1", "11111111", "aaaaaaaa")
+	id3 := buildIncidentID("zstd", platLinuxX86, profReleaseLTO, "t1", "11111111", "aaaaaaaa")
+	if id1 == id2 || id1 == id3 || id2 == id3 {
+		t.Fatalf("incident IDs collided: %q %q %q", id1, id2, id3)
 	}
 }
 
@@ -307,10 +327,59 @@ exit 0
 		t.Fatalf("missing capture artifacts: %+v", recs[0])
 	}
 
-	got := stripFlags([]string{"-I", "/inc", "-D", "X=1", "-isysroot", "/sdk", "-flto=thin", "--ld-path=/ld", "--ld-path", "/ld2", "-fuse-ld=lld", "-mllvm", "-opt-bisect-limit=9", "-frandom-seed=123", "-c", "foo.c", "-o", "foo.o"},
+	got := stripFlags([]string{"-I", "/inc", "-isystem-after", "/after", "-include-pch", "a.pch", "-includefoo.h", "-imacrosbar.h", "-D", "X=1", "-isysroot", "/sdk", "-flto=thin", "--ld-path=/ld", "--ld-path", "/ld2", "-fuse-ld=lld", "-Xlinker", "-z", "-order_file", "ord.txt", "-opt-record-file", "rec.yaml", "-Xassembler", "--noexecstack", "--param", "max=1", "-mllvm", "-opt-bisect-limit=9", "-frandom-seed=123", "-c", "foo.c", "-o", "foo.o"},
 		stripMode|stripOutput|stripInclude|stripHost|stripLink|stripLTO|stripOptBisect|stripSources, dir)
-	if !slices.Equal(got, []string{"-D", "X=1"}) {
-		t.Fatalf("stripFlags = %v, want [-D X=1]", got)
+	want := []string{"-D", "X=1", "-order_file", "ord.txt", "-opt-record-file", "rec.yaml", "-Xassembler", "--noexecstack", "--param", "max=1"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("stripFlags = %v, want %v", got, want)
+	}
+
+	for _, f := range []string{"-objc", "-object", "-object-file-name", "-object-file-name=x.o", "-order_file", "-objc-isystem", "-objcxx-isystem", "-opt-record-file", "-opt-record-passes", "-opt-record-format", "-opt-record-file=x"} {
+		if isAttachedOutputFlag(f) {
+			t.Fatalf("isAttachedOutputFlag(%q) = true, want false", f)
+		}
+	}
+	if !isAttachedOutputFlag("-ofoo.o") || !isAttachedOutputFlag("-o/tmp/a.o") {
+		t.Fatal("expected attached -o flags to match")
+	}
+
+	arDir := filepath.Join(dir, "libs")
+	if err := os.MkdirAll(arDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	libFoo := filepath.Join(arDir, "libfoo.a")
+	libBar := filepath.Join(arDir, "libbar.a")
+	_ = os.WriteFile(libFoo, []byte("!<arch>\n"), 0o644)
+	_ = os.WriteFile(libBar, []byte("!<arch>\n"), 0o644)
+	flPath := filepath.Join(dir, "objs.list")
+	_ = os.WriteFile(flPath, []byte("x.o\ny.o\n"), 0o644)
+	rspPath := filepath.Join(dir, "link.rsp")
+	_ = os.WriteFile(rspPath, []byte("z.o -force_load "+libBar+"\n"), 0o644)
+
+	parsed := parseClangArgs(dir, []string{"-Wl,@" + rspPath, "-Wl,-filelist," + flPath, "-L", arDir, "-lfoo", "-o", "app"})
+	if !parsed.hasResponseFile || !parsed.hasFilelist || len(parsed.objectFiles) != 3 ||
+		!slices.Contains(parsed.archiveFiles, libFoo) || !slices.Contains(parsed.archiveFiles, libBar) {
+		t.Fatalf("unexpected parsed link args: %+v", parsed)
+	}
+
+	pWlRsp, err := planWrap(wrapConfig{RealCC: fakeCC, Platform: platLinuxX86, Profile: profDistroO2}, false, dir, []string{"-Wl,@missing.rsp", "-o", "app"})
+	if err != nil || pWlRsp.mode == "probe" {
+		t.Fatalf("planWrap(-Wl,@missing.rsp) = %+v (%v), want non-probe", pWlRsp, err)
+	}
+
+	multiMan := filepath.Join(dir, "multi-manifest")
+	multiCfg := wrapConfig{RealCC: fakeCC, RealCXX: fakeCC, Platform: platLinuxX86, Profile: profDistroO2, ManifestDir: multiMan}
+	if code, err := runWrapper(context.Background(), "clang", []string{"-c", "m1.c", "m2.c"}, dir, os.Environ(), multiCfg, nil, &stdout, &stderr); err != nil || code != 0 {
+		t.Fatalf("multi-source runWrapper code=%d err=%v", code, err)
+	}
+	mRecs, err := readCompileRecs(multiMan)
+	if err != nil || len(mRecs) != 2 {
+		t.Fatalf("multi-source compile recs = %+v, err=%v", mRecs, err)
+	}
+	if filepath.Base(mRecs[0].Output) != "m1.o" || filepath.Base(mRecs[1].Output) != "m2.o" ||
+		len(mRecs[0].Sources) != 1 || len(mRecs[1].Sources) != 1 ||
+		slices.Contains(mRecs[0].FullArgs, "m2.c") || slices.Contains(mRecs[1].FullArgs, "m1.c") {
+		t.Fatalf("unexpected multi-source compile recs: %+v", mRecs)
 	}
 }
 
@@ -513,6 +582,29 @@ int main(int argc, char **argv) { return (argc > 1 && strcmp(argv[1], "ok") == 0
 	}
 	if one2 := r.testOne(context.Background(), shRec, ws2, "sh_case", nil, time.Minute); !one2.Passed {
 		t.Fatalf("sh testOne failed: %s", one2.Output)
+	}
+}
+
+func TestReadCTestFailuresFallback(t *testing.T) {
+	out := `Test project /tmp/x
+    Start 1: ok_case
+    Start 2: disabled_case
+1/7 Test #1: ok_case ..........................   Passed    0.00 sec
+2/7 Test #2: disabled_case ....................***Not Run (Disabled)   0.00 sec
+    Start 3: skip_case
+3/7 Test #3: skip_case ........................***Skipped   0.00 sec
+    Start 4: fail_case
+4/7 Test #4: fail_case ........................***Failed    0.00 sec
+    Start 5: abort_case
+5/7 Test #5: abort_case .......................Subprocess aborted***Exception:   0.00 sec
+    Start 6: timeout_case
+6/7 Test #6: timeout_case .....................***Timeout   1.00 sec
+    Start 7: hang_case
+`
+	got := readCTestFailures(t.TempDir(), out)
+	want := []string{"fail_case", "abort_case", "timeout_case", "hang_case"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("readCTestFailures fallback = %v, want %v", got, want)
 	}
 }
 

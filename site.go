@@ -267,6 +267,10 @@ func toIncidentRow(inc *incident) incidentRowView {
 		targets = pick(targets != "", targets+" ("+strings.Join(plats, ", ")+")", strings.Join(plats, ", "))
 	}
 	dash := func(s string) string { return cmp.Or(sanitizeText(strings.TrimSpace(s)), "-") }
+	issueURL := strings.TrimSpace(inc.IssueURL)
+	if !isSafeHTTPURL(issueURL) {
+		issueURL = ""
+	}
 	return incidentRowView{
 		ID:          inc.ID,
 		CulpritSHA:  dash(displaySHA(inc.CulpritSHA)),
@@ -275,7 +279,7 @@ func toIncidentRow(inc *incident) incidentRowView {
 		Function:    dash(cmp.Or(strings.TrimSpace(inc.CulpritFunc), strings.TrimSpace(inc.CulpritTU))),
 		Targets:     dash(targets),
 		IssueNumber: inc.IssueNumber,
-		IssueURL:    strings.TrimSpace(inc.IssueURL),
+		IssueURL:    issueURL,
 	}
 }
 

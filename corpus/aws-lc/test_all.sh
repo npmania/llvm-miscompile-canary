@@ -18,7 +18,7 @@ run_gtest_bin() {
   log="$log_dir/${label}.log"
   if ! (cd "$BUILD_DIR" && "$bin") >"$log" 2>&1; then
     tail -n 80 "$log" >&2 || true
-    fails=$(awk '/^\[  FAILED  \] [A-Za-z0-9_]+\.[A-Za-z0-9_]+/{print $4}' "$log" | sed 's/,$//' | sort -u)
+    fails=$(awk '/^\[  FAILED  \] [A-Za-z0-9_\/]+\.[A-Za-z0-9_\/]+/{print $4}' "$log" | sed 's/,$//' | sort -u)
     if [ -z "$fails" ]; then
       fails=$(awk '/^\[ RUN      \] /{last=$4} /^\[       OK \] /{last=""} END{if (last!="") print last}' "$log")
     fi

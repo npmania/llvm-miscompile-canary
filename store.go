@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -153,7 +154,7 @@ func dedupKey(inc *incident) string {
 		return ""
 	}
 	if sha := shortSHA(inc.CulpritSHA); sha != "" {
-		return "culprit:" + sha
+		return "culprit:" + keyToken(sha)
 	}
 	pass := strings.TrimSpace(inc.CulpritPass)
 	if pass == "" {
@@ -169,11 +170,44 @@ func dedupKey(inc *incident) string {
 }
 
 func keyToken(s string) string {
-	s = strings.Join(strings.Fields(strings.ReplaceAll(strings.TrimSpace(s), "-->", "")), "_")
-	if s == "" {
+	s = sanitizeText(strings.TrimSpace(s))
+	var b strings.Builder
+	prevUnder := false
+	for i := 0; i < len(s); {
+		if s[i] == '-' {
+			j := i
+			for j < len(s) && s[j] == '-' {
+				j++
+			}
+			if j-i == 1 {
+				b.WriteByte('-')
+				prevUnder = false
+			} else if !prevUnder {
+				b.WriteByte('_')
+				prevUnder = true
+			}
+			i = j
+			continue
+		}
+		r, sz := utf8.DecodeRuneInString(s[i:])
+		i += sz
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9'),
+			r == '.', r == ':', r == '|', r == '/':
+			b.WriteRune(r)
+			prevUnder = false
+		default:
+			if !prevUnder {
+				b.WriteByte('_')
+				prevUnder = true
+			}
+		}
+	}
+	out := strings.Trim(b.String(), "_")
+	if out == "" {
 		return "unknown"
 	}
-	return s
+	return out
 }
 
 func isOmittedFormalStatus(status string) bool {
@@ -205,7 +239,7 @@ func recordSweep(st *state, rec sweep, incidents []*incident) {
 	for _, r := range rec.Results {
 		if r.Status == statusPass {
 			st.LastGoodByTarget[targetKey(r.Package, r.Platform, r.Profile)] = rec.LLVMCommit
-		} else if r.Status == statusTestFail {
+		} else {
 			anyFail = true
 		}
 	}
@@ -226,12 +260,10 @@ func refreshStateIncidents(st *state, incidents []*incident, keepRetained bool) 
 		}
 	}
 	for _, inc := range incidents {
-		if inc == nil {
+		if inc == nil || inc.Status != incidentOpen {
 			continue
 		}
-		if inc.Status == incidentOpen {
-			active = append(active, inc.ID)
-		}
+		active = append(active, inc.ID)
 		if inc.GoodSHA != "" {
 			retainedSet[inc.GoodSHA] = struct{}{}
 		}
@@ -349,15 +381,24 @@ func mergeIncident(dir string, inc *incident) (*incident, error) {
 	if err != nil {
 		return nil, err
 	}
-	key := dedupKey(inc)
-	target := inc
+	usedIDs := make(map[string]bool, len(existing))
 	for _, ex := range existing {
-		if ex == nil || ex.Status != incidentOpen || (ex.ID != inc.ID && (key == "" || dedupKey(ex) != key)) {
+		if ex != nil && ex.ID != "" {
+			usedIDs[ex.ID] = true
+		}
+	}
+	key := dedupKey(inc)
+	var target *incident
+	for _, ex := range existing {
+		if ex == nil || ex.Status != incidentOpen || key == "" || dedupKey(ex) != key {
 			continue
 		}
 		ex.mergeAffected(inc.Affected...)
 		if ex.Confidence != confConfirmed && inc.Confidence == confConfirmed {
 			ex.Confidence = confConfirmed
+		}
+		if inc.ASanUBSanClean {
+			ex.ASanUBSanClean = true
 		}
 		if inc.ConservativeFlagIndependent {
 			ex.ConservativeFlagIndependent = true
@@ -383,6 +424,12 @@ func mergeIncident(dir string, inc *incident) (*incident, error) {
 		target = ex
 		break
 	}
+	if target == nil {
+		if usedIDs[inc.ID] {
+			inc.ID = uniqueIncidentID(inc.ID, usedIDs)
+		}
+		target = inc
+	}
 
 	if _, err := saveIncident(dir, target); err != nil {
 		return nil, err
@@ -398,6 +445,15 @@ func mergeIncident(dir string, inc *incident) (*incident, error) {
 	refreshStateIncidents(st, all, true)
 	st.UpdatedAt = time.Now().UTC()
 	return target, saveState(dir, st)
+}
+
+func uniqueIncidentID(base string, used map[string]bool) string {
+	for n := 2; ; n++ {
+		cand := fmt.Sprintf("%s-%d", base, n)
+		if !used[cand] {
+			return cand
+		}
+	}
 }
 
 func setIfEmpty(dst *string, val string) {

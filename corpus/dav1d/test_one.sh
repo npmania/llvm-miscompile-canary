@@ -82,26 +82,30 @@ EOF
 
 case "$test_id" in
   meson_headers)
-    meson test -C "$BUILD_DIR" --print-errorlogs
+    meson test -C "$BUILD_DIR" --no-rebuild --print-errorlogs
     ;;
   decode_av1_8bpc)
     write_sample8
-    got=$("$BUILD_DIR/tools/dav1d" -q -i "$tmp_dir/sample8.ivf" --threads 1 --muxer md5 -o - | tr -d '[:space:]')
+    "$BUILD_DIR/tools/dav1d" -q -i "$tmp_dir/sample8.ivf" --threads 1 --muxer md5 -o - >"$tmp_dir/md5.out"
+    got=$(tr -d '[:space:]' <"$tmp_dir/md5.out")
     [ "$got" = "4a899f3f4cd06281530a54a3cbc55464" ]
     ;;
   decode_av1_8bpc_mt)
     write_sample8
-    got=$("$BUILD_DIR/tools/dav1d" -q -i "$tmp_dir/sample8.ivf" --threads 2 --muxer md5 -o - | tr -d '[:space:]')
+    "$BUILD_DIR/tools/dav1d" -q -i "$tmp_dir/sample8.ivf" --threads 2 --muxer md5 -o - >"$tmp_dir/md5.out"
+    got=$(tr -d '[:space:]' <"$tmp_dir/md5.out")
     [ "$got" = "4a899f3f4cd06281530a54a3cbc55464" ]
     ;;
   decode_av1_10bpc)
     write_sample10
-    got=$("$BUILD_DIR/tools/dav1d" -q -i "$tmp_dir/sample10.ivf" --threads 1 --muxer md5 -o - | tr -d '[:space:]')
+    "$BUILD_DIR/tools/dav1d" -q -i "$tmp_dir/sample10.ivf" --threads 1 --muxer md5 -o - >"$tmp_dir/md5.out"
+    got=$(tr -d '[:space:]' <"$tmp_dir/md5.out")
     [ "$got" = "896e5368c865743fe698d07ed3b5facb" ]
     ;;
   decode_av1_10bpc_mt)
     write_sample10
-    got=$("$BUILD_DIR/tools/dav1d" -q -i "$tmp_dir/sample10.ivf" --threads 2 --muxer md5 -o - | tr -d '[:space:]')
+    "$BUILD_DIR/tools/dav1d" -q -i "$tmp_dir/sample10.ivf" --threads 2 --muxer md5 -o - >"$tmp_dir/md5.out"
+    got=$(tr -d '[:space:]' <"$tmp_dir/md5.out")
     [ "$got" = "896e5368c865743fe698d07ed3b5facb" ]
     ;;
   fuzzer_8bpc)
@@ -113,6 +117,6 @@ case "$test_id" in
     "$BUILD_DIR/tests/libfuzzer/dav1d_fuzzer_mt" "$tmp_dir/sample10.ivf"
     ;;
   *)
-    meson test -C "$BUILD_DIR" --print-errorlogs "$test_id"
+    meson test -C "$BUILD_DIR" --no-rebuild --print-errorlogs "$test_id"
     ;;
 esac

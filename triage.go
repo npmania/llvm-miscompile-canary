@@ -14,7 +14,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -32,7 +34,14 @@ const (
 	llubiSourceUB   = "source_ub"
 )
 
-var errNotInteresting = errors.New("not interesting")
+var (
+	errNotInteresting = errors.New("not interesting")
+	reUBSanRuntime    = regexp.MustCompile(`(?m)(?::\d+(?::\d+)?|<unknown>|0x[0-9a-fA-F]+|\+0x[0-9a-fA-F]+\)): runtime error: `)
+	reAliveCorrect    = regexp.MustCompile(`(?m)^\s*(\d+)\s+correct transformations?\b`)
+	reAliveIncorrect  = regexp.MustCompile(`(?m)^\s*(\d+)\s+incorrect transformations?\b`)
+	reAliveFailed     = regexp.MustCompile(`(?m)^\s*(\d+)\s+failed-to-prove transformations?\b`)
+	reAliveErrors     = regexp.MustCompile(`(?m)^\s*(\d+)\s+Alive2 errors?\b`)
+)
 
 type triageOpts struct {
 	Runner        *runner
@@ -72,20 +81,20 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 	if o.Runner == nil || o.Recipe == nil || o.GoodTC == nil || o.BadTC == nil || strings.TrimSpace(o.WorkDir) == "" {
 		return nil, errors.New("runner, recipe, good/bad toolchains, and workDir are required")
 	}
-	absWork, err := filepath.Abs(o.WorkDir)
-	if err != nil {
+	if err := os.MkdirAll(o.WorkDir, 0o755); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(absWork, 0o755); err != nil {
-		return nil, err
-	}
+	absWork := evalSymlinksExisting(o.WorkDir)
 
 	// copy per build since in-tree configure/make recipes dirty $SRC_DIR
 	baseSrc := o.SrcDir
+	ownCleanSrc := false
 	if baseSrc == "" {
 		baseSrc = filepath.Join(absWork, "clean-src")
+		ownCleanSrc = true
 		tb := o.Tarball
 		if tb == "" {
+			var err error
 			if tb, err = fetchSource(ctx, o.Recipe, o.Runner.CacheDir, o.Runner.MirrorBase, nil); err != nil {
 				return nil, fmt.Errorf("fetch source: %w", err)
 			}
@@ -93,8 +102,8 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 		if err := unpackSource(ctx, tb, baseSrc, o.Recipe.StripComponents); err != nil {
 			return nil, fmt.Errorf("unpack source: %w", err)
 		}
-	} else if baseSrc, err = filepath.Abs(baseSrc); err != nil {
-		return nil, err
+	} else {
+		baseSrc = evalSymlinksExisting(baseSrc)
 	}
 
 	buildProfile := func(name, prof string, tc *toolchain, extraC, extraEnv []string, saveLTO bool) (*workspace, runOut, error) {
@@ -109,7 +118,7 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 		})
 	}
 
-	badWS, badOut, err := buildProfile("bad-build", o.Profile, o.BadTC, nil, nil, o.Profile == profReleaseLTO)
+	badWS, badOut, err := buildProfile("bad-build", o.Profile, o.BadTC, nil, nil, false)
 	if err != nil {
 		return nil, fmt.Errorf("bad build: %w", err)
 	}
@@ -143,7 +152,7 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 		}
 	}
 
-	goodWS, goodOut, err := buildProfile("good-build", o.Profile, o.GoodTC, nil, nil, o.Profile == profReleaseLTO)
+	goodWS, goodOut, err := buildProfile("good-build", o.Profile, o.GoodTC, nil, nil, false)
 	if err != nil {
 		return nil, fmt.Errorf("good build: %w", err)
 	}
@@ -159,6 +168,7 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 			diagO0 = "test_fail"
 		}
 	}
+	_ = os.RemoveAll(filepath.Join(absWork, "diag-o0"))
 
 	sanEnv := sanitizerEnv()
 	sanWS, sanOut, err := buildProfile("asan-ubsan", profDiagSan, o.BadTC, nil, sanEnv, false)
@@ -174,6 +184,8 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 		}
 	}
 	if !sanOut.Passed {
+		_ = os.RemoveAll(filepath.Join(absWork, "asan-ubsan"))
+		_ = os.RemoveAll(filepath.Join(absWork, "asan-ubsan-host"))
 		if hasSanitizerReport(sanOut.Output) {
 			return &triageResult{Dropped: true, DropReason: "upstream_ub"}, nil
 		}
@@ -181,14 +193,22 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 	}
 	// plain assertion failure at -O1 without a sanitizer report means the bug reproduces at -O1
 	if sanTest := o.Runner.testOne(ctx, o.Recipe, sanWS, testID, sanEnv, o.TestTimeout); !sanTest.Passed && hasSanitizerReport(sanTest.Output) {
+		_ = os.RemoveAll(filepath.Join(absWork, "asan-ubsan"))
+		_ = os.RemoveAll(filepath.Join(absWork, "asan-ubsan-host"))
 		return &triageResult{Dropped: true, DropReason: "upstream_ub"}, nil
 	}
+	_ = os.RemoveAll(filepath.Join(absWork, "asan-ubsan"))
+	_ = os.RemoveAll(filepath.Join(absWork, "asan-ubsan-host"))
 
 	consWS, consOut, err := buildProfile("conservative", o.Profile, o.BadTC, conservativeFlags(), nil, false)
 	if err != nil {
 		return nil, fmt.Errorf("conservative build: %w", err)
 	}
 	consIndep := consOut.Passed && !o.Runner.testOne(ctx, o.Recipe, consWS, testID, nil, o.TestTimeout).Passed
+	_ = os.RemoveAll(filepath.Join(absWork, "conservative"))
+	if ownCleanSrc {
+		_ = os.RemoveAll(baseSrc)
+	}
 
 	objRes, err := bisectObjects(ctx, objectBisectOpts{
 		Spec: o.Spec, Profile: o.Profile, GoodTC: o.GoodTC, BadTC: o.BadTC,
@@ -214,6 +234,10 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 	if passRes.IsCodeGenPass {
 		msg := "culprit pass occurs in backend CodeGen after LLVM IR optimization"
 		aliveRes, llubiRes = formalResult{Status: formalUnsupported, Output: msg}, formalResult{Status: formalUnsupported, Output: msg}
+	} else if passRes.IsInterprocedural {
+		aliveRes = formalResult{Status: formalUnsupported, Output: "interprocedural pass not verified with single-function alive-tv"}
+		llubiRes = runLLUBI(ctx, o.BadTC.LLUBI, passRes.BeforeFullIRPath, passRes.AfterFullIRPath,
+			passRes.BeforeIRPath, passRes.AfterIRPath, passRes.CulpritFunc, 25*time.Second)
 	} else {
 		aliveRes = runAliveTV(ctx, o.BadTC.AliveTV, passRes.BeforeIRPath, passRes.AfterIRPath, 60*time.Second)
 		llubiRes = runLLUBI(ctx, o.BadTC.LLUBI, passRes.BeforeFullIRPath, passRes.AfterFullIRPath,
@@ -236,11 +260,15 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 		cObj := *objRes.Culprit
 		if len(cObj.Args) > 0 && cObj.GoodImportBC != "" && o.testClang == nil {
 			probeObj := filepath.Join(absWork, "commit-probe-src.o")
+			repro := false
 			if compileSingleTUWithClang(ctx, o.BadTC.Clang, o.Spec, o.BadTC.SDKRoot, &cObj, probeObj) == nil {
-				if pass, _, err := objRes.relinkSingle(ctx, probeObj); err == nil && pass {
-					// failure needs cross-module ThinLTO import, so bisect from GoodImportBC
-					cObj.Args = nil
+				if pass, _, err := objRes.relinkSingle(ctx, probeObj); err == nil && !pass {
+					repro = true
 				}
+			}
+			if !repro {
+				// source compile cannot relink or reproduce against ThinLTO peers, bisect from GoodImportBC
+				cObj.Args = nil
 			}
 		}
 		sha, subj, err := bisectCommit(ctx, commitBisectOpts{
@@ -254,6 +282,9 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 		}
 		culpritSHA, culpritSubj = sha, sanitizeText(subj)
 	}
+
+	sanFlags, _ := profileCompilerFlags(profDiagSan, o.Spec)
+	asanUBSanClean := slices.ContainsFunc(sanFlags, func(f string) bool { return strings.Contains(f, "address") })
 
 	now := time.Now().UTC()
 	incID := buildIncidentID(o.Recipe.Name, o.Spec.ID, o.Profile, testID, o.BadSHA, culpritSHA)
@@ -271,7 +302,7 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 		CulpritPassIndex:            passRes.CulpritPassIndex,
 		CulpritFunc:                 passRes.CulpritFunc,
 		DiagO0Status:                diagO0,
-		ASanUBSanClean:              true,
+		ASanUBSanClean:              asanUBSanClean,
 		ConservativeFlagIndependent: consIndep,
 		AliveTVStatus:               aliveRes.Status,
 		AliveTVOutput:               aliveRes.Output,
@@ -294,7 +325,7 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 
 	var bundlePath string
 	if strings.TrimSpace(o.BundleDir) != "" {
-		if bundlePath, err = packageReproducerBundle(ctx, inc, o.BundleDir, tuPath, tuName, passRes.BeforeIRPath, passRes.AfterIRPath, reducedPath); err != nil {
+		if bundlePath, err = packageReproducerBundle(ctx, inc, o.BundleDir, tuPath, tuName, passRes.BeforeIRPath, passRes.AfterIRPath, reducedPath, passRes.BeforeAsmPath, passRes.AfterAsmPath); err != nil {
 			return nil, fmt.Errorf("package reproducer bundle: %w", err)
 		}
 	}
@@ -306,12 +337,12 @@ func containsAny(s string, needles []string) bool {
 }
 
 func hasSanitizerReport(out string) bool {
-	if strings.HasPrefix(out, "ubsan: ") || strings.Contains(out, "\nubsan: ") {
+	if strings.HasPrefix(out, "ubsan: ") || strings.Contains(out, "\nubsan: ") || reUBSanRuntime.MatchString(out) {
 		return true
 	}
 	return containsAny(out, []string{
 		"AddressSanitizer:", "UndefinedBehaviorSanitizer:", "LeakSanitizer:", "Sanitizer:",
-		"runtime error:", "SEGV on unknown address", "heap-buffer-overflow", "stack-buffer-overflow",
+		"SEGV on unknown address", "heap-buffer-overflow", "stack-buffer-overflow",
 		"heap-use-after-free", "stack-use-after-scope", "stack-use-after-return", "global-buffer-overflow",
 		"signed integer overflow:", "shift exponent ", "load of misaligned address", "store to misaligned address",
 		"member access within null pointer", "null pointer passed as argument", "execution reached an unreachable program point",
@@ -342,24 +373,56 @@ func runAliveTV(ctx context.Context, bin, beforeIR, afterIR string, timeout time
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	out, err := exec.CommandContext(runCtx, bin, "--smt-to=30000", beforeIR, afterIR).CombinedOutput()
-	raw := strings.TrimSpace(string(out))
-	clipped := headText(raw, 4000)
+	return parseAliveTVOutput(string(out), err, errors.Is(runCtx.Err(), context.DeadlineExceeded))
+}
 
-	switch {
-	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
+func parseAliveTVOutput(out string, runErr error, timedOut bool) formalResult {
+	raw := strings.TrimSpace(out)
+	clipped := headText(raw, 4000)
+	if timedOut {
 		return formalResult{Status: formalTimeout, Output: clipped}
-	case containsAny(raw, []string{"Transformation doesn't verify!", "Target is more poisonous than source",
-		"Target's return value is more undefined", "Value mismatch", "Mismatch in memory", "Source is more defined than target"}):
+	}
+
+	matchCount := func(re *regexp.Regexp) (int, bool) {
+		m := re.FindStringSubmatch(raw)
+		if len(m) < 2 {
+			return 0, false
+		}
+		n, err := strconv.Atoi(m[1])
+		return n, err == nil
+	}
+	correct, hasC := matchCount(reAliveCorrect)
+	incorrect, hasI := matchCount(reAliveIncorrect)
+	failed, hasF := matchCount(reAliveFailed)
+	aliveErrs, hasE := matchCount(reAliveErrors)
+	hasSummary := hasC || hasI || hasF || hasE
+
+	if incorrect > 0 || containsAny(raw, []string{"Transformation doesn't verify!", "Target is more poisonous than source",
+		"Target's return value is more undefined", "Value mismatch", "Mismatch in memory", "Source is more defined than target"}) {
 		return formalResult{Status: aliveMiscompile, Output: clipped, ProvesBug: true}
-	case strings.Contains(raw, "Transformation seems to be correct!") && (strings.Contains(raw, "0 failed-to-prove") || err == nil):
-		return formalResult{Status: aliveVerified, Output: clipped}
-	case strings.Contains(raw, "Timeout") || strings.Contains(raw, "failed-to-prove"):
+	}
+	if hasSummary {
+		switch {
+		case failed > 0:
+			return formalResult{Status: formalTimeout, Output: clipped}
+		case aliveErrs > 0:
+			return formalResult{Status: formalUnsupported, Output: clipped}
+		case correct > 0 && runErr == nil:
+			return formalResult{Status: aliveVerified, Output: clipped}
+		default:
+			return formalResult{Status: formalUnsupported, Output: clipped}
+		}
+	}
+	switch {
+	case strings.Contains(raw, "Timeout"):
 		return formalResult{Status: formalTimeout, Output: clipped}
-	case err != nil || containsAny(raw, []string{"ERROR: Could not translate", "Unsupported ", "unsupported ",
+	case runErr != nil || containsAny(raw, []string{"ERROR:", "Unsupported ", "unsupported ",
 		"Unknown intrinsic", "Failed to parse", "syntax error", "Assertion ", "LLVM ERROR:"}):
 		return formalResult{Status: formalUnsupported, Output: clipped}
-	default:
+	case strings.Contains(raw, "Transformation seems to be correct!"):
 		return formalResult{Status: aliveVerified, Output: clipped}
+	default:
+		return formalResult{Status: formalUnsupported, Output: clipped}
 	}
 }
 
@@ -460,9 +523,11 @@ func isLLUBIUnsupported(out string) bool {
 	return containsAny(strings.ToLower(out), []string{
 		"function not found in module", "must be definition", "failed to initialize global values",
 		"failed to parse bitcode", "unsupported instruction", "unsupported intrinsic",
-		"unsupported call", "unsupported external", "calling declaration",
+		"unsupported call", "unsupported external", "unsupported constant:",
+		"unrecognized instruction:", "calling declaration",
 		"declaration function", "external function", "inline asm", "inlineasm",
-		"exceeded max steps", "step limit",
+		"exceeded max steps", "exceeded maximum number of execution steps", "step limit",
+		"maximum stack depth exceeded", "insufficient stack space", "insufficient heap space",
 	})
 }
 
@@ -507,7 +572,7 @@ func captureStandaloneTU(ctx context.Context, spec platformSpec, prof string, ba
 	if culprit.SourceFile == "" && len(culprit.Args) == 0 {
 		return "", "", ""
 	}
-	preArgs := append(stripFlags(culprit.Args, stripMode|stripOutput|stripDep|stripLink|stripLTO, ""), "-E", "-frewrite-includes", "-o", dst)
+	preArgs := append(stripFlags(culprit.Args, stripMode|stripOutput|stripDep|stripLink|stripLTO, culprit.WorkDir), "-E", "-frewrite-includes", "-o", dst)
 	if _, err := runToolInDir(ctx, driverFor(badTC, culprit.IsCXX), preArgs, culprit.WorkDir); err != nil {
 		return "", "", ""
 	}
@@ -516,14 +581,14 @@ func captureStandaloneTU(ctx context.Context, spec platformSpec, prof string, ba
 
 type reduceSpec struct {
 	reduceRelink
-	Clang      string   `json:"clang"`
-	IRFlags    []string `json:"ir_flags"`
-	BeforeLim  int      `json:"before_lim"`
-	AfterLim   int      `json:"after_lim"`
-	TestCmd    []string `json:"test_cmd"`
-	TestDir    string   `json:"test_dir"`
-	TestEnv    []string `json:"test_env"`
-	TimeoutSec int      `json:"timeout_sec"`
+	BeforeClang string   `json:"before_clang"`
+	AfterClang  string   `json:"after_clang"`
+	BeforeFlags []string `json:"before_flags"`
+	AfterFlags  []string `json:"after_flags"`
+	TestCmd     []string `json:"test_cmd"`
+	TestDir     string   `json:"test_dir"`
+	TestEnv     []string `json:"test_env"`
+	TimeoutSec  int      `json:"timeout_sec"`
 }
 
 func runLLVMReduce(ctx context.Context, o triageOpts, badWS *workspace, testID string, objRes *objectBisectResult, passRes *passBisectResult, scratchDir string) (string, string, error) {
@@ -562,22 +627,71 @@ func runLLVMReduce(ctx context.Context, o triageOpts, badWS *workspace, testID s
 		return fallback()
 	}
 
-	afterLim := passRes.CulpritPassIndex
-	if afterLim <= 0 {
-		afterLim = -1
-	}
 	timeoutSec := int(o.TestTimeout.Seconds())
 	if timeoutSec <= 0 {
 		timeoutSec = int(crossTimeout(o.Spec, 3*time.Minute).Seconds())
 	}
-	spec := reduceSpec{
-		reduceRelink: rr, Clang: o.BadTC.Clang, IRFlags: irCompileFlags(o.Spec, o.Profile, o.BadTC),
-		BeforeLim: max(0, passRes.CulpritPassIndex-1), AfterLim: afterLim,
-		TestCmd: testCmd, TestDir: testDir, TestEnv: testEnv, TimeoutSec: timeoutSec,
+
+	var tuCG []string
+	if objRes.Culprit != nil {
+		cgArgs := objRes.Culprit.Args
+		if len(cgArgs) == 0 {
+			cgArgs = objRes.Culprit.CompileRec.FullArgs
+		}
+		tuCG = tuCodegenFlags(cgArgs, objRes.Culprit.WorkDir)
 	}
-	if !evalReduceCheck(ctx, spec, inputIR) {
+	optFlags := append(irCompileFlags(o.Spec, o.Profile, o.BadTC), tuCG...)
+	o0Flags := append(irO0CompileFlags(o.Spec, o.Profile, o.BadTC), tuCG...)
+	goodOptFlags := optFlags
+	if o.GoodTC != nil {
+		goodOptFlags = append(irCompileFlags(o.Spec, o.Profile, o.GoodTC), tuCG...)
+	}
+
+	type reduceCand struct {
+		ir   string
+		spec reduceSpec
+	}
+	makeSpec := func(bClang, aClang string, bFlags, aFlags []string) reduceSpec {
+		return reduceSpec{
+			reduceRelink: rr, BeforeClang: bClang, AfterClang: aClang,
+			BeforeFlags: bFlags, AfterFlags: aFlags,
+			TestCmd: testCmd, TestDir: testDir, TestEnv: testEnv, TimeoutSec: timeoutSec,
+		}
+	}
+	var cands []reduceCand
+	cands = append(cands, reduceCand{ir: inputIR, spec: makeSpec(o.BadTC.Clang, o.BadTC.Clang, o0Flags, optFlags)})
+	if o.GoodTC != nil && o.GoodTC.Clang != "" {
+		cands = append(cands, reduceCand{ir: inputIR, spec: makeSpec(o.GoodTC.Clang, o.BadTC.Clang, goodOptFlags, optFlags)})
+	}
+
+	var chosenIR string
+	var spec reduceSpec
+	found := false
+	for _, c := range cands {
+		if evalReduceCheck(ctx, c.spec, c.ir) {
+			chosenIR, spec, found = c.ir, c.spec, true
+			break
+		}
+	}
+	if !found && objRes.Culprit != nil {
+		preoptIR := filepath.Join(scratchDir, "preopt.ll")
+		if _, err := compileCulpritWithBisect(ctx, o.Spec, o.BadTC, objRes.Culprit, 0, "ir", preoptIR, false); err == nil && fileNonEmpty(preoptIR) {
+			preCands := []reduceCand{{ir: preoptIR, spec: makeSpec(o.BadTC.Clang, o.BadTC.Clang, o0Flags, optFlags)}}
+			if o.GoodTC != nil && o.GoodTC.Clang != "" {
+				preCands = append(preCands, reduceCand{ir: preoptIR, spec: makeSpec(o.GoodTC.Clang, o.BadTC.Clang, goodOptFlags, optFlags)})
+			}
+			for _, c := range preCands {
+				if evalReduceCheck(ctx, c.spec, c.ir) {
+					chosenIR, spec, found = c.ir, c.spec, true
+					break
+				}
+			}
+		}
+	}
+	if !found {
 		return fallback()
 	}
+
 	specPath := filepath.Join(scratchDir, "reduce_spec.json")
 	if err := writeJSONAtomic(specPath, spec); err != nil {
 		return fallback()
@@ -604,8 +718,9 @@ func runLLVMReduce(ctx context.Context, o triageOpts, badWS *workspace, testID s
 	redCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(redCtx, o.BadTC.LLVMReduce, "-j", "1",
-		fmt.Sprintf("--max-pass-iterations=%d", maxIter), "--test="+scriptPath, "-o", outIR, inputIR)
+		fmt.Sprintf("--max-pass-iterations=%d", maxIter), "--test="+scriptPath, "-o", outIR, chosenIR)
 	cmd.Dir = scratchDir
+	setCmdProcessGroup(cmd)
 	_ = cmd.Run()
 
 	raw, err := os.ReadFile(outIR)
@@ -636,10 +751,9 @@ func cmdReduceCheck(ctx context.Context, args []string, stderr io.Writer) error 
 }
 
 func evalReduceCheck(ctx context.Context, spec reduceSpec, candIR string) bool {
-	step := func(limit int) (pass, ok bool) {
-		args := append(slices.Clone(spec.IRFlags), "-x", "ir", "-c", candIR, "-o", spec.CandObj,
-			"-mllvm", fmt.Sprintf("-opt-bisect-limit=%d", limit))
-		if _, err := runToolInDir(ctx, spec.Clang, args, ""); err != nil {
+	step := func(clang string, flags []string) (pass, ok bool) {
+		args := append(slices.Clone(flags), "-x", "ir", "-c", candIR, "-o", spec.CandObj)
+		if _, err := runToolInDir(ctx, clang, args, ""); err != nil {
 			return false, false
 		}
 		if spec.ArOut != "" && createStaticArchive(ctx, spec.ArTool, spec.RanlibTool, spec.ArOut, spec.ArMembers) != nil {
@@ -654,11 +768,11 @@ func evalReduceCheck(ctx context.Context, spec reduceSpec, candIR string) bool {
 		}
 		return runCmd(ctx, spec.TestCmd, spec.TestDir, spec.TestEnv, to).Passed, true
 	}
-	refPass, ok := step(spec.BeforeLim)
+	refPass, ok := step(spec.BeforeClang, spec.BeforeFlags)
 	if !ok || !refPass {
 		return false
 	}
-	badPass, ok := step(spec.AfterLim)
+	badPass, ok := step(spec.AfterClang, spec.AfterFlags)
 	return ok && !badPass
 }
 
@@ -681,7 +795,19 @@ func irCompileFlags(spec platformSpec, prof string, tc *toolchain) []string {
 	return flags
 }
 
-func packageReproducerBundle(ctx context.Context, inc *incident, outDir, tuPath, tuName, beforeIR, afterIR, reducedIR string) (string, error) {
+func irO0CompileFlags(spec platformSpec, prof string, tc *toolchain) []string {
+	flags := append(slices.Clone(crossTargetArgs(spec)), "-O0")
+	if prof == profReleaseLTO {
+		flags = append(flags, spec.BaselineFlags...)
+	}
+	flags = append(flags, "-Wno-error")
+	if spec.IsDarwin && tc != nil && tc.SDKRoot != "" {
+		flags = append(flags, "-isysroot", tc.SDKRoot)
+	}
+	return flags
+}
+
+func packageReproducerBundle(ctx context.Context, inc *incident, outDir, tuPath, tuName, beforeIR, afterIR, reducedIR, beforeAsm, afterAsm string) (string, error) {
 	if inc == nil || inc.ID == "" {
 		return "", errors.New("incident with non-empty ID is required")
 	}
@@ -715,11 +841,19 @@ func packageReproducerBundle(ctx context.Context, inc *incident, outDir, tuPath,
 		entries = append(entries, entry{name: "standalone_tu.c", mode: 0o644, data: []byte("/* Bitcode/LTO module reproduction; see before.ll, after.ll, and reduced.ll */\n")})
 	}
 	for _, f := range [][2]string{{"before.ll", beforeIR}, {"after.ll", afterIR}, {"reduced.ll", reducedIR}} {
-		var b []byte
 		if f[1] != "" && fileExists(f[1]) {
-			b, _ = os.ReadFile(f[1])
+			b, _ := os.ReadFile(f[1])
+			entries = append(entries, entry{name: f[0], mode: 0o644, data: b})
+		} else if f[0] == "reduced.ll" {
+			entries = append(entries, entry{name: f[0], mode: 0o644})
 		}
-		entries = append(entries, entry{name: f[0], mode: 0o644, data: b})
+	}
+	for _, f := range [][2]string{{"before.s", beforeAsm}, {"after.s", afterAsm}} {
+		if f[1] != "" && fileExists(f[1]) {
+			if b, err := os.ReadFile(f[1]); err == nil {
+				entries = append(entries, entry{name: f[0], mode: 0o644, data: b})
+			}
+		}
 	}
 	slices.SortFunc(entries, func(a, b entry) int { return strings.Compare(a.name, b.name) })
 
@@ -765,15 +899,30 @@ func generateReproScript(inc *incident) string {
 	if inc.StandaloneReproCmd != "" {
 		fmt.Fprintf(&b, "# standalone: %s\n", oneLine(inc.StandaloneReproCmd))
 	}
-	targetFlag := crossTargetFlag(inc.Affected)
-	b.WriteString("\nCLANG=\"${CLANG:-clang}\"\nALIVE_TV=\"${ALIVE_TV:-alive-tv}\"\n\n")
-	if inc.CulpritPassIndex > 0 {
-		fmt.Fprintf(&b, "\"$CLANG\"%s -O2 -x ir -c reduced.ll -o good_limit.o -mllvm -opt-bisect-limit=%d\n", targetFlag, inc.CulpritPassIndex-1)
-		fmt.Fprintf(&b, "\"$CLANG\"%s -O2 -x ir -c reduced.ll -o bad_limit.o -mllvm -opt-bisect-limit=%d\n", targetFlag, inc.CulpritPassIndex)
-	} else {
-		fmt.Fprintf(&b, "\"$CLANG\"%s -O2 -x ir -c reduced.ll -o bad_limit.o\n", targetFlag)
+	if !inc.ASanUBSanClean && slices.ContainsFunc(inc.Affected, func(a affected) bool { return a.Platform == platLinuxRISCV64 }) {
+		b.WriteString("# sanitizers: ubsan only (asan disabled on linux-riscv64)\n")
 	}
-	b.WriteString("\nif command -v \"$ALIVE_TV\" >/dev/null 2>&1; then\n  \"$ALIVE_TV\" --smt-to=30000 before.ll after.ll || true\nfi\n")
+
+	prof := profDistroO2
+	var spec platformSpec
+	if len(inc.Affected) > 0 {
+		if inc.Affected[0].Profile != "" {
+			prof = inc.Affected[0].Profile
+		}
+		spec, _ = lookupPlatform(inc.Affected[0].Platform)
+	}
+	targetFlag := crossTargetFlag(inc.Affected)
+	o0Flags := []string{"-O0"}
+	optFlags := []string{"-O2"}
+	if prof == profReleaseLTO {
+		o0Flags = append(o0Flags, spec.BaselineFlags...)
+		optFlags = append([]string{"-O3"}, spec.BaselineFlags...)
+	}
+
+	b.WriteString("\nCLANG=\"${CLANG:-clang}\"\nALIVE_TV=\"${ALIVE_TV:-alive-tv}\"\n\n")
+	fmt.Fprintf(&b, "\"$CLANG\"%s %s -x ir -c reduced.ll -o good.o\n", targetFlag, joinFlags(o0Flags))
+	fmt.Fprintf(&b, "\"$CLANG\"%s %s -x ir -c reduced.ll -o bad.o\n", targetFlag, joinFlags(optFlags))
+	b.WriteString("\nif [ -s before.ll ] && [ -s after.ll ] && command -v \"$ALIVE_TV\" >/dev/null 2>&1; then\n  \"$ALIVE_TV\" --smt-to=30000 before.ll after.ll || true\nfi\n")
 	return b.String()
 }
 
@@ -805,7 +954,15 @@ func buildIncidentID(pkg, plat, prof, testID, badSHA, culpritSHA string) string 
 		h := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%s|%s", pkg, plat, prof, testID)))
 		short = hex.EncodeToString(h[:4])
 	}
-	return firstNonEmpty(sanitizeSlug(pkg), "incident") + "-" + sanitizeSlug(short)
+	parts := []string{firstNonEmpty(sanitizeSlug(pkg), "incident")}
+	if s := sanitizeSlug(plat); s != "" {
+		parts = append(parts, s)
+	}
+	if s := sanitizeSlug(prof); s != "" {
+		parts = append(parts, s)
+	}
+	parts = append(parts, sanitizeSlug(short))
+	return strings.Join(parts, "-")
 }
 
 func buildIncidentTitle(pkg, passName, culpritFunc, culpritTU string) string {

@@ -132,12 +132,15 @@ jobs:
 
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
+        env:
+          PKG: ${{ matrix.package }}
+          PLAT: ${{ matrix.platform }}
         run: |
           pkgs="ccache clang lld ninja-build"
-          if [ "${{ matrix.package }}" = "dav1d" ]; then
+          if [ "${PKG}" = "dav1d" ]; then
             pkgs="$pkgs meson"
           fi
-          if [ "${{ matrix.platform }}" = "linux-riscv64" ]; then
+          if [ "${PLAT}" = "linux-riscv64" ]; then
             pkgs="$pkgs libc6-dev-riscv64-cross libstdc++-13-dev-riscv64-cross libgcc-13-dev-riscv64-cross"
           fi
           sudo apt-get -o Acquire::Retries=5 update -qq
@@ -152,9 +155,11 @@ jobs:
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
+        env:
+          PKG: ${{ matrix.package }}
         run: |
           pkgs="ccache"
-          if [ "${{ matrix.package }}" = "dav1d" ]; then
+          if [ "${PKG}" = "dav1d" ]; then
             pkgs="$pkgs meson"
           fi
           brew install $pkgs
@@ -216,23 +221,29 @@ jobs:
           CCACHE_DIR: ${{ runner.temp }}/ccache
           CCACHE_MAXSIZE: 3G
           CCACHE_COMPRESS: 'true'
+          TEST_ID: ${{ matrix.test_id }}
+          PKG: ${{ matrix.package }}
+          PLAT: ${{ matrix.platform }}
+          PROF: ${{ matrix.profile }}
+          GOOD_SHA: ${{ matrix.good_sha }}
+          BAD_SHA: ${{ matrix.bad_sha }}
         run: |
           set -euo pipefail
           mkdir -p out/dist out/store out/ir
           extra_args=()
-          if [ -n "${{ matrix.test_id }}" ]; then
-            extra_args+=(-test "${{ matrix.test_id }}")
+          if [ -n "${TEST_ID}" ]; then
+            extra_args+=(-test "${TEST_ID}")
           fi
 
           ./lmc triage \
             -corpus corpus \
-            -pkg "${{ matrix.package }}" \
-            -plat "${{ matrix.platform }}" \
-            -prof "${{ matrix.profile }}" \
+            -pkg "${PKG}" \
+            -plat "${PLAT}" \
+            -prof "${PROF}" \
             -good-tc "${RUNNER_TEMP}/tc-good/bin" \
             -bad-tc "${RUNNER_TEMP}/tc-bad/bin" \
-            -good "${{ matrix.good_sha }}" \
-            -bad "${{ matrix.bad_sha }}" \
+            -good "${GOOD_SHA}" \
+            -bad "${BAD_SHA}" \
             -llvm "${RUNNER_TEMP}/llvm-project" \
             -dir "${RUNNER_TEMP}/triage-work" \
             -cache "${RUNNER_TEMP}/lmc-cache" \
@@ -265,6 +276,10 @@ jobs:
         uses: actions/checkout@v7
         with:
           ref: master
+
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
 
       - name: Download triage artifacts
         continue-on-error: true
@@ -393,6 +408,24 @@ jobs:
           name: triaged-verified
           path: verified
 
+      - name: Check verified triage artifacts
+        id: check_verified
+        run: |
+          mkdir -p verified
+          if [ -n "$(find verified -name 'incident.json' -print -quit)" ]; then
+            echo "has_incidents=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_incidents=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fallback download raw triage artifacts
+        if: steps.check_verified.outputs.has_incidents != 'true'
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: triage-*
+          path: verified
+
       - name: Checkout orphan data and gh-pages branches
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -407,7 +440,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p verified
-          if ! find verified -name 'incident.json' | grep -q .; then
+          if [ -z "$(find verified -name 'incident.json' -print -quit)" ]; then
             exit 0
           fi
 
@@ -440,12 +473,13 @@ jobs:
       - name: Sync issues
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BAD_SHA: ${{ inputs.bad_sha }}
         run: |
           ./lmc sync-issues \
             -store _data \
-            -repo "${{ github.repository }}" \
+            -repo "${GH_REPO}" \
             -url "https://llvm-miscompile-canary.glendalab.com" \
-            -sha "${{ inputs.bad_sha }}"
+            -sha "${BAD_SHA}"
 
       - name: Build site
         run: |

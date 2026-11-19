@@ -12,6 +12,17 @@ case "$(uname -s)" in
     ;;
 esac
 
+# align interpreter frames to 8 bytes so nested calls stay ubsan-clean on 64-bit
+python3 - "$SRC_DIR/core/iwasm/interpreter/wasm_interp.h" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = "return align_uint(frame_size, 4);"
+new = "return align_uint(frame_size, 8);"
+if old in s:
+    open(p, "w").write(s.replace(old, new, 1))
+PY
+
 set -- \
   -S "$PLAT_DIR" \
   -B "$BUILD_DIR" \
@@ -19,6 +30,7 @@ set -- \
   -DCMAKE_C_COMPILER="${CC:-cc}" \
   -DCMAKE_CXX_COMPILER="${CXX:-c++}" \
   -DCMAKE_ASM_COMPILER="${CC:-cc}" \
+  -DCMAKE_C_FLAGS=-DWASM_CPU_SUPPORTS_UNALIGNED_ADDR_ACCESS=0 \
   -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
   -DBUILD_SHARED_LIBS=OFF \
   -DWAMR_BUILD_INTERP=1 \

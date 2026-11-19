@@ -16,11 +16,13 @@ case "$test_id" in
     ;;
 esac
 
-if ./crypto/crypto_test --gtest_list_tests --gtest_filter="$test_id" 2>/dev/null | grep -q '^  [A-Za-z0-9_]'; then
+list=$(./crypto/crypto_test --gtest_list_tests --gtest_filter="$test_id")
+if printf '%s\n' "$list" | grep -q '^  [A-Za-z0-9_]'; then
   exec ./crypto/crypto_test --gtest_filter="$test_id"
 fi
 
-if ./ssl/ssl_test --gtest_list_tests --gtest_filter="$test_id" 2>/dev/null | grep -q '^  [A-Za-z0-9_]'; then
+list=$(./ssl/ssl_test --gtest_list_tests --gtest_filter="$test_id")
+if printf '%s\n' "$list" | grep -q '^  [A-Za-z0-9_]'; then
   exec ./ssl/ssl_test --gtest_filter="$test_id"
 fi
 
