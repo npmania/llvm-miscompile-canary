@@ -36,6 +36,7 @@ if [ "${LMC_PLATFORM:-}" = "linux-riscv64" ] && [ "$(uname -m)" != "riscv64" ]; 
     --build="$(CC_FOR_BUILD="${LMC_REAL_CC:-cc}" "$SRC_DIR/config.guess")" \
     --host=riscv64-linux-gnu \
     --with-build-python="$HOST_PY_DIR/python" \
+    PKG_CONFIG=false \
     ac_cv_file__dev_ptmx=yes \
     ac_cv_file__dev_ptc=no \
     ac_cv_buggy_getaddrinfo=no

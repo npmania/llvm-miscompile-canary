@@ -110,6 +110,7 @@ func setupCrossWorkspace(workDir string, spec platformSpec, env []string) ([]str
 	}
 	env = append(env, "CMAKE_TOOLCHAIN_FILE="+tcFile)
 	if spec.ID == platLinuxRISCV64 {
+		env = append(env, "PKG_CONFIG_LIBDIR=/usr/riscv64-linux-gnu/lib/pkgconfig", "PKG_CONFIG_PATH=")
 		if os.Getenv("QEMU_LD_PREFIX") == "" {
 			if info, err := os.Stat("/usr/riscv64-linux-gnu"); err == nil && info.IsDir() {
 				env = append(env, "QEMU_LD_PREFIX=/usr/riscv64-linux-gnu")
