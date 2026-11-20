@@ -21,7 +21,7 @@ var tmplFS embed.FS
 var siteTmpl = template.Must(template.ParseFS(tmplFS, "templates/*.html"))
 
 type corpusEntry struct{ Name, Category, Repo, Version, Lang, SmokeTest string }
-type navHeader struct{ RootPrefix, LatestSHA12, UpdatedUTC, UpdatedISO string }
+type navHeader struct{ LatestSHA12, UpdatedUTC, UpdatedISO string }
 type matrixColumn struct{ Platform, Profile, Header string }
 type matrixCell struct{ Kind, Text, Href string }
 type sweepLogEntry struct{ Anchor, Heading, Status, FailedTests, Excerpt string }
@@ -92,7 +92,7 @@ func generateSite(storeDir, outDir, corpusDir string) error {
 		if err := renderPage(filepath.Join(logsDir, "index.html"), "logs.html", struct {
 			Nav     navHeader
 			Entries []sweepLogEntry
-		}{resolveNav(st, sweeps, "../"), logEntries}); err != nil {
+		}{resolveNav(st, sweeps), logEntries}); err != nil {
 			return err
 		}
 	} else {
@@ -101,7 +101,7 @@ func generateSite(storeDir, outDir, corpusDir string) error {
 	if err := renderPage(filepath.Join(outDir, "corpus", "index.html"), "corpus.html", struct {
 		Nav      navHeader
 		Packages []corpusEntry
-	}{resolveNav(st, sweeps, "../"), catalog}); err != nil {
+	}{resolveNav(st, sweeps), catalog}); err != nil {
 		return err
 	}
 	for _, inc := range incs {
@@ -149,7 +149,7 @@ func loadSiteCatalog(storeDir, corpusDir string) ([]corpusEntry, error) {
 	return out, nil
 }
 
-func resolveNav(st *state, sweeps []*sweep, prefix string) navHeader {
+func resolveNav(st *state, sweeps []*sweep) navHeader {
 	sha := "-"
 	var ts time.Time
 	if len(sweeps) > 0 {
@@ -164,9 +164,9 @@ func resolveNav(st *state, sweeps []*sweep, prefix string) navHeader {
 		}
 	}
 	if ts.IsZero() {
-		return navHeader{prefix, sha, "-", ""}
+		return navHeader{sha, "-", ""}
 	}
-	return navHeader{prefix, sha, ts.UTC().Format("2006-01-02 15:04 UTC"), ts.UTC().Format(time.RFC3339)}
+	return navHeader{sha, ts.UTC().Format("2006-01-02 15:04 UTC"), ts.UTC().Format(time.RFC3339)}
 }
 
 func buildIndexData(st *state, sweeps []*sweep, incs []*incident, catalog []corpusEntry) (any, []sweepLogEntry) {
@@ -257,7 +257,7 @@ func buildIndexData(st *state, sweeps []*sweep, incs []*incident, catalog []corp
 				incID = cmp.Or(incID, openByTarget[lk], closedByTarget[lk])
 				href := ""
 				if incID != "" {
-					href = "incidents/" + incID + "/index.html"
+					href = "/incidents/" + incID + "/"
 				} else {
 					excerpt := clipCode(strings.TrimSpace(sanitizeCode(strings.ReplaceAll(res.ErrorExcerpt, "\r\n", "\n"))), 8000)
 					var tests []string
@@ -284,7 +284,7 @@ func buildIndexData(st *state, sweeps []*sweep, incs []*incident, catalog []corp
 							FailedTests: failed,
 							Excerpt:     excerpt,
 						})
-						href = "logs/index.html#" + anchor
+						href = "/logs/#" + anchor
 					}
 				}
 				row.Cells = append(row.Cells, matrixCell{kind, text, href})
@@ -300,7 +300,7 @@ func buildIndexData(st *state, sweeps []*sweep, incs []*incident, catalog []corp
 		ResolvedIncidents []incidentRowView
 		Columns           []matrixColumn
 		Rows              []matrixRow
-	}{resolveNav(st, sweeps, ""), openRows, resolvedRows, matrixCols, rows}, logEntries
+	}{resolveNav(st, sweeps), openRows, resolvedRows, matrixCols, rows}, logEntries
 }
 
 func logAnchor(pkg, plat, prof string) string {
@@ -327,7 +327,7 @@ func buildIncidentData(st *state, sweeps []*sweep, inc *incident) any {
 	for i, r := range rawRows {
 		rows[i] = kvRow{template.HTML(r[0]), template.HTML(r[1])}
 	}
-	nav := resolveNav(st, sweeps, "../../")
+	nav := resolveNav(st, sweeps)
 	if nav.LatestSHA12 == "-" {
 		nav.LatestSHA12 = cmp.Or(displaySHA(inc.BadSHA), "-")
 		if !inc.UpdatedAt.IsZero() {

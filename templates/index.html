@@ -4,10 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>llvm-miscompile-canary</title>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <header><strong>llvm-miscompile-canary</strong> · trunk <code>{{.Nav.LatestSHA12}}</code> · <time{{if .Nav.UpdatedISO}} datetime="{{.Nav.UpdatedISO}}"{{end}}>{{.Nav.UpdatedUTC}}</time> · <a href="{{.Nav.RootPrefix}}index.html">status</a> · <a href="{{.Nav.RootPrefix}}corpus/index.html">corpus</a> · <a href="https://github.com/npmania/llvm-miscompile-canary" rel="noopener">git</a></header>
+  <header><strong>llvm-miscompile-canary</strong> · trunk <code>{{.Nav.LatestSHA12}}</code> · <time{{if .Nav.UpdatedISO}} datetime="{{.Nav.UpdatedISO}}"{{end}}>{{.Nav.UpdatedUTC}}</time> · <a href="/">status</a> · <a href="/corpus/">corpus</a> · <a href="https://github.com/npmania/llvm-miscompile-canary" rel="noopener">git</a></header>
   <main>
     {{- if .OpenIncidents}}
     <h2>Open</h2>
@@ -26,7 +26,7 @@
         <tbody>
           {{- range .OpenIncidents}}
           <tr>
-            <td class="mono nowrap"><a href="incidents/{{.ID}}/index.html">{{.ID}}</a></td>
+            <td class="mono nowrap"><a href="/incidents/{{.ID}}/">{{.ID}}</a></td>
             <td class="mono nowrap">{{.CulpritSHA}}</td>
             <td class="mono nowrap">{{.Pass}}</td>
             <td class="mono nowrap">{{.Function}}</td>
@@ -88,7 +88,7 @@
         <tbody>
           {{- range .ResolvedIncidents}}
           <tr>
-            <td class="mono nowrap"><a href="incidents/{{.ID}}/index.html">{{.ID}}</a></td>
+            <td class="mono nowrap"><a href="/incidents/{{.ID}}/">{{.ID}}</a></td>
             <td class="mono nowrap">{{.CulpritSHA}}</td>
             <td class="mono nowrap">{{.FixedSHA}}</td>
             <td class="mono nowrap">{{.Pass}}</td>

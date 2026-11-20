@@ -446,7 +446,7 @@ func TestSiteGenerate(t *testing.T) {
 		t.Errorf("missing CNAME, .nojekyll, or style.css")
 	}
 	idx := read("index.html")
-	for _, w := range []string{"trunk <code>0212d77fa269</code>", "<h2>Open</h2>", "<h2>Corpus</h2>", "<h2>Resolved</h2>", `<a class="fail" href="incidents/inc-open-1/index.html">fail</a>`, "18s", "err"} {
+	for _, w := range []string{"trunk <code>0212d77fa269</code>", "<h2>Open</h2>", "<h2>Corpus</h2>", "<h2>Resolved</h2>", `<a class="fail" href="/incidents/inc-open-1/">fail</a>`, `<a href="/">status</a>`, `<a href="/corpus/">corpus</a>`, `<link rel="stylesheet" href="/style.css">`, "18s", "err"} {
 		if !strings.Contains(idx, w) {
 			t.Errorf("index.html missing %q", w)
 		}
@@ -476,12 +476,26 @@ func TestSiteGenerate(t *testing.T) {
 	reHref := regexp.MustCompile(`href="([^"]+)"`)
 	for _, rel := range []string{"index.html", filepath.Join("corpus", "index.html"), filepath.Join("incidents", "inc-open-1", "index.html")} {
 		p := filepath.Join(outDir, rel)
-		for _, m := range reHref.FindAllStringSubmatch(read(rel), -1) {
+		body := read(rel)
+		for _, m := range reHref.FindAllStringSubmatch(body, -1) {
 			if strings.HasPrefix(m[1], "http://") || strings.HasPrefix(m[1], "https://") || strings.HasPrefix(m[1], "#") {
 				continue
 			}
-			if tgt := filepath.Clean(filepath.Join(filepath.Dir(p), m[1])); !isWithinDir(outDir, tgt) || !fileExists(tgt) {
-				t.Errorf("%s broken link %q", rel, m[1])
+			if strings.Contains(m[1], "index.html") {
+				t.Errorf("%s contains non-canonical index.html link %q", rel, m[1])
+			}
+			hrefPath, _, _ := strings.Cut(m[1], "#")
+			var tgt string
+			if strings.HasPrefix(hrefPath, "/") {
+				tgt = filepath.Clean(filepath.Join(outDir, strings.TrimPrefix(hrefPath, "/")))
+			} else {
+				tgt = filepath.Clean(filepath.Join(filepath.Dir(p), hrefPath))
+			}
+			if strings.HasSuffix(hrefPath, "/") {
+				tgt = filepath.Join(tgt, "index.html")
+			}
+			if !isWithinDir(outDir, tgt) || !fileExists(tgt) {
+				t.Errorf("%s broken link %q -> %s", rel, m[1], tgt)
 			}
 		}
 	}
@@ -1034,9 +1048,9 @@ func TestBuildFailLifecycle(t *testing.T) {
 		t.Errorf("index.html failed checkNoCrossRefs: %v", err)
 	}
 	for _, want := range []string{
-		fmt.Sprintf(`<a class="err" href="incidents/%s/index.html">err</a>`, zstdInc.ID),
-		fmt.Sprintf(`<a class="err" href="incidents/%s/index.html">err</a>`, luaInc.ID),
-		`<a class="err" href="logs/index.html#log-never-passed-linux-x86_64-distro-o2">err</a>`,
+		fmt.Sprintf(`<a class="err" href="/incidents/%s/">err</a>`, zstdInc.ID),
+		fmt.Sprintf(`<a class="err" href="/incidents/%s/">err</a>`, luaInc.ID),
+		`<a class="err" href="/logs/#log-never-passed-linux-x86_64-distro-o2">err</a>`,
 		">build (ice)<",
 		">build<",
 		">abcdef012345<",
@@ -1312,9 +1326,9 @@ func TestHumanIssueCloseReopenAndSuppression(t *testing.T) {
 		"<h2>Resolved</h2>",
 		">package-bug, upstream<",
 		">closed<",
-		fmt.Sprintf(`<a class="err" href="incidents/%s/index.html">err</a>`, buildInc.ID),
-		fmt.Sprintf(`<a class="err" href="incidents/%s/index.html">err</a>`, plainBuildInc.ID),
-		fmt.Sprintf(`<a class="fail" href="incidents/%s/index.html">fail</a>`, misInc.ID),
+		fmt.Sprintf(`<a class="err" href="/incidents/%s/">err</a>`, buildInc.ID),
+		fmt.Sprintf(`<a class="err" href="/incidents/%s/">err</a>`, plainBuildInc.ID),
+		fmt.Sprintf(`<a class="fail" href="/incidents/%s/">fail</a>`, misInc.ID),
 	} {
 		if !strings.Contains(idxClosed, want) {
 			t.Errorf("closed index.html missing %q", want)
@@ -1697,18 +1711,18 @@ func TestSiteFailureLogsPage(t *testing.T) {
 		t.Fatalf("index.html cross-ref: %v", err)
 	}
 	for _, want := range []string{
-		`<a class="err" href="logs/index.html#log-cpython-linux-riscv64-distro-o2">err</a>`,
-		`<a class="err" href="logs/index.html#log-lua-linux-x86_64-distro-o2">err</a>`,
-		`<a class="fail" href="logs/index.html#log-zstd-linux-x86_64-release-lto">fail</a>`,
-		`<a class="err" href="logs/index.html#log-foo-bar-linux-x86_64-distro-o2">err</a>`,
-		`<a class="err" href="logs/index.html#log-foo-bar-linux-x86_64-distro-o2-2">err</a>`,
+		`<a class="err" href="/logs/#log-cpython-linux-riscv64-distro-o2">err</a>`,
+		`<a class="err" href="/logs/#log-lua-linux-x86_64-distro-o2">err</a>`,
+		`<a class="fail" href="/logs/#log-zstd-linux-x86_64-release-lto">fail</a>`,
+		`<a class="err" href="/logs/#log-foo-bar-linux-x86_64-distro-o2">err</a>`,
+		`<a class="err" href="/logs/#log-foo-bar-linux-x86_64-distro-o2-2">err</a>`,
 		`<span class="err">err</span>`,
 	} {
 		if !strings.Contains(idx, want) {
 			t.Errorf("index.html missing %q:\n%s", want, idx)
 		}
 	}
-	for _, forbid := range []string{`href="incidents/inc-stale-closed/index.html">err</a>`, `href="incidents/missing-inc/index.html"`, `href="incidents/./index.html"`} {
+	for _, forbid := range []string{`href="/incidents/inc-stale-closed/">err</a>`, `href="/incidents/missing-inc/"`, `href="/incidents/./"`, `index.html`} {
 		if strings.Contains(idx, forbid) {
 			t.Errorf("index.html should not contain %q:\n%s", forbid, idx)
 		}
@@ -1719,10 +1733,13 @@ func TestSiteFailureLogsPage(t *testing.T) {
 		t.Fatalf("expected logs/index.html: %v", err)
 	}
 	logsPage := string(logsRaw)
-	if strings.Contains(logsPage, "<script>") || strings.Contains(strings.ToLower(logsPage), "github.com/llvm/") {
-		t.Fatalf("logs/index.html unsanitized:\n%s", logsPage)
+	if strings.Contains(logsPage, "<script>") || strings.Contains(strings.ToLower(logsPage), "github.com/llvm/") || strings.Contains(logsPage, "index.html") {
+		t.Fatalf("logs/index.html unsanitized or has index.html link:\n%s", logsPage)
 	}
 	for _, want := range []string{
+		`<link rel="stylesheet" href="/style.css">`,
+		`<a href="/">status</a>`,
+		`<a href="/corpus/">corpus</a>`,
 		`id="log-cpython-linux-riscv64-distro-o2"`,
 		`cpython (linux-riscv64 / -O2)`,
 		`build failure`,
