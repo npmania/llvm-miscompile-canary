@@ -58,9 +58,9 @@
             <td class="mono muted nowrap">{{if .Version}}{{.Version}}{{else}}-{{end}}</td>
             {{- range .Cells}}
             {{- if eq .Kind "fail"}}
-            <td class="mono num">{{if .IncidentID}}<a class="fail" href="incidents/{{.IncidentID}}/index.html">fail</a>{{else}}<span class="fail">fail</span>{{end}}</td>
+            <td class="mono num">{{if .Href}}<a class="fail" href="{{.Href}}">fail</a>{{else}}<span class="fail">fail</span>{{end}}</td>
             {{- else if eq .Kind "err"}}
-            <td class="mono num">{{if .IncidentID}}<a class="err" href="incidents/{{.IncidentID}}/index.html">err</a>{{else}}<span class="err">err</span>{{end}}</td>
+            <td class="mono num">{{if .Href}}<a class="err" href="{{.Href}}">err</a>{{else}}<span class="err">err</span>{{end}}</td>
             {{- else}}
             <td class="mono num muted">{{.Text}}</td>
             {{- end}}

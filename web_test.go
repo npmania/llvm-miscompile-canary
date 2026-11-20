@@ -1036,7 +1036,7 @@ func TestBuildFailLifecycle(t *testing.T) {
 	for _, want := range []string{
 		fmt.Sprintf(`<a class="err" href="incidents/%s/index.html">err</a>`, zstdInc.ID),
 		fmt.Sprintf(`<a class="err" href="incidents/%s/index.html">err</a>`, luaInc.ID),
-		`<span class="err">err</span>`,
+		`<a class="err" href="logs/index.html#log-never-passed-linux-x86_64-distro-o2">err</a>`,
 		">build (ice)<",
 		">build<",
 		">abcdef012345<",
@@ -1308,13 +1308,20 @@ func TestHumanIssueCloseReopenAndSuppression(t *testing.T) {
 	if strings.Contains(idxClosed, "<h2>Open</h2>") {
 		t.Errorf("closed incidents should not appear under Open:\n%s", idxClosed)
 	}
-	for _, want := range []string{"<h2>Resolved</h2>", ">package-bug, upstream<", ">closed<", `<span class="err">err</span>`} {
+	for _, want := range []string{
+		"<h2>Resolved</h2>",
+		">package-bug, upstream<",
+		">closed<",
+		fmt.Sprintf(`<a class="err" href="incidents/%s/index.html">err</a>`, buildInc.ID),
+		fmt.Sprintf(`<a class="err" href="incidents/%s/index.html">err</a>`, plainBuildInc.ID),
+		fmt.Sprintf(`<a class="fail" href="incidents/%s/index.html">fail</a>`, misInc.ID),
+	} {
 		if !strings.Contains(idxClosed, want) {
 			t.Errorf("closed index.html missing %q", want)
 		}
 	}
-	if strings.Contains(idxClosed, fmt.Sprintf(`href="incidents/%s/index.html">err</a>`, buildInc.ID)) {
-		t.Errorf("closed build_fail should not link err matrix cell")
+	if fileExists(filepath.Join(siteClosed, "logs", "index.html")) {
+		t.Errorf("closed incidents with matching targets should not generate unlinked logs page")
 	}
 	zstdClosedPageRaw, err := os.ReadFile(filepath.Join(siteClosed, "incidents", buildInc.ID, "index.html"))
 	if err != nil {
@@ -1636,5 +1643,123 @@ func TestBuildFailDedupAndLabelSync(t *testing.T) {
 	xssIdx := string(xssIdxRaw)
 	if strings.Contains(xssIdx, "<script>") || !strings.Contains(xssIdx, "&lt;script&gt;alert(2)&lt;/script&gt;, a&amp;b") {
 		t.Fatalf("index page script escaping failed:\n%s", xssIdx)
+	}
+}
+
+func TestSiteFailureLogsPage(t *testing.T) {
+	storeDir, outDir := t.TempDir(), t.TempDir()
+	t1 := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	goodOld := "1111111111111111111111111111111111111111"
+	goodNew := "2222222222222222222222222222222222222222"
+	badSHA := "3333333333333333333333333333333333333333"
+
+	staleClosed := &incident{
+		ID: "inc-stale-closed", Kind: incidentKindBuildFail, Status: incidentClosed,
+		GoodSHA: goodOld, BadSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Affected: []affected{{Package: "lua", Platform: platLinuxX86, Profile: profDistroO2, GoodSHA: goodOld}},
+	}
+	if _, err := saveIncident(storeDir, staleClosed); err != nil {
+		t.Fatal(err)
+	}
+	st := &state{
+		LastGoodByTarget: map[string]string{
+			targetKey("lua", platLinuxX86, profDistroO2): goodNew,
+		},
+	}
+	sw := &sweep{
+		ID: formatSweepID(t1, badSHA), LLVMCommit: badSHA, StartedAt: t1, CompletedAt: t1,
+		Results: []pkgResult{
+			{Package: "cpython", Platform: platLinuxRISCV64, Profile: profDistroO2, Status: statusBuildFail, ErrorExcerpt: "Modules/_ctypes/_ctypes.c:119: fatal error: 'ffi.h' <script>x</script> https://github.com/llvm/llvm-project/issues/1"},
+			{Package: "lua", Platform: platLinuxX86, Profile: profDistroO2, Status: statusBuildFail, ErrorExcerpt: "PLEASE submit a bug report to https://github.com/llvm/llvm-project/issues/"},
+			{Package: "zstd", Platform: platLinuxX86, Profile: profReleaseLTO, Status: statusTestFail, FailedTests: []string{"fuzzer_test"}, ErrorExcerpt: "assertion failed"},
+			{Package: "opus", Platform: platDarwinARM, Profile: profDistroO2, Status: statusBuildFail},
+			{Package: "foo-bar", Platform: platLinuxX86, Profile: profDistroO2, Status: statusBuildFail, IncidentID: "missing-inc", ErrorExcerpt: "foo-bar err"},
+			{Package: "foo.bar", Platform: platLinuxX86, Profile: profDistroO2, Status: statusBuildFail, IncidentID: ".", ErrorExcerpt: "foo.bar err"},
+		},
+	}
+	if _, err := saveSweep(storeDir, sw); err != nil {
+		t.Fatal(err)
+	}
+	recordSweep(st, *sw, []*incident{staleClosed})
+	if err := saveState(storeDir, st); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := generateSite(storeDir, outDir, t.TempDir()); err != nil {
+		t.Fatalf("generateSite: %v", err)
+	}
+	idxRaw, err := os.ReadFile(filepath.Join(outDir, "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := string(idxRaw)
+	if err := checkNoCrossRefs(idx); err != nil {
+		t.Fatalf("index.html cross-ref: %v", err)
+	}
+	for _, want := range []string{
+		`<a class="err" href="logs/index.html#log-cpython-linux-riscv64-distro-o2">err</a>`,
+		`<a class="err" href="logs/index.html#log-lua-linux-x86_64-distro-o2">err</a>`,
+		`<a class="fail" href="logs/index.html#log-zstd-linux-x86_64-release-lto">fail</a>`,
+		`<a class="err" href="logs/index.html#log-foo-bar-linux-x86_64-distro-o2">err</a>`,
+		`<a class="err" href="logs/index.html#log-foo-bar-linux-x86_64-distro-o2-2">err</a>`,
+		`<span class="err">err</span>`,
+	} {
+		if !strings.Contains(idx, want) {
+			t.Errorf("index.html missing %q:\n%s", want, idx)
+		}
+	}
+	for _, forbid := range []string{`href="incidents/inc-stale-closed/index.html">err</a>`, `href="incidents/missing-inc/index.html"`, `href="incidents/./index.html"`} {
+		if strings.Contains(idx, forbid) {
+			t.Errorf("index.html should not contain %q:\n%s", forbid, idx)
+		}
+	}
+
+	logsRaw, err := os.ReadFile(filepath.Join(outDir, "logs", "index.html"))
+	if err != nil {
+		t.Fatalf("expected logs/index.html: %v", err)
+	}
+	logsPage := string(logsRaw)
+	if strings.Contains(logsPage, "<script>") || strings.Contains(strings.ToLower(logsPage), "github.com/llvm/") {
+		t.Fatalf("logs/index.html unsanitized:\n%s", logsPage)
+	}
+	for _, want := range []string{
+		`id="log-cpython-linux-riscv64-distro-o2"`,
+		`cpython (linux-riscv64 / -O2)`,
+		`build failure`,
+		`&lt;script&gt;x&lt;/script&gt;`,
+		`id="log-lua-linux-x86_64-distro-o2"`,
+		`compiler ICE`,
+		`id="log-zstd-linux-x86_64-release-lto"`,
+		`test failure`,
+		`<code>fuzzer_test</code>`,
+		`assertion failed`,
+		`id="log-foo-bar-linux-x86_64-distro-o2"`,
+		`id="log-foo-bar-linux-x86_64-distro-o2-2"`,
+	} {
+		if !strings.Contains(logsPage, want) {
+			t.Errorf("logs/index.html missing %q:\n%s", want, logsPage)
+		}
+	}
+
+	t2 := t1.Add(time.Hour)
+	swGreen := &sweep{
+		ID: formatSweepID(t2, "4444444444444444444444444444444444444444"), LLVMCommit: "4444444444444444444444444444444444444444",
+		StartedAt: t2, CompletedAt: t2,
+		Results: []pkgResult{
+			{Package: "cpython", Platform: platLinuxRISCV64, Profile: profDistroO2, Status: statusPass, DurationSec: 10},
+		},
+	}
+	if _, err := saveSweep(storeDir, swGreen); err != nil {
+		t.Fatal(err)
+	}
+	recordSweep(st, *swGreen, []*incident{staleClosed})
+	if err := saveState(storeDir, st); err != nil {
+		t.Fatal(err)
+	}
+	if err := generateSite(storeDir, outDir, t.TempDir()); err != nil {
+		t.Fatalf("generateSite green: %v", err)
+	}
+	if fileExists(filepath.Join(outDir, "logs", "index.html")) {
+		t.Errorf("stale logs/index.html was not removed after sweep recovered")
 	}
 }

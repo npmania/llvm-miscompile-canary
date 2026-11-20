@@ -23,7 +23,8 @@ var siteTmpl = template.Must(template.ParseFS(tmplFS, "templates/*.html"))
 type corpusEntry struct{ Name, Category, Repo, Version, Lang, SmokeTest string }
 type navHeader struct{ RootPrefix, LatestSHA12, UpdatedUTC, UpdatedISO string }
 type matrixColumn struct{ Platform, Profile, Header string }
-type matrixCell struct{ Kind, Text, IncidentID string }
+type matrixCell struct{ Kind, Text, Href string }
+type sweepLogEntry struct{ Anchor, Heading, Status, FailedTests, Excerpt string }
 type matrixRow struct {
 	Package, Version string
 	Cells            []matrixCell
@@ -79,8 +80,23 @@ func generateSite(storeDir, outDir, corpusDir string) error {
 			return err
 		}
 	}
-	if err := renderPage(filepath.Join(outDir, "index.html"), "index.html", buildIndexData(st, sweeps, incs, catalog)); err != nil {
+	idxData, logEntries := buildIndexData(st, sweeps, incs, catalog)
+	if err := renderPage(filepath.Join(outDir, "index.html"), "index.html", idxData); err != nil {
 		return err
+	}
+	logsDir := filepath.Join(outDir, "logs")
+	if len(logEntries) > 0 {
+		if err := os.MkdirAll(logsDir, 0o755); err != nil {
+			return err
+		}
+		if err := renderPage(filepath.Join(logsDir, "index.html"), "logs.html", struct {
+			Nav     navHeader
+			Entries []sweepLogEntry
+		}{resolveNav(st, sweeps, "../"), logEntries}); err != nil {
+			return err
+		}
+	} else {
+		_ = os.RemoveAll(logsDir)
 	}
 	if err := renderPage(filepath.Join(outDir, "corpus", "index.html"), "corpus.html", struct {
 		Nav      navHeader
@@ -153,8 +169,12 @@ func resolveNav(st *state, sweeps []*sweep, prefix string) navHeader {
 	return navHeader{prefix, sha, ts.UTC().Format("2006-01-02 15:04 UTC"), ts.UTC().Format(time.RFC3339)}
 }
 
-func buildIndexData(st *state, sweeps []*sweep, incs []*incident, catalog []corpusEntry) any {
+func buildIndexData(st *state, sweeps []*sweep, incs []*incident, catalog []corpusEntry) (any, []sweepLogEntry) {
 	type cellKey struct{ pkg, plat, prof string }
+	type linkKey struct {
+		pkg, plat, prof string
+		build           bool
+	}
 	latest := make(map[cellKey]pkgResult)
 	inCat := make(map[string]bool, len(catalog))
 	for _, p := range catalog {
@@ -169,20 +189,39 @@ func buildIndexData(st *state, sweeps []*sweep, incs []*incident, catalog []corp
 			}
 		}
 	}
-	openByTarget := make(map[cellKey]string)
+	incExists := make(map[string]bool, len(incs))
+	openByTarget := make(map[linkKey]string)
+	closedByTarget := make(map[linkKey]string)
 	var openRows, resolvedRows []incidentRowView
 	for _, inc := range incs {
 		if inc == nil {
 			continue
 		}
+		if inc.ID != "" && validateSafeID("incident id", inc.ID) == nil {
+			incExists[inc.ID] = true
+		}
 		rv := toIncidentRow(inc)
 		if inc.Status != incidentOpen {
 			resolvedRows = append(resolvedRows, rv)
+			if inc.Status == incidentClosed {
+				for _, a := range inc.Affected {
+					curGood := st.goodSHAFor(a.Package, a.Platform, a.Profile)
+					if inc.isBuildFail() {
+						curGood = st.targetGoodSHA(a.Package, a.Platform, a.Profile)
+					}
+					if curGood != cmp.Or(a.GoodSHA, inc.GoodSHA) {
+						continue
+					}
+					if k := (linkKey{a.Package, a.Platform, a.Profile, inc.isBuildFail()}); closedByTarget[k] == "" {
+						closedByTarget[k] = inc.ID
+					}
+				}
+			}
 			continue
 		}
 		openRows = append(openRows, rv)
 		for _, a := range inc.Affected {
-			if k := (cellKey{a.Package, a.Platform, a.Profile}); openByTarget[k] == "" {
+			if k := (linkKey{a.Package, a.Platform, a.Profile, inc.isBuildFail()}); openByTarget[k] == "" {
 				openByTarget[k] = inc.ID
 			}
 		}
@@ -192,6 +231,8 @@ func buildIndexData(st *state, sweeps []*sweep, incs []*incident, catalog []corp
 		ordered = append(ordered, corpusEntry{Name: name})
 	}
 	rows := make([]matrixRow, 0, len(ordered))
+	var logEntries []sweepLogEntry
+	usedAnchors := make(map[string]bool)
 	for _, pkg := range ordered {
 		row := matrixRow{Package: pkg.Name, Version: pkg.Version, Cells: make([]matrixCell, 0, len(matrixCols))}
 		for _, col := range matrixCols {
@@ -205,10 +246,48 @@ func buildIndexData(st *state, sweeps []*sweep, incs []*incident, catalog []corp
 			switch res.Status {
 			case statusPass:
 				row.Cells = append(row.Cells, matrixCell{"pass", formatDuration(res.DurationSec), ""})
-			case statusTestFail:
-				row.Cells = append(row.Cells, matrixCell{"fail", "fail", cmp.Or(res.IncidentID, openByTarget[ck])})
-			case statusBuildFail:
-				row.Cells = append(row.Cells, matrixCell{"err", "err", cmp.Or(res.IncidentID, openByTarget[ck])})
+			case statusTestFail, statusBuildFail:
+				isBuild := res.Status == statusBuildFail
+				kind, text := pick(isBuild, "err", "fail"), pick(isBuild, "err", "fail")
+				lk := linkKey{pkg.Name, col.Platform, col.Profile, isBuild}
+				incID := ""
+				if incExists[res.IncidentID] {
+					incID = res.IncidentID
+				}
+				incID = cmp.Or(incID, openByTarget[lk], closedByTarget[lk])
+				href := ""
+				if incID != "" {
+					href = "incidents/" + incID + "/index.html"
+				} else {
+					excerpt := clipCode(strings.TrimSpace(sanitizeCode(strings.ReplaceAll(res.ErrorExcerpt, "\r\n", "\n"))), 8000)
+					var tests []string
+					for _, t := range res.FailedTests {
+						if s := sanitizeText(strings.TrimSpace(t)); s != "" {
+							tests = append(tests, s)
+						}
+					}
+					failed := strings.Join(tests, ", ")
+					if excerpt != "" || failed != "" {
+						anchor := logAnchor(pkg.Name, col.Platform, col.Profile)
+						if usedAnchors[anchor] {
+							anchor = uniqueIncidentID(anchor, usedAnchors)
+						}
+						usedAnchors[anchor] = true
+						stLabel := "test failure"
+						if isBuild {
+							stLabel = pick(isICEExcerpt(res.ErrorExcerpt), "compiler ICE", "build failure")
+						}
+						logEntries = append(logEntries, sweepLogEntry{
+							Anchor:      anchor,
+							Heading:     fmt.Sprintf("%s (%s / %s)", sanitizeText(pkg.Name), col.Platform, profileLabel(col.Profile)),
+							Status:      stLabel,
+							FailedTests: failed,
+							Excerpt:     excerpt,
+						})
+						href = "logs/index.html#" + anchor
+					}
+				}
+				row.Cells = append(row.Cells, matrixCell{kind, text, href})
 			default:
 				row.Cells = append(row.Cells, matrixCell{"skip", "-", ""})
 			}
@@ -221,7 +300,25 @@ func buildIndexData(st *state, sweeps []*sweep, incs []*incident, catalog []corp
 		ResolvedIncidents []incidentRowView
 		Columns           []matrixColumn
 		Rows              []matrixRow
-	}{resolveNav(st, sweeps, ""), openRows, resolvedRows, matrixCols, rows}
+	}{resolveNav(st, sweeps, ""), openRows, resolvedRows, matrixCols, rows}, logEntries
+}
+
+func logAnchor(pkg, plat, prof string) string {
+	raw := strings.ToLower(pkg + "-" + plat + "-" + prof)
+	var b strings.Builder
+	b.WriteString("log-")
+	prevDash := true
+	for i := 0; i < len(raw); i++ {
+		c := raw[i]
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' {
+			b.WriteByte(c)
+			prevDash = false
+		} else if !prevDash {
+			b.WriteByte('-')
+			prevDash = true
+		}
+	}
+	return strings.TrimRight(b.String(), "-")
 }
 
 func buildIncidentData(st *state, sweeps []*sweep, inc *incident) any {

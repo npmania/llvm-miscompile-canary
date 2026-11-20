@@ -569,7 +569,7 @@ func readResultFragments(dir string) ([]pkgResult, error) {
 }
 
 func validateSafeID(label, id string) error {
-	if id == "" || strings.Contains(id, "/") || strings.Contains(id, "\\") || strings.Contains(id, "..") {
+	if id == "" || id == "." || strings.Contains(id, "/") || strings.Contains(id, "\\") || strings.Contains(id, "..") {
 		return fmt.Errorf("invalid %s %q", label, id)
 	}
 	return nil
