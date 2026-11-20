@@ -453,6 +453,65 @@ func TestStoreRoundTripAndMerge(t *testing.T) {
 	if merged.ID != "inc-1" || merged.Confidence != confConfirmed || len(merged.Affected) != 2 || merged.AliveTVStatus != aliveMiscompile {
 		t.Fatalf("unexpected merged incident: %+v", merged)
 	}
+	if shouldUpgradeFormal(formalUnsupported, formalUnsupported) ||
+		!shouldUpgradeFormal(formalTimeout, aliveVerified) ||
+		shouldUpgradeFormal(aliveVerified, formalTimeout) ||
+		!shouldUpgradeFormal(aliveVerified, aliveMiscompile) ||
+		shouldUpgradeFormal(aliveMiscompile, aliveVerified) ||
+		!shouldUpgradeFormal(formalTimeout, aliveMiscompile) ||
+		!shouldUpgradeFormal(llubiEquivalent, llubiMismatch) ||
+		shouldUpgradeFormal(llubiMismatch, formalUnsupported) {
+		t.Fatalf("unexpected shouldUpgradeFormal lattice behavior")
+	}
+	for _, weakStatus := range []string{"", formalUnsupported} {
+		dirA := t.TempDir()
+		likelyA := &incident{
+			ID: "inc-a1", Status: incidentOpen, Confidence: confLikely,
+			GoodSHA: inc1.GoodSHA, BadSHA: inc1.BadSHA, CulpritSHA: "dddddddddddddddddddddddddddddddddddddddd",
+			AliveTVStatus: weakStatus,
+			Affected:      []affected{{Package: "lua", Platform: platLinuxX86, Profile: profDistroO2, TestID: "t1"}},
+		}
+		verifiedA := &incident{
+			ID: "inc-a2", Status: incidentOpen, Confidence: confNeedsReview,
+			GoodSHA: inc1.GoodSHA, BadSHA: inc1.BadSHA, CulpritSHA: likelyA.CulpritSHA,
+			AliveTVStatus: aliveVerified, AliveTVOutput: "Transformation seems to be correct!",
+			Affected: []affected{{Package: "lua", Platform: platLinuxARM64, Profile: profDistroO2, TestID: "t1"}},
+		}
+		if _, err := mergeIncident(dirA, likelyA); err != nil {
+			t.Fatal(err)
+		}
+		mergedA, err := mergeIncident(dirA, verifiedA)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mergedA.Confidence != confNeedsReview || mergedA.AliveTVStatus != aliveVerified {
+			t.Fatalf("merge order A (%q): got conf=%q alive=%q, want needs-review/verified", weakStatus, mergedA.Confidence, mergedA.AliveTVStatus)
+		}
+
+		dirB := t.TempDir()
+		verifiedB := &incident{
+			ID: "inc-b1", Status: incidentOpen, Confidence: confNeedsReview,
+			GoodSHA: inc1.GoodSHA, BadSHA: inc1.BadSHA, CulpritSHA: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+			AliveTVStatus: aliveVerified, AliveTVOutput: "Transformation seems to be correct!",
+			Affected: []affected{{Package: "lua", Platform: platLinuxARM64, Profile: profDistroO2, TestID: "t1"}},
+		}
+		likelyB := &incident{
+			ID: "inc-b2", Status: incidentOpen, Confidence: confLikely,
+			GoodSHA: inc1.GoodSHA, BadSHA: inc1.BadSHA, CulpritSHA: verifiedB.CulpritSHA,
+			AliveTVStatus: weakStatus,
+			Affected:      []affected{{Package: "lua", Platform: platLinuxX86, Profile: profDistroO2, TestID: "t1"}},
+		}
+		if _, err := mergeIncident(dirB, verifiedB); err != nil {
+			t.Fatal(err)
+		}
+		mergedB, err := mergeIncident(dirB, likelyB)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mergedB.Confidence != confNeedsReview || mergedB.AliveTVStatus != aliveVerified {
+			t.Fatalf("merge order B (%q): got conf=%q alive=%q, want needs-review/verified", weakStatus, mergedB.Confidence, mergedB.AliveTVStatus)
+		}
+	}
 	reloaded, err := loadState(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -691,7 +750,7 @@ func TestCLISubcommands(t *testing.T) {
 	}
 
 	fakeAlive := filepath.Join(dir, "alive-tv")
-	if err := os.WriteFile(fakeAlive, []byte("#!/bin/sh\necho \"Transformation doesn't verify!\"\nexit 0\n"), 0o755); err != nil {
+	if err := os.WriteFile(fakeAlive, []byte("#!/bin/sh\necho \"Transformation doesn't verify!\"\necho \"define i32 @f(i32 %x) {\"\necho \"Example: i32 %x = #x00000001\"\necho \"see https://github.com/llvm/llvm-project/issues/1\"\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	beforeLL := filepath.Join(dir, "before.ll")
@@ -713,8 +772,32 @@ func TestCLISubcommands(t *testing.T) {
 	if err := readJSON(incPath, &updated); err != nil {
 		t.Fatal(err)
 	}
-	if updated.AliveTVStatus != aliveMiscompile || updated.Confidence != confConfirmed {
+	if updated.AliveTVStatus != aliveMiscompile || updated.Confidence != confConfirmed ||
+		!strings.Contains(updated.AliveTVOutput, "@f") || !strings.Contains(updated.AliveTVOutput, "#x00000001") ||
+		strings.Contains(updated.AliveTVOutput, "github.com/llvm/") {
 		t.Fatalf("unexpected alive-check incident: %+v", updated)
+	}
+
+	fakeAliveVerified := filepath.Join(dir, "alive-tv-verified")
+	if err := os.WriteFile(fakeAliveVerified, []byte("#!/bin/sh\necho \"Transformation seems to be correct!\"\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	incLikelyPath := filepath.Join(dir, "inc-likely.json")
+	incLikely := incident{ID: "i-likely", Status: incidentOpen, Confidence: confLikely}
+	if err := writeJSONAtomic(incLikelyPath, &incLikely); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errBuf.Reset()
+	if code := runCLI(context.Background(), []string{"lmc", "alive-check", "-alive-tv", fakeAliveVerified, "-before", beforeLL, "-after", afterLL, "-inc", incLikelyPath}, &out, &errBuf); code != 0 {
+		t.Fatalf("alive-check verified failed (%d): %s", code, errBuf.String())
+	}
+	var verUpdated incident
+	if err := readJSON(incLikelyPath, &verUpdated); err != nil {
+		t.Fatal(err)
+	}
+	if verUpdated.AliveTVStatus != aliveVerified || verUpdated.Confidence != confNeedsReview {
+		t.Fatalf("expected verified alive-check to downgrade confLikely -> confNeedsReview: %+v", verUpdated)
 	}
 
 	storeDir := filepath.Join(dir, "store")

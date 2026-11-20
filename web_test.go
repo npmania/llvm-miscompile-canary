@@ -23,6 +23,22 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+var (
+	reAllowedHTMLCommitLink = regexp.MustCompile(`<a href="https://github\.com/llvm/llvm-project/(?:commit/[0-9a-f]{7,40}|compare/[0-9a-f]{7,40}\.\.\.[0-9a-f]{7,40})" rel="noopener">`)
+	reHTMLPreCode           = regexp.MustCompile(`(?s)<pre><code>(.*?)</code></pre>`)
+)
+
+func checkHTMLNoUnsafeCrossRefs(s string) error {
+	s = reAllowedHTMLCommitLink.ReplaceAllString(s, "<a>")
+	s = reHTMLPreCode.ReplaceAllStringFunc(s, func(m string) string {
+		sub := reHTMLPreCode.FindStringSubmatch(m)
+		body := html.UnescapeString(sub[1])
+		f := fenceFor(body)
+		return "\n" + f + "\n" + body + "\n" + f + "\n"
+	})
+	return checkNoCrossRefs(s)
+}
+
 func TestSanitize(t *testing.T) {
 	sha64 := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 	bundleURL := "https://github.com/npmania/llvm-miscompile-canary/releases/download/reproducers/reproducer-inc-1.tar.zst"
@@ -118,7 +134,7 @@ func TestCleanIR(t *testing.T) {
 			t.Errorf("cleanIR missing %q", w)
 		}
 	}
-	for _, b := range []string{"ModuleID", "source_filename", "!llvm.", "!0 =", "!dbg"} {
+	for _, b := range []string{"ModuleID", "source_filename", "!llvm.", "!0 =", "!10 =", "!dbg"} {
 		if strings.Contains(ir, b) {
 			t.Errorf("cleanIR kept %q", b)
 		}
@@ -132,6 +148,153 @@ func TestCleanIR(t *testing.T) {
 	for _, b := range []string{"target triple", "declare ", "Function Attrs", "attributes #", ") #1 {"} {
 		if strings.Contains(diffIR, b) {
 			t.Errorf("cleanIRForDiff kept %q", b)
+		}
+	}
+
+	semIR := strings.Join([]string{
+		`; ModuleID = '/tmp/work/sem.ll'`,
+		`source_filename = "/tmp/work/sem.c"`,
+		`target datalayout = "e-m:e-i64:64"`,
+		`target triple = "x86_64-unknown-linux-gnu"`,
+		``,
+		`@.str = private unnamed_addr constant [15 x i8] c"keep, !dbg !10\00", align 1`,
+		``,
+		`define i32 @sem(ptr noalias noundef nonnull align 4 %p, ptr noalias %pp, i32 %n) #0 !dbg !4 !prof !11 {`,
+		`entry:`,
+		`  #dbg_value(ptr %p, !9, !DIExpression(), !10)`,
+		`  %v = load i32, ptr %p, align 4, !tbaa !5, !alias.scope !20, !noalias !21, !range !8, !noundef !22, !dbg !10, !srcloc !15`,
+		`  %pv = load ptr, ptr %pp, align 8, !nonnull !22, !align !23, !dbg !10`,
+		`  br label %loop, !dbg !10`,
+		``,
+		`loop:`,
+		`  %i = phi i32 [ 0, %entry ], [ %next, %loop ]`,
+		`  %next = add nuw nsw i32 %i, 1`,
+		`  %cmp = icmp slt i32 %next, %n`,
+		`  br i1 %cmp, label %loop, label %exit, !llvm.loop !12`,
+		``,
+		`exit:`,
+		`  ret i32 %v, !dbg !10`,
+		`}`,
+		``,
+		`attributes #0 = { nounwind }`,
+		``,
+		`!llvm.dbg.cu = !{!0}`,
+		`!llvm.module.flags = !{!30}`,
+		`!llvm.ident = !{!1}`,
+		``,
+		`!0 = distinct !DICompileUnit(language: DW_LANG_C11, file: !2, isOptimized: true, runtimeVersion: 0, emissionKind: FullDebug)`,
+		`!1 = !{!"clang version 22.0.0"}`,
+		`!2 = !DIFile(filename: "sem.c", directory: "/tmp")`,
+		`!3 = !DISubroutineType(types: !24)`,
+		`!4 = distinct !DISubprogram(name: "sem", scope: !2, file: !2, line: 1, type: !3, scopeLine: 1, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition, unit: !0)`,
+		`!5 = !{!6, !6, i64 0}`,
+		`!6 = !{!"int", !7, i64 0}`,
+		`!7 = !{!"omnipotent char", !25, i64 0}`,
+		`!8 = !{i32 0, i32 100}`,
+		`!9 = !DILocalVariable(name: "p", arg: 1, scope: !4, file: !2, line: 1)`,
+		`!10 = !DILocation(line: 2, column: 3, scope: !4)`,
+		`!11 = !{!"function_entry_count", i64 10}`,
+		`!12 = distinct !{!12, !14, !13}`,
+		`!13 = !{!"llvm.loop.mustprogress"}`,
+		`!14 = !DILocation(line: 5, column: 3, scope: !4)`,
+		`!15 = !{i64 123}`,
+		`!16 = !{!"unused_node"}`,
+		`!20 = !{!26}`,
+		`!21 = !{!27}`,
+		`!22 = !{}`,
+		`!23 = !{i64 8}`,
+		`!24 = !{null}`,
+		`!25 = !{!"Simple C/C++ TBAA"}`,
+		`!26 = distinct !{!26, !28, !"scopeA"}`,
+		`!27 = distinct !{!27, !28, !"scopeB"}`,
+		`!28 = distinct !{!28, !"domain"}`,
+		`!30 = !{i32 1, !"wchar_size", i32 4}`,
+	}, "\n")
+	cleanedSem := cleanIR(semIR)
+	for _, want := range []string{
+		`c"keep, !dbg !10\00"`,
+		`define i32 @sem(ptr noalias noundef nonnull align 4 %p, ptr noalias %pp, i32 %n) #0 {`,
+		`!tbaa !5, !alias.scope !20, !noalias !21, !range !8, !noundef !22`,
+		`!nonnull !22, !align !23`,
+		`!llvm.loop !12`,
+		`!llvm.module.flags = !{!30}`,
+		`!5 = !{!6, !6, i64 0}`,
+		`!6 = !{!"int", !7, i64 0}`,
+		`!7 = !{!"omnipotent char", !25, i64 0}`,
+		`!8 = !{i32 0, i32 100}`,
+		`!12 = distinct !{!12, !13}`,
+		`!13 = !{!"llvm.loop.mustprogress"}`,
+		`!20 = !{!26}`,
+		`!21 = !{!27}`,
+		`!22 = !{}`,
+		`!23 = !{i64 8}`,
+		`!25 = !{!"Simple C/C++ TBAA"}`,
+		`!26 = distinct !{!26, !28, !"scopeA"}`,
+		`!27 = distinct !{!27, !28, !"scopeB"}`,
+		`!28 = distinct !{!28, !"domain"}`,
+		`!30 = !{i32 1, !"wchar_size", i32 4}`,
+	} {
+		if !strings.Contains(cleanedSem, want) {
+			t.Errorf("cleanIR semantic missing %q in:\n%s", want, cleanedSem)
+		}
+	}
+	for _, forbid := range []string{
+		"ModuleID", "source_filename", "#dbg_value", "!llvm.dbg.cu", "!llvm.ident",
+		"!srcloc", "!prof", "!DILocation", "!DICompileUnit",
+		"!0 =", "!1 =", "!2 =", "!3 =", "!4 =", "!9 =", "!10 =", "!11 =", "!14 =", "!15 =", "!16 =", "!24 =",
+	} {
+		if strings.Contains(cleanedSem, forbid) {
+			t.Errorf("cleanIR semantic kept %q in:\n%s", forbid, cleanedSem)
+		}
+	}
+	dbgCallIR := "define void @g() {\n  tail call void @llvm.dbg.value(metadata i32 0, metadata !1, metadata !DIExpression()), !dbg !2\n  ret void\n}\n!1 = !DILocalVariable(name: \"x\")\n!2 = !DILocation(line: 1)\n"
+	if got := cleanIR(dbgCallIR); strings.Contains(got, "llvm.dbg.value") || strings.Contains(got, "!1 =") || strings.Contains(got, "!2 =") {
+		t.Errorf("cleanIR kept @llvm.dbg.value call or DI defs:\n%s", got)
+	}
+	semDiff := cleanIRForDiff(semIR)
+	for _, want := range []string{"!tbaa !5", "!range !8", "!llvm.loop !12", "!5 = !{!6, !6, i64 0}", "!12 = distinct !{!12, !13}"} {
+		if !strings.Contains(semDiff, want) {
+			t.Errorf("cleanIRForDiff semantic missing %q in:\n%s", want, semDiff)
+		}
+	}
+	for _, forbid := range []string{"!llvm.module.flags", "!30 =", "attributes #", ") #0 {"} {
+		if strings.Contains(semDiff, forbid) {
+			t.Errorf("cleanIRForDiff semantic kept %q in:\n%s", forbid, semDiff)
+		}
+	}
+	namedMetaIR := "define void @h() {\n  ret void\n}\n!custom.meta = !{!14, !13}\n!13 = !{!\"llvm.loop.mustprogress\"}\n!14 = !DILocation(line: 5, column: 3)\n"
+	cleanedNamed := cleanIR(namedMetaIR)
+	if !strings.Contains(cleanedNamed, "!custom.meta = !{!13}") || !strings.Contains(cleanedNamed, `!13 = !{!"llvm.loop.mustprogress"}`) ||
+		strings.Contains(cleanedNamed, "!14") || strings.Contains(cleanedNamed, "DILocation") {
+		t.Errorf("cleanIR named metadata mismatch:\n%s", cleanedNamed)
+	}
+	optBin, _ := exec.LookPath("opt")
+	if optBin == "" && fileExists("/opt/homebrew/opt/llvm@22/bin/opt") {
+		optBin = "/opt/homebrew/opt/llvm@22/bin/opt"
+	}
+	if optBin != "" {
+		optVerify := func(ir string) ([]byte, error) {
+			cmd := exec.Command(optBin, "-passes=verify", "-disable-output", "-")
+			cmd.Stdin = strings.NewReader(ir)
+			return cmd.CombinedOutput()
+		}
+		if inOut, inErr := optVerify(semIR); inErr == nil {
+			if out, err := optVerify(cleanedSem); err != nil {
+				t.Errorf("opt verify failed on cleanedSem: %v\n%s\nIR:\n%s", err, out, cleanedSem)
+			}
+		} else {
+			trunkSem := strings.Replace(semIR, `!28 = distinct !{!28, !"domain"}`, `!28 = distinct !{!28, i1 false, !"domain"}`, 1)
+			if tInOut, tInErr := optVerify(trunkSem); tInErr == nil {
+				cleanedTrunk := cleanIR(trunkSem)
+				if out, err := optVerify(cleanedTrunk); err != nil {
+					t.Errorf("opt verify failed on cleaned trunkSem: %v\n%s\nIR:\n%s", err, out, cleanedTrunk)
+				}
+			} else {
+				t.Errorf("opt verify failed on both semIR (%v: %s) and trunkSem (%v: %s)", inErr, inOut, tInErr, tInOut)
+			}
+		}
+		if out, err := optVerify(cleanedNamed); err != nil {
+			t.Errorf("opt verify failed on cleanedNamed: %v\n%s\nIR:\n%s", err, out, cleanedNamed)
 		}
 	}
 }
@@ -334,6 +497,10 @@ func TestIssueSync(t *testing.T) {
 		Affected:  []affected{{Package: "lua", Platform: platLinuxX86, Profile: profDistroO2, TestID: "smoke"}},
 		CreatedAt: now, UpdatedAt: now,
 	}
+	if a, err := syncIssues(ctx, cfg, []*incident{inc3}); err != nil || len(a) != 0 || inc3.IssueNumber != 0 {
+		t.Fatalf("needs-review without existing issue should not create: a=%+v err=%v", a, err)
+	}
+	inc3.Confidence = confLikely
 	if a, err := syncIssues(ctx, cfg, []*incident{inc3}); err != nil || len(a) != 1 || a[0].Kind != "create" {
 		t.Fatalf("create inc3 a=%+v err=%v", a, err)
 	}
@@ -447,7 +614,15 @@ func TestSiteGenerate(t *testing.T) {
 	}
 	idx := read("index.html")
 	wantSpec := `<p class="cmd"><code>O2</code>: <code>-O2</code> · <code>LTO</code>: <code>-O3 -flto=thin</code> (<code>-march=x86-64-v3</code> / <code>-mcpu=neoverse-v1</code> / <code>-march=rva23u64</code> / <code>-mcpu=apple-m1</code>)</p>`
-	for _, w := range []string{"trunk <code>0212d77fa269</code>", "<h2>Open</h2>", "<h2>Corpus</h2>", wantSpec, "<h2>Resolved</h2>", `<a class="fail" href="/incidents/inc-open-1/">fail</a>`, `<a href="/">status</a>`, `<a href="/corpus/">corpus</a>`, `<link rel="stylesheet" href="/style.css">`, "18s", "err"} {
+	for _, w := range []string{
+		`trunk <a href="https://github.com/llvm/llvm-project/commit/0212d77fa269abcdef0123456789abcdef012345" rel="noopener"><code>0212d77fa269</code></a>`,
+		"<h2>Open</h2>", "<h2>Corpus</h2>", wantSpec, "<h2>Resolved</h2>",
+		`<a class="fail" href="/incidents/inc-open-1/">fail</a>`,
+		`<a href="https://github.com/llvm/llvm-project/commit/0212d77fa269abcdef0123456789abcdef012345" rel="noopener">0212d77fa269</a>`,
+		`<a href="https://github.com/llvm/llvm-project/commit/bbbb11112222" rel="noopener">bbbb11112222</a>`,
+		`<a href="https://github.com/llvm/llvm-project/commit/cccc11112222" rel="noopener">cccc11112222</a>`,
+		`<a href="/">status</a>`, `<a href="/corpus/">corpus</a>`, `<link rel="stylesheet" href="/style.css">`, "18s", "err",
+	} {
 		if !strings.Contains(idx, w) {
 			t.Errorf("index.html missing %q", w)
 		}
@@ -468,17 +643,33 @@ func TestSiteGenerate(t *testing.T) {
 	if ps1.O2Flags != "-O2" || ps1.LTOFlags != "-O3 -flto=thin" || !slices.Equal(ps1.TargetFlags, wantTargets) || !slices.Equal(ps1.TargetFlags, ps2.TargetFlags) {
 		t.Errorf("buildProfileSpec = %+v / %+v, want targets %v", ps1, ps2, wantTargets)
 	}
-	if err := checkNoCrossRefs(idx); err != nil {
+	if err := checkHTMLNoUnsafeCrossRefs(idx); err != nil {
 		t.Errorf("index.html cross-ref: %v", err)
 	}
-	incPage := html.UnescapeString(read(filepath.Join("incidents", "inc-open-1", "index.html")))
+	incRaw := read(filepath.Join("incidents", "inc-open-1", "index.html"))
+	if err := checkHTMLNoUnsafeCrossRefs(incRaw); err != nil {
+		t.Errorf("incident page cross-ref: %v", err)
+	}
+	for _, w := range []string{
+		`<a href="https://github.com/llvm/llvm-project/commit/0212d77fa269abcdef0123456789abcdef012345" rel="noopener"><code>0212d77fa269</code></a>`,
+		`<a href="https://github.com/llvm/llvm-project/compare/111111111111abcdef...0212d77fa269abcdef0123456789abcdef012345" rel="noopener"><code>111111111111</code> .. <code>0212d77fa269</code></a>`,
+	} {
+		if !strings.Contains(incRaw, w) {
+			t.Errorf("incident page missing commit/range link %q", w)
+		}
+	}
+	incPage := html.UnescapeString(incRaw)
 	for _, w := range []string{"<h1>zstd: InstCombinePass in ZSTD_compressBlock</h1>", "-opt-bisect-limit=77", "<code>11</code> (before) -> <code>2</code> (after)", "opt -O2 -S", "define i32 @ZSTD_compressBlock(i32 %a) {"} {
 		if !strings.Contains(incPage, w) {
 			t.Errorf("incident page missing %q", w)
 		}
 	}
-	if strings.Contains(incPage, "ModuleID") || !strings.Contains(read(filepath.Join("incidents", "opus-cccc1111", "index.html")), "resolved at <code>cccc11112222</code>") {
-		t.Errorf("incident page check failed")
+	resIncRaw := read(filepath.Join("incidents", "opus-cccc1111", "index.html"))
+	if strings.Contains(incPage, "ModuleID") || !strings.Contains(resIncRaw, `resolved at <a href="https://github.com/llvm/llvm-project/commit/cccc11112222" rel="noopener"><code>cccc11112222</code></a>`) {
+		t.Errorf("incident page check failed:\n%s", resIncRaw)
+	}
+	if err := checkNoCrossRefs(formatGroupBody([]*incident{openInc}, "", defaultSiteURL)); err != nil {
+		t.Errorf("GitHub issue body must forbid llvm commit links: %v", err)
 	}
 	corp := html.UnescapeString(read(filepath.Join("corpus", "index.html")))
 	for _, w := range []string{"<th>Package</th>", "<th>Version</th>", "<th>Lang</th>", "<th>Domain</th>", "<th>Smoke</th>", "<th>Upstream</th>", "Databases, Compression & Solvers", "Codecs & DSP", "facebook/zstd"} {
@@ -524,7 +715,7 @@ func TestSiteGenerate(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(emptyOut, "index.html")); strings.Contains(string(b), "<h2>Open</h2>") || strings.Contains(string(b), "<h2>Resolved</h2>") {
 		t.Errorf("empty store should omit Open and Resolved")
 	}
-	if b, _ := os.ReadFile(filepath.Join(emptyOut, "corpus", "index.html")); strings.Count(string(b), "<tr>") != 43 || checkNoCrossRefs(string(b)) != nil {
+	if b, _ := os.ReadFile(filepath.Join(emptyOut, "corpus", "index.html")); strings.Count(string(b), "<tr>") != 43 || checkHTMLNoUnsafeCrossRefs(string(b)) != nil {
 		t.Errorf("real corpus page row count = %d (want 43)", strings.Count(string(b), "<tr>"))
 	}
 
@@ -1056,21 +1247,17 @@ func TestBuildFailLifecycle(t *testing.T) {
 
 	cfg := issueSyncCfg{Repo: defaultRepo, Token: "tok", APIBase: srv.URL, StoreDir: storeDir}
 	acts, err := syncIssues(ctx, cfg, incs)
-	if err != nil || len(acts) != 2 {
+	if err != nil || len(acts) != 1 || acts[0].Kind != "create" {
 		t.Fatalf("syncIssues acts=%+v err=%v", acts, err)
 	}
 	mu.Lock()
 	zstdIss := issues[zstdInc.IssueNumber]
-	luaIss := issues[luaInc.IssueNumber]
 	mu.Unlock()
-	if zstdIss == nil || luaIss == nil {
-		t.Fatalf("issues not created: zstd=%d lua=%d", zstdInc.IssueNumber, luaInc.IssueNumber)
+	if zstdIss == nil || luaInc.IssueNumber != 0 {
+		t.Fatalf("expected only zstd ICE issue created: zstd=%d lua=%d", zstdInc.IssueNumber, luaInc.IssueNumber)
 	}
 	if zstdIss.Title != "[ice] zstd compiler crash on abcdef012345" {
 		t.Errorf("zstd title = %q", zstdIss.Title)
-	}
-	if luaIss.Title != "[build] lua failed to build on abcdef012345" {
-		t.Errorf("lua title = %q", luaIss.Title)
 	}
 	labelNames := func(iss *ghIssue) []string {
 		var ns []string
@@ -1083,21 +1270,16 @@ func TestBuildFailLifecycle(t *testing.T) {
 	if got := labelNames(zstdIss); !slices.Equal(got, []string{labelBuildFail, labelCompilerICE, platDarwinARM, platLinuxX86}) {
 		t.Errorf("zstd labels = %v", got)
 	}
-	if got := labelNames(luaIss); !slices.Equal(got, []string{labelBuildFail, platLinuxX86}) {
-		t.Errorf("lua labels = %v", got)
+	if err := checkNoCrossRefs(zstdIss.Title + "\n" + zstdIss.Body); err != nil {
+		t.Errorf("issue #%d failed checkNoCrossRefs: %v\n%s", zstdIss.Number, err, zstdIss.Body)
 	}
-	for _, iss := range []*ghIssue{zstdIss, luaIss} {
-		if err := checkNoCrossRefs(iss.Title + "\n" + iss.Body); err != nil {
-			t.Errorf("issue #%d failed checkNoCrossRefs: %v\n%s", iss.Number, err, iss.Body)
-		}
-		for _, forbid := range []string{"| Sanitizers |", "| Conservative |", "alive-tv", "llubi"} {
-			if strings.Contains(iss.Body, forbid) {
-				t.Errorf("build_fail issue #%d contains miscompile row %q", iss.Number, forbid)
-			}
+	for _, forbid := range []string{"| Sanitizers |", "| Conservative |", "alive-tv", "llubi"} {
+		if strings.Contains(zstdIss.Body, forbid) {
+			t.Errorf("build_fail issue #%d contains miscompile row %q", zstdIss.Number, forbid)
 		}
 	}
-	if !strings.Contains(zstdIss.Body, "| Kind | compiler ICE |") || !strings.Contains(luaIss.Body, "| Kind | build failure |") {
-		t.Errorf("missing Kind row in bodies:\nzstd=%s\nlua=%s", zstdIss.Body, luaIss.Body)
+	if !strings.Contains(zstdIss.Body, "| Kind | compiler ICE |") {
+		t.Errorf("missing Kind row in zstd body:\n%s", zstdIss.Body)
 	}
 	if !strings.Contains(zstdIss.Body, "````\n") {
 		t.Errorf("expected 4-backtick fence for excerpt containing triple backticks:\n%s", zstdIss.Body)
@@ -1112,8 +1294,8 @@ func TestBuildFailLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	idx := string(idxRaw)
-	if err := checkNoCrossRefs(idx); err != nil {
-		t.Errorf("index.html failed checkNoCrossRefs: %v", err)
+	if err := checkHTMLNoUnsafeCrossRefs(idx); err != nil {
+		t.Errorf("index.html failed checkHTMLNoUnsafeCrossRefs: %v", err)
 	}
 	for _, want := range []string{
 		fmt.Sprintf(`<a class="err" href="/incidents/%s/">err</a>`, zstdInc.ID),
@@ -1132,12 +1314,15 @@ func TestBuildFailLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	zstdPage := string(zstdPageRaw)
+	if err := checkHTMLNoUnsafeCrossRefs(zstdPage); err != nil {
+		t.Errorf("zstd incident page failed checkHTMLNoUnsafeCrossRefs: %v", err)
+	}
 	for _, want := range []string{"<h2>Build Error</h2>", "compiler ICE", "PLEASE submit a bug report"} {
 		if !strings.Contains(zstdPage, want) {
 			t.Errorf("zstd incident page missing %q", want)
 		}
 	}
-	for _, forbid := range []string{"Sanitizers", "Conservative", "github.com/llvm/"} {
+	for _, forbid := range []string{"Sanitizers", "Conservative", "github.com/llvm/llvm-project/issues/", "github.com/llvm/llvm-project/pull/"} {
 		if strings.Contains(zstdPage, forbid) {
 			t.Errorf("zstd incident page contains %q", forbid)
 		}
@@ -1190,6 +1375,19 @@ func TestBuildFailLifecycle(t *testing.T) {
 	if luaMerged == nil || len(luaMerged.Affected) != 2 || !isICEExcerpt(luaMerged.ErrorExcerpt) {
 		t.Fatalf("lua merge did not add target or upgrade ICE excerpt: %+v", luaMerged)
 	}
+	acts2, err := syncIssues(ctx, cfg, incs2)
+	if err != nil || len(acts2) != 2 {
+		t.Fatalf("second syncIssues acts2=%+v err=%v", acts2, err)
+	}
+	mu.Lock()
+	luaIss := issues[luaMerged.IssueNumber]
+	mu.Unlock()
+	if luaIss == nil || luaIss.Title != "[ice] lua compiler crash on abcdef012345" {
+		t.Fatalf("lua ICE upgrade did not create issue: luaIss=%+v", luaIss)
+	}
+	if got := labelNames(luaIss); !slices.Equal(got, []string{labelBuildFail, labelCompilerICE, platDarwinARM, platLinuxX86}) {
+		t.Errorf("lua labels = %v", got)
+	}
 
 	frags3 := t.TempDir()
 	if err := writeResultFragment(filepath.Join(frags3, "pass.json"), []pkgResult{
@@ -1224,7 +1422,7 @@ func TestBuildFailLifecycle(t *testing.T) {
 		}
 	}
 	mu.Lock()
-	if issues[zstdInc.IssueNumber].State != "closed" || issues[luaInc.IssueNumber].State != "closed" {
+	if issues[zstdInc.IssueNumber].State != "closed" || issues[luaMerged.IssueNumber].State != "closed" {
 		t.Errorf("expected both issues closed")
 	}
 	if !slices.Equal(comments[zstdInc.IssueNumber], []string{"Fixed at `fedcba987654`."}) {
@@ -1261,8 +1459,8 @@ func TestHumanIssueCloseReopenAndSuppression(t *testing.T) {
 
 	buildInc := &incident{
 		ID: "20261120-zstd-build-333333333333", Kind: incidentKindBuildFail,
-		Title: "zstd: build failure", Status: incidentOpen, Confidence: confNeedsReview,
-		GoodSHA: goodA, BadSHA: bad1, ErrorExcerpt: "zstd.c:1: error: broken",
+		Title: "zstd: compiler ICE", Status: incidentOpen, Confidence: confNeedsReview,
+		GoodSHA: goodA, BadSHA: bad1, ErrorExcerpt: "LLVM ERROR: zstd crash",
 		Affected: []affected{
 			{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2, GoodSHA: goodA},
 			{Package: "zstd", Platform: platDarwinARM, Profile: profReleaseLTO, GoodSHA: goodB},
@@ -1271,8 +1469,8 @@ func TestHumanIssueCloseReopenAndSuppression(t *testing.T) {
 	}
 	plainBuildInc := &incident{
 		ID: "20261120-opus-build-333333333333", Kind: incidentKindBuildFail,
-		Title: "opus: build failure", Status: incidentOpen, Confidence: confNeedsReview,
-		GoodSHA: goodA, BadSHA: bad1, ErrorExcerpt: "opus.c:1: error: broken",
+		Title: "opus: compiler ICE", Status: incidentOpen, Confidence: confNeedsReview,
+		GoodSHA: goodA, BadSHA: bad1, ErrorExcerpt: "LLVM ERROR: opus crash",
 		Affected:  []affected{{Package: "opus", Platform: platLinuxX86, Profile: profDistroO2, GoodSHA: goodA}},
 		CreatedAt: now.Add(time.Minute), UpdatedAt: now.Add(time.Minute),
 	}
@@ -1775,7 +1973,7 @@ func TestSiteFailureLogsPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	idx := string(idxRaw)
-	if err := checkNoCrossRefs(idx); err != nil {
+	if err := checkHTMLNoUnsafeCrossRefs(idx); err != nil {
 		t.Fatalf("index.html cross-ref: %v", err)
 	}
 	for _, want := range []string{
@@ -1801,7 +1999,7 @@ func TestSiteFailureLogsPage(t *testing.T) {
 		t.Fatalf("expected logs/index.html: %v", err)
 	}
 	logsPage := string(logsRaw)
-	if strings.Contains(logsPage, "<script>") || strings.Contains(strings.ToLower(logsPage), "github.com/llvm/") || strings.Contains(logsPage, "index.html") {
+	if strings.Contains(logsPage, "<script>") || checkHTMLNoUnsafeCrossRefs(logsPage) != nil || strings.Contains(logsPage, "github.com/llvm/llvm-project/issues/") || strings.Contains(logsPage, "index.html") {
 		t.Fatalf("logs/index.html unsanitized or has index.html link:\n%s", logsPage)
 	}
 	for _, want := range []string{
@@ -2373,20 +2571,21 @@ func TestAggregateRegressionSelection(t *testing.T) {
 func TestAliveTVVerifiedWording(t *testing.T) {
 	now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
 	verInc := &incident{
-		ID: "inc-alive-ver", Status: incidentOpen, Confidence: confLikely,
+		ID: "inc-alive-ver", Status: incidentOpen, Confidence: confNeedsReview,
 		GoodSHA: "1111111111111111111111111111111111111111", BadSHA: "2222222222222222222222222222222222222222",
 		CulpritSHA: "2222222222222222222222222222222222222222", CulpritPass: "GVNPass",
 		ASanUBSanClean: true, ConservativeFlagIndependent: true, DiagO0Status: "pass",
-		AliveTVStatus: aliveVerified,
-		Affected:      []affected{{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2, TestID: "t1"}},
-		CreatedAt:     now, UpdatedAt: now,
+		AliveTVStatus: aliveVerified, AliveTVOutput: "Transformation seems to be correct!",
+		Affected:  []affected{{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2, TestID: "t1"}},
+		CreatedAt: now, UpdatedAt: now,
 	}
 	miscInc := &incident{
 		ID: "inc-alive-misc", Status: incidentOpen, Confidence: confConfirmed,
 		GoodSHA: verInc.GoodSHA, BadSHA: verInc.BadSHA, CulpritSHA: "3333333333333333333333333333333333333333",
 		CulpritPass: "InstCombinePass", ASanUBSanClean: true, AliveTVStatus: aliveMiscompile,
-		Affected:  []affected{{Package: "lua", Platform: platLinuxX86, Profile: profDistroO2, TestID: "t1"}},
-		CreatedAt: now, UpdatedAt: now,
+		AliveTVOutput: "define i32 @foo(i32 %x) {\nERROR: Value mismatch\nExample: %x = #x00000001\nhttps://github.com/llvm/llvm-project/issues/999\nTransformation doesn't verify!",
+		Affected:      []affected{{Package: "lua", Platform: platLinuxX86, Profile: profDistroO2, TestID: "t1"}},
+		CreatedAt:     now, UpdatedAt: now,
 	}
 
 	const wantNote = "verified (single pass; earlier pass or UB)"
@@ -2394,12 +2593,20 @@ func TestAliveTVVerifiedWording(t *testing.T) {
 	if err := checkNoCrossRefs(verBody); err != nil {
 		t.Fatalf("verBody cross-ref: %v", err)
 	}
-	if !strings.Contains(verBody, "| `alive-tv` | "+wantNote+" |") {
-		t.Errorf("verBody missing qualified verified row:\n%s", verBody)
+	if !strings.Contains(verBody, "| `alive-tv` | "+wantNote+" |") || strings.Contains(verBody, "`alive-tv`:") {
+		t.Errorf("verBody unexpected verified Alive2 rendering:\n%s", verBody)
 	}
 	miscBody := formatGroupBody([]*incident{miscInc}, "", defaultSiteURL)
-	if !strings.Contains(miscBody, "| `alive-tv` | miscompile |") {
-		t.Errorf("miscBody missing bare miscompile row:\n%s", miscBody)
+	if err := checkNoCrossRefs(miscBody); err != nil {
+		t.Fatalf("miscBody cross-ref: %v", err)
+	}
+	for _, want := range []string{"| `alive-tv` | miscompile |", "`alive-tv`:", "define i32 @foo(i32 %x) {", "#x00000001", "Transformation doesn't verify!"} {
+		if !strings.Contains(miscBody, want) {
+			t.Errorf("miscBody missing %q:\n%s", want, miscBody)
+		}
+	}
+	if strings.Contains(miscBody, "github.com/llvm/") {
+		t.Errorf("miscBody leaked forbidden URL:\n%s", miscBody)
 	}
 
 	storeDir, outDir := t.TempDir(), t.TempDir()
@@ -2425,14 +2632,63 @@ func TestAliveTVVerifiedWording(t *testing.T) {
 		t.Fatal(err)
 	}
 	verHTML := string(verHTMLBytes)
-	if !strings.Contains(verHTML, "<code>alive-tv</code>") || !strings.Contains(verHTML, "<td>"+wantNote+"</td>") || strings.Contains(verHTML, "<td>verified</td>") {
+	if !strings.Contains(verHTML, "<code>alive-tv</code>") || !strings.Contains(verHTML, "<td>"+wantNote+"</td>") || strings.Contains(verHTML, "<td>verified</td>") || strings.Contains(verHTML, "<h2>Alive2</h2>") {
 		t.Errorf("verHTML unexpected alive-tv rendering:\n%s", verHTML)
 	}
 	miscHTMLBytes, err := os.ReadFile(filepath.Join(outDir, "incidents", miscInc.ID, "index.html"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(miscHTMLBytes), "<td>miscompile</td>") {
-		t.Errorf("miscHTML missing bare miscompile cell:\n%s", string(miscHTMLBytes))
+	miscHTML := string(miscHTMLBytes)
+	miscUnesc := html.UnescapeString(miscHTML)
+	if !strings.Contains(miscHTML, "<td>miscompile</td>") || !strings.Contains(miscHTML, "<h2>Alive2</h2>\n    <pre><code>") ||
+		!strings.Contains(miscUnesc, "define i32 @foo(i32 %x) {") || !strings.Contains(miscUnesc, "#x00000001") {
+		t.Errorf("miscHTML missing bare miscompile cell or Alive2 section:\n%s", miscHTML)
+	}
+}
+
+func TestGroupQualifiesForIssueAndDryRunUpdate(t *testing.T) {
+	if groupQualifiesForIssue(nil) || groupQualifiesForIssue([]*incident{nil}) {
+		t.Fatal("nil incidents should not qualify")
+	}
+	if groupQualifiesForIssue([]*incident{
+		nil,
+		{ID: "res-conf", Status: incidentResolved, Confidence: confConfirmed},
+		{ID: "open-nr", Status: incidentOpen, Confidence: confNeedsReview},
+	}) {
+		t.Fatal("resolved confirmed + open needs-review should not qualify")
+	}
+	if groupQualifiesForIssue([]*incident{
+		nil,
+		{ID: "res-ice", Kind: incidentKindBuildFail, Status: incidentResolved, ErrorExcerpt: "LLVM ERROR: Cannot select"},
+		{ID: "open-bf", Kind: incidentKindBuildFail, Status: incidentOpen, ErrorExcerpt: "foo.c:1: error: undeclared"},
+	}) {
+		t.Fatal("resolved ICE + open non-ICE should not qualify")
+	}
+	if !groupQualifiesForIssue([]*incident{
+		nil,
+		{ID: "open-likely", Status: incidentOpen, Confidence: confLikely},
+	}) {
+		t.Fatal("open likely should qualify")
+	}
+	if !groupQualifiesForIssue([]*incident{
+		nil,
+		{ID: "open-ice", Kind: incidentKindBuildFail, Status: incidentOpen, ErrorExcerpt: "LLVM ERROR: Cannot select"},
+	}) {
+		t.Fatal("open ICE should qualify")
+	}
+
+	var dry bytes.Buffer
+	trackedDowngraded := &incident{
+		ID: "inc-dry-upd", Status: incidentOpen, Confidence: confNeedsReview,
+		GoodSHA: "1111111111111111111111111111111111111111", BadSHA: "2222222222222222222222222222222222222222",
+		CulpritSHA: "2222222222222222222222222222222222222222", CulpritPass: "GVNPass",
+		AliveTVStatus: aliveVerified, IssueNumber: 77,
+		IssueURL: "https://github.com/npmania/llvm-miscompile-canary/issues/77",
+		Affected: []affected{{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2, TestID: "t1"}},
+	}
+	acts, err := syncIssues(context.Background(), issueSyncCfg{DryRun: true, Out: &dry}, []*incident{trackedDowngraded})
+	if err != nil || len(acts) != 1 || acts[0].Kind != "update" || !strings.Contains(dry.String(), "[DRY-RUN UPDATE]") {
+		t.Fatalf("offline dry-run update on tracked downgraded issue: acts=%+v err=%v out=%s", acts, err, dry.String())
 	}
 }

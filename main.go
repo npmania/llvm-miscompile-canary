@@ -926,9 +926,11 @@ func cmdAliveCheck(ctx context.Context, args []string, stdout, stderr io.Writer)
 		}
 		res := runAliveTV(ctx, tvBin, *before, *after, *timeout)
 		inc.AliveTVStatus = res.Status
-		inc.AliveTVOutput = sanitizeText(res.Output)
+		inc.AliveTVOutput = sanitizeCode(res.Output)
 		if res.ProvesBug {
 			inc.Confidence = confConfirmed
+		} else if res.Status == aliveVerified && inc.Confidence == confLikely {
+			inc.Confidence = confNeedsReview
 		}
 		inc.UpdatedAt = time.Now().UTC()
 		if err := writeJSONAtomic(*incPath, &inc); err != nil {

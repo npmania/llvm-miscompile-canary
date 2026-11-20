@@ -761,7 +761,7 @@ func TestLLUBI(t *testing.T) {
 if grep -q "ret i32 0" "$last"; then exit 0; fi
 echo "error: Execution of function 'main' resulted in poison return value." >&2
 exit 1`)
-	if r := runLLUBI(ctx, mMain, bMain, aMain, bMain, aMain, "main", 5*time.Second); r.Status != llubiMismatch || !r.ProvesBug {
+	if r := runLLUBI(ctx, mMain, bMain, aMain, bMain, aMain, "main", 5*time.Second); r.Status != llubiMismatch || r.ProvesBug {
 		t.Fatalf("main mismatch: got %+v", r)
 	}
 
@@ -783,7 +783,7 @@ exit 1`)
 echo "warning: passing null values for all arguments" >&2
 if grep -q "ret i32 0" "$last"; then exit 0; fi
 exit 1`)
-	if r := runLLUBI(ctx, mSc, "", "", bSc, aSc, "scalar_fn", 5*time.Second); r.Status != llubiMismatch || !r.ProvesBug {
+	if r := runLLUBI(ctx, mSc, "", "", bSc, aSc, "scalar_fn", 5*time.Second); r.Status != llubiMismatch || r.ProvesBug {
 		t.Fatalf("scalar mismatch: got %+v", r)
 	}
 
@@ -1393,6 +1393,125 @@ func TestTriageHelpers(t *testing.T) {
 	if origFlags[0] != "-O3" {
 		t.Fatalf("withoutBaselineFlags aliased input slice: %v", origFlags)
 	}
+
+	confCases := []struct {
+		name      string
+		spec      platformSpec
+		san       bool
+		cons      bool
+		diagO0    string
+		alive     formalResult
+		wantASan  bool
+		wantConf  string
+		wantIssue bool
+	}{
+		{
+			name:      "rv64-ubsan-clean-promotes-likely",
+			spec:      platformSpecs[platLinuxRISCV64],
+			san:       true,
+			cons:      true,
+			diagO0:    "pass",
+			alive:     formalResult{Status: formalUnsupported},
+			wantASan:  false,
+			wantConf:  confLikely,
+			wantIssue: true,
+		},
+		{
+			name:      "rv64-san-fail-stays-needs-review",
+			spec:      platformSpecs[platLinuxRISCV64],
+			san:       false,
+			cons:      true,
+			diagO0:    "pass",
+			alive:     formalResult{Status: formalUnsupported},
+			wantASan:  false,
+			wantConf:  confNeedsReview,
+			wantIssue: false,
+		},
+		{
+			name:      "rv64-alive-verified-downgrades-likely",
+			spec:      platformSpecs[platLinuxRISCV64],
+			san:       true,
+			cons:      true,
+			diagO0:    "pass",
+			alive:     formalResult{Status: aliveVerified},
+			wantASan:  false,
+			wantConf:  confNeedsReview,
+			wantIssue: false,
+		},
+		{
+			name:      "x86-san-clean-likely",
+			spec:      platformSpecs[platLinuxX86],
+			san:       true,
+			cons:      true,
+			diagO0:    "pass",
+			alive:     formalResult{Status: formalUnsupported},
+			wantASan:  true,
+			wantConf:  confLikely,
+			wantIssue: true,
+		},
+		{
+			name:      "x86-san-fail-needs-review",
+			spec:      platformSpecs[platLinuxX86],
+			san:       false,
+			cons:      true,
+			diagO0:    "pass",
+			alive:     formalResult{Status: formalUnsupported},
+			wantASan:  false,
+			wantConf:  confNeedsReview,
+			wantIssue: false,
+		},
+		{
+			name:      "x86-alive-verified-needs-review",
+			spec:      platformSpecs[platLinuxX86],
+			san:       true,
+			cons:      true,
+			diagO0:    "pass",
+			alive:     formalResult{Status: aliveVerified},
+			wantASan:  true,
+			wantConf:  confNeedsReview,
+			wantIssue: false,
+		},
+		{
+			name:      "x86-alive-miscompile-confirmed",
+			spec:      platformSpecs[platLinuxX86],
+			san:       false,
+			cons:      false,
+			diagO0:    "test_fail",
+			alive:     formalResult{Status: aliveMiscompile, ProvesBug: true},
+			wantASan:  false,
+			wantConf:  confConfirmed,
+			wantIssue: true,
+		},
+	}
+	for _, tc := range confCases {
+		gotASan, gotConf := classifyConfidence(tc.spec, tc.san, tc.cons, tc.diagO0, tc.alive)
+		if gotASan != tc.wantASan || gotConf != tc.wantConf {
+			t.Fatalf("%s: classifyConfidence = (%v, %q), want (%v, %q)", tc.name, gotASan, gotConf, tc.wantASan, tc.wantConf)
+		}
+		inc := &incident{
+			ID:             "inc-" + tc.name,
+			Status:         incidentOpen,
+			Confidence:     gotConf,
+			ASanUBSanClean: gotASan,
+			AliveTVStatus:  tc.alive.Status,
+			Affected:       []affected{{Package: "zstd", Platform: tc.spec.ID, Profile: profDistroO2, TestID: "t1"}},
+		}
+		if gotIssue := groupQualifiesForIssue([]*incident{inc}); gotIssue != tc.wantIssue {
+			t.Fatalf("%s: groupQualifiesForIssue = %v, want %v", tc.name, gotIssue, tc.wantIssue)
+		}
+		if tc.spec.ID == platLinuxRISCV64 && tc.wantIssue {
+			rows := incidentMetaRows([]*incident{inc}, false, defaultSiteURL)
+			var sanVal string
+			for _, r := range rows {
+				if r[0] == "Sanitizers" {
+					sanVal = r[1]
+				}
+			}
+			if sanVal != "`ubsan` clean (asan disabled)" {
+				t.Fatalf("%s: Sanitizers row = %q, want ubsan-only warning", tc.name, sanVal)
+			}
+		}
+	}
 }
 
 func makeTarGz(t *testing.T, outPath string, files map[string]string) string {
@@ -1626,10 +1745,7 @@ func TestTriagePipeline(t *testing.T) {
 	}
 	tmp := t.TempDir()
 	tarPath := filepath.Join(tmp, "cleanbug.tar.gz")
-	sha := makeTarGz(t, tarPath, map[string]string{
-		"a.c": "int helper_a(int x) { return x + 10; }\n",
-		"b.c": "int helper_b(int x) { return x * 2; }\n",
-		"culprit.c": `int unused_dead(int z) { return (z * 7) + 123; }
+	culpritSrc := `int unused_dead(int z) { return (z * 7) + 123; }
 int compute_kernel(int n) {
     int sum = 0;
     for (int i = 1; i <= n; i++) sum += i;
@@ -1639,7 +1755,11 @@ int compute_kernel(int n) {
     return sum;
 #endif
 }
-`,
+`
+	sha := makeTarGz(t, tarPath, map[string]string{
+		"a.c":       "int helper_a(int x) { return x + 10; }\n",
+		"b.c":       "int helper_b(int x) { return x * 2; }\n",
+		"culprit.c": culpritSrc,
 		"main.c": `extern int helper_a(int); extern int helper_b(int); extern int compute_kernel(int);
 int main(void) {
     if (helper_a(5) != 15 || helper_b(5) != 10) return 2;
@@ -1649,7 +1769,36 @@ int main(void) {
 	})
 	rec := makeTestRecipe(t, filepath.Join(tmp, "corpus"), "cleanbug", tarPath, sha)
 
-	const bugPass = 14
+	probeC := filepath.Join(tmp, "probe_culprit.c")
+	if err := os.WriteFile(probeC, []byte(culpritSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	profFlags, err := profileCompilerFlags(profDistroO2, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probeArgs := append(crossTargetArgs(spec), profFlags...)
+	if spec.IsDarwin && goodTC.SDKRoot != "" {
+		probeArgs = append(probeArgs, "-isysroot", goodTC.SDKRoot)
+	}
+	probeArgs = append(probeArgs, "-S", "-emit-llvm", "-mllvm", "-opt-bisect-limit=-1", probeC, "-o", filepath.Join(tmp, "probe_culprit.ll"))
+	var probeOut, probeStderr bytes.Buffer
+	probeCmd := exec.Command(goodTC.Clang, probeArgs...)
+	probeCmd.Stdout = &probeOut
+	probeCmd.Stderr = &probeStderr
+	if err := probeCmd.Run(); err != nil {
+		t.Fatalf("probe bisect passes: %v\nstdout=%s\nstderr=%s", err, probeOut.String(), probeStderr.String())
+	}
+	bugPass := 0
+	for _, e := range parseBisectOutput(probeStderr.String()) {
+		if e.Func == "compute_kernel" && !isInterproceduralPass(e.PassName, e.Target) && e.Index > 1 {
+			bugPass = e.Index
+			break
+		}
+	}
+	if bugPass == 0 {
+		t.Fatalf("no eligible compute_kernel pass found in bisect output:\n%s", probeStderr.String())
+	}
 	badClang := filepath.Join(tmp, "bad-clang")
 	qClang := shQuote(goodTC.Clang)
 	badScript := fmt.Sprintf(`#!/bin/sh
@@ -1752,8 +1901,10 @@ exec %s "$@"
 	}
 	inc := res.Incident
 	wantConf := confLikely
-	if inc.AliveTVStatus == aliveMiscompile || inc.LLUBIStatus == llubiMismatch {
+	if inc.AliveTVStatus == aliveMiscompile {
 		wantConf = confConfirmed
+	} else if inc.AliveTVStatus == aliveVerified {
+		wantConf = confNeedsReview
 	}
 	if inc.Confidence != wantConf || !inc.ASanUBSanClean || !inc.ConservativeFlagIndependent || inc.DiagO0Status != "pass" {
 		t.Fatalf("unexpected confidence/ub flags: %+v (want conf=%q)", inc, wantConf)
@@ -1795,6 +1946,65 @@ exec %s "$@"
 
 	noRedBadTC := badTC
 	noRedBadTC.LLVMReduce, noRedBadTC.AliveTV, noRedBadTC.LLUBI = "", "", ""
+
+	t.Run("llubi-mismatch-not-confirmed", func(t *testing.T) {
+		mockLLUBI := filepath.Join(tmp, "mock-llubi")
+		if err := os.WriteFile(mockLLUBI, []byte("#!/bin/sh\nlast=\"\"\nfor a in \"$@\"; do last=\"$a\"; done\nif grep -q '999' \"$last\"; then exit 1; fi\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		tc := noRedBadTC
+		tc.LLUBI = mockLLUBI
+		r, err := triage(context.Background(), triageOpts{
+			Runner:        &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2},
+			Recipe:        rec,
+			Spec:          spec,
+			Profile:       profDistroO2,
+			GoodTC:        goodTC,
+			BadTC:         &tc,
+			GoodSHA:       commits[0],
+			BadSHA:        commits[4],
+			WorkDir:       filepath.Join(tmp, "work-llubi-likely"),
+			BundleDir:     filepath.Join(tmp, "bundles-llubi-likely"),
+			ReduceMaxIter: 1,
+			ReduceTimeout: 20 * time.Second,
+		})
+		if err != nil || r == nil || r.Dropped || r.Incident == nil {
+			t.Fatalf("got r=%+v err=%v", r, err)
+		}
+		if r.Incident.LLUBIStatus != llubiMismatch || r.Incident.Confidence != confLikely {
+			t.Fatalf("expected llubi mismatch -> confLikely, got status=%q conf=%q", r.Incident.LLUBIStatus, r.Incident.Confidence)
+		}
+	})
+
+	t.Run("alive-verified-downgrades-likely", func(t *testing.T) {
+		mockAlive := filepath.Join(tmp, "mock-alive-verified")
+		if err := os.WriteFile(mockAlive, []byte("#!/bin/sh\necho \"Transformation seems to be correct!\"\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		tc := noRedBadTC
+		tc.AliveTV = mockAlive
+		r, err := triage(context.Background(), triageOpts{
+			Runner:        &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2},
+			Recipe:        rec,
+			Spec:          spec,
+			Profile:       profDistroO2,
+			GoodTC:        goodTC,
+			BadTC:         &tc,
+			GoodSHA:       commits[0],
+			BadSHA:        commits[4],
+			WorkDir:       filepath.Join(tmp, "work-alive-ver"),
+			BundleDir:     filepath.Join(tmp, "bundles-alive-ver"),
+			ReduceMaxIter: 1,
+			ReduceTimeout: 20 * time.Second,
+		})
+		if err != nil || r == nil || r.Dropped || r.Incident == nil {
+			t.Fatalf("got r=%+v err=%v", r, err)
+		}
+		if r.Incident.AliveTVStatus != aliveVerified || r.Incident.Confidence != confNeedsReview ||
+			!r.Incident.ASanUBSanClean || !r.Incident.ConservativeFlagIndependent || r.Incident.DiagO0Status != "pass" {
+			t.Fatalf("expected alive-tv verified -> confNeedsReview, got %+v", r.Incident)
+		}
+	})
 
 	t.Run("commit-bisect-error-best-effort", func(t *testing.T) {
 		r, err := triage(context.Background(), triageOpts{

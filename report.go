@@ -45,9 +45,11 @@ var (
 	reHex40        = regexp.MustCompile("(?i)(^|[^0-9a-zA-Z/_-])([0-9a-f]{40})($|[^0-9a-zA-Z/_-])")
 	reHexSHA       = regexp.MustCompile(`^[0-9a-fA-F]{7,40}$`)
 	reDedupMarker  = regexp.MustCompile(`<!--\s*lmc-dedup-key:\s*([^\s>]+)\s*-->`)
-	reMetaDefLine  = regexp.MustCompile(`^!\d+\s*=`)
-	reInlineMeta   = regexp.MustCompile(`,\s*![A-Za-z0-9_.]+\s+!\d+|\s+!(?:dbg|DIAssignID|prof|callees|heapallocsite|srcloc|tbaa(?:\.struct)?|range|noundef|nonnull|align)\s+!\d+`)
-	reAttrOutsideQ = regexp.MustCompile(`"(?:\\.|[^"])*"| #\d+\b`)
+	reMetaDefLine  = regexp.MustCompile(`^!(\d+)\s*=\s*(.*)$`)
+	reDebugMetaRHS = regexp.MustCompile(`^(?:distinct\s+)?!(?:DI|GenericDI)`)
+	reInlineMeta   = regexp.MustCompile(`(?:\s*,\s*|\s+)!(?:dbg|DIAssignID|prof|callees|heapallocsite|srcloc)\s+!\d+\b`)
+	reMetaRef      = regexp.MustCompile(`!(\d+)\b`)
+	reAttrToken    = regexp.MustCompile(` #\d+\b`)
 	reLLUBIExits   = regexp.MustCompile(`before_exit=(-?\d+)\s+after_exit=(-?\d+)`)
 	reOptPassName  = regexp.MustCompile(`^[a-z][a-z0-9-]+$`)
 
@@ -76,6 +78,23 @@ func tickSHA(s string) string {
 		return "`" + h + "`"
 	}
 	return ""
+}
+
+func llvmCommitURL(sha string) string {
+	s := strings.ToLower(strings.Trim(strings.TrimSpace(sha), "`\"'"))
+	if !reHexSHA.MatchString(s) {
+		return ""
+	}
+	return "https://github.com/llvm/llvm-project/commit/" + s
+}
+
+func llvmCompareURL(good, bad string) string {
+	g := strings.ToLower(strings.Trim(strings.TrimSpace(good), "`\"'"))
+	b := strings.ToLower(strings.Trim(strings.TrimSpace(bad), "`\"'"))
+	if !reHexSHA.MatchString(g) || !reHexSHA.MatchString(b) {
+		return ""
+	}
+	return "https://github.com/llvm/llvm-project/compare/" + g + "..." + b
 }
 
 func sortedUnique(xs []string) []string { slices.Sort(xs); return slices.Compact(xs) }
@@ -179,38 +198,236 @@ func checkNoCrossRefs(s string) error {
 func cleanIR(ir string) string        { return stripIR(ir, false) }
 func cleanIRForDiff(ir string) string { return stripIR(ir, true) }
 
+func splitIRComment(line string) (string, string) {
+	inQuote := false
+	for i := 0; i < len(line); i++ {
+		switch line[i] {
+		case '\\':
+			if inQuote && i+1 < len(line) {
+				i++
+			}
+		case '"':
+			inQuote = !inQuote
+		case ';':
+			if !inQuote {
+				return line[:i], line[i:]
+			}
+		}
+	}
+	return line, ""
+}
+
+func transformIRCode(line string, fn func(string) string) string {
+	code, comment := splitIRComment(line)
+	var b strings.Builder
+	segStart := 0
+	for i := 0; i < len(code); i++ {
+		if code[i] != '"' {
+			continue
+		}
+		if i > segStart {
+			b.WriteString(fn(code[segStart:i]))
+		}
+		j := i + 1
+		for j < len(code) {
+			if code[j] == '\\' && j+1 < len(code) {
+				j += 2
+				continue
+			}
+			if code[j] == '"' {
+				j++
+				break
+			}
+			j++
+		}
+		b.WriteString(code[i:j])
+		segStart = j
+		i = j - 1
+	}
+	if segStart < len(code) {
+		b.WriteString(fn(code[segStart:]))
+	}
+	b.WriteString(comment)
+	return b.String()
+}
+
+func extractIRMetaRefs(s string) []string {
+	var refs []string
+	transformIRCode(s, func(seg string) string {
+		for _, m := range reMetaRef.FindAllStringSubmatch(seg, -1) {
+			refs = append(refs, m[1])
+		}
+		return seg
+	})
+	return refs
+}
+
+func stripTupleMetaIDs(line string, drop map[string]bool) string {
+	if len(drop) == 0 {
+		return line
+	}
+	code, comment := splitIRComment(line)
+	eq := strings.IndexByte(code, '=')
+	if eq < 0 {
+		return line
+	}
+	rhsTrim := strings.TrimSpace(code[eq+1:])
+	rest := rhsTrim
+	if cut, ok := strings.CutPrefix(rest, "distinct"); ok && len(cut) > 0 && (cut[0] == ' ' || cut[0] == '\t') {
+		rest = strings.TrimLeft(cut, " \t")
+	}
+	if !strings.HasPrefix(rest, "!{") || !strings.HasSuffix(rhsTrim, "}") {
+		return line
+	}
+	openBrace := strings.IndexByte(rhsTrim, '{')
+	closeBrace := len(rhsTrim) - 1
+	inner := rhsTrim[openBrace+1 : closeBrace]
+
+	var items []string
+	inQuote, depth, start := false, 0, 0
+	for i := 0; i < len(inner); i++ {
+		c := inner[i]
+		if inQuote {
+			if c == '\\' && i+1 < len(inner) {
+				i++
+			} else if c == '"' {
+				inQuote = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inQuote = true
+		case '{', '(', '[':
+			depth++
+		case '}', ')', ']':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth == 0 {
+				items = append(items, inner[start:i])
+				start = i + 1
+			}
+		}
+	}
+	items = append(items, inner[start:])
+
+	var kept []string
+	changed := false
+	for _, it := range items {
+		t := strings.TrimSpace(it)
+		if id, ok := strings.CutPrefix(t, "!"); ok && drop[id] {
+			changed = true
+			continue
+		}
+		if t != "" {
+			kept = append(kept, t)
+		}
+	}
+	if !changed {
+		return line
+	}
+	return code[:eq+1] + " " + rhsTrim[:openBrace+1] + strings.Join(kept, ", ") + "}" + comment
+}
+
 func stripIR(ir string, forDiff bool) string {
 	ir = strings.ReplaceAll(ir, "\r\n", "\n")
 	if strings.TrimSpace(ir) == "" {
 		return ""
 	}
-	dropBase := []string{"; ModuleID =", "source_filename =", "!llvm.", "#dbg_", "call void @llvm.dbg.", "tail call void @llvm.dbg."}
-	dropDiff := []string{"target datalayout =", "target triple =", "declare ", "; Function Attrs:", "attributes #"}
+	dropBase := []string{"; ModuleID =", "source_filename =", "!llvm.dbg.", "!llvm.ident", "!llvm.commandline", "#dbg_", "call void @llvm.dbg.", "tail call void @llvm.dbg.", "musttail call void @llvm.dbg.", "notail call void @llvm.dbg."}
+	dropDiff := []string{"target datalayout =", "target triple =", "declare ", "; Function Attrs:", "attributes #", "!llvm.module.flags"}
 	hasPref := func(s string, ps []string) bool {
 		return slices.ContainsFunc(ps, func(p string) bool { return strings.HasPrefix(s, p) })
 	}
-	var out []string
-	prevBlank := true
-	for _, raw := range strings.Split(ir, "\n") {
+
+	type irLine struct {
+		text string
+		id   string
+		isDI bool
+		drop bool
+	}
+	rawLines := strings.Split(ir, "\n")
+	parsed := make([]irLine, len(rawLines))
+	metaIdx := make(map[string]int)
+	diIDs := make(map[string]bool)
+
+	for i, raw := range rawLines {
 		line := strings.TrimRight(raw, " \t\r")
 		trim := strings.TrimSpace(line)
-		if trim != "" && (hasPref(trim, dropBase) || reMetaDefLine.MatchString(trim) || (forDiff && hasPref(trim, dropDiff))) {
+		if trim == "" {
 			continue
 		}
-		if trim != "" && !strings.HasPrefix(trim, ";") {
-			line = reInlineMeta.ReplaceAllString(line, "")
-			if forDiff {
-				line = reAttrOutsideQ.ReplaceAllStringFunc(line, func(m string) string { return pick(m[0] == '"', m, "") })
-			}
+		if hasPref(trim, dropBase) || (forDiff && hasPref(trim, dropDiff)) {
+			parsed[i].drop = true
+			continue
 		}
-		line = strings.TrimRight(line, " \t")
-		if strings.TrimSpace(line) == "" {
+		if m := reMetaDefLine.FindStringSubmatch(trim); len(m) == 3 {
+			id, rhs := m[1], strings.TrimSpace(m[2])
+			isDI := reDebugMetaRHS.MatchString(rhs)
+			parsed[i] = irLine{text: line, id: id, isDI: isDI, drop: isDI}
+			metaIdx[id] = i
+			if isDI {
+				diIDs[id] = true
+			}
+			continue
+		}
+		if !strings.HasPrefix(trim, ";") {
+			line = transformIRCode(line, func(seg string) string {
+				seg = reInlineMeta.ReplaceAllString(seg, "")
+				if forDiff {
+					seg = reAttrToken.ReplaceAllString(seg, "")
+				}
+				return seg
+			})
+			line = strings.TrimRight(line, " \t")
+		}
+		parsed[i].text = line
+	}
+
+	for i := range parsed {
+		if !parsed[i].drop && !parsed[i].isDI && (parsed[i].id != "" || strings.HasPrefix(strings.TrimSpace(parsed[i].text), "!")) {
+			parsed[i].text = stripTupleMetaIDs(parsed[i].text, diIDs)
+		}
+	}
+
+	var queue []string
+	for _, pl := range parsed {
+		if pl.drop || pl.id != "" || strings.TrimSpace(pl.text) == "" {
+			continue
+		}
+		queue = append(queue, extractIRMetaRefs(pl.text)...)
+	}
+	keepMeta := make(map[string]bool)
+	for head := 0; head < len(queue); head++ {
+		id := queue[head]
+		if keepMeta[id] {
+			continue
+		}
+		idx, ok := metaIdx[id]
+		if !ok || parsed[idx].drop || parsed[idx].isDI {
+			continue
+		}
+		keepMeta[id] = true
+		if _, rhs, ok := strings.Cut(parsed[idx].text, "="); ok {
+			queue = append(queue, extractIRMetaRefs(rhs)...)
+		}
+	}
+
+	var out []string
+	prevBlank := true
+	for _, pl := range parsed {
+		if pl.drop || (pl.id != "" && !keepMeta[pl.id]) {
+			continue
+		}
+		if strings.TrimSpace(pl.text) == "" {
 			if !prevBlank {
 				prevBlank, out = true, append(out, "")
 			}
 			continue
 		}
-		prevBlank, out = false, append(out, line)
+		prevBlank, out = false, append(out, pl.text)
 	}
 	for len(out) > 0 && out[len(out)-1] == "" {
 		out = out[:len(out)-1]
@@ -232,6 +449,17 @@ func inlineReducedIR(raw string) string {
 		return ""
 	}
 	return ir
+}
+
+func formatAliveTVOutput(inc *incident) string {
+	if inc == nil || inc.isBuildFail() || !strings.EqualFold(strings.TrimSpace(inc.AliveTVStatus), aliveMiscompile) {
+		return ""
+	}
+	raw := strings.ReplaceAll(strings.TrimSpace(inc.AliveTVOutput), "\r\n", "\n")
+	if raw == "" {
+		return ""
+	}
+	return clipCode(sanitizeCode(raw), 4000)
 }
 
 func incidentOptLevel(inc *incident) string {
@@ -362,11 +590,24 @@ func incidentMetaRows(incs []*incident, htmlMode bool, siteURL string) [][2]stri
 		return pick(htmlMode, fmt.Sprintf(`<a href="%s">%s</a>`, html.EscapeString(href), html.EscapeString(lbl)), fmt.Sprintf("[%s](%s)", lbl, href))
 	}
 	sha := func(s string) string { return pick(htmlMode, cmp.Or(hexSHA(s), shortSHA(s)), hexSHA(s)) }
+	commitCode := func(rawSHA string) string {
+		s := sha(rawSHA)
+		if s == "" {
+			return ""
+		}
+		if !htmlMode {
+			return code(s)
+		}
+		if u := llvmCommitURL(rawSHA); u != "" {
+			return fmt.Sprintf(`<a href="%s" rel="noopener">%s</a>`, u, code(s))
+		}
+		return code(s)
+	}
 	var rows [][2]string
 	add := func(k, v string) { rows = append(rows, [2]string{k, v}) }
 
 	if htmlMode {
-		f := sha(primary.FixedSHA)
+		f := commitCode(primary.FixedSHA)
 		var lbls []string
 		for _, l := range primary.Labels {
 			if s := txt(l); s != "" {
@@ -376,7 +617,7 @@ func incidentMetaRows(incs []*incident, htmlMode bool, siteURL string) [][2]stri
 		suffix := pick(len(lbls) > 0, " ("+strings.Join(lbls, ", ")+")", "")
 		switch primary.Status {
 		case incidentResolved:
-			add("Status", pick(f != "", "resolved at "+code(f), "resolved"))
+			add("Status", pick(f != "", "resolved at "+f, "resolved"))
 		case incidentClosed:
 			add("Status", "closed"+suffix)
 		default:
@@ -387,14 +628,20 @@ func incidentMetaRows(incs []*incident, htmlMode bool, siteURL string) [][2]stri
 	if isBuild {
 		add("Kind", pick(isICEExcerpt(primary.ErrorExcerpt), "compiler ICE", "build failure"))
 	}
-	if c := sha(primary.CulpritSHA); c != "" {
+	if c := commitCode(primary.CulpritSHA); c != "" {
 		subj := txt(primary.CulpritSubject)
-		add("Commit", code(c)+pick(subj != "", " ("+subj+")", ""))
-	} else if bad := sha(primary.BadSHA); bad != "" {
-		add("Commit", code(bad))
+		add("Commit", c+pick(subj != "", " ("+subj+")", ""))
+	} else if bad := commitCode(primary.BadSHA); bad != "" {
+		add("Commit", bad)
 	}
 	if g, bad := sha(primary.GoodSHA), sha(primary.BadSHA); g != "" && bad != "" {
-		add("Range", code(g)+" .. "+code(bad))
+		rangeVal := code(g) + " .. " + code(bad)
+		if htmlMode {
+			if u := llvmCompareURL(primary.GoodSHA, primary.BadSHA); u != "" {
+				rangeVal = fmt.Sprintf(`<a href="%s" rel="noopener">%s .. %s</a>`, u, code(g), code(bad))
+			}
+		}
+		add("Range", rangeVal)
 	}
 	if pass := raw(primary.CulpritPass); pass != "" {
 		add("Pass", code(pass)+pick(primary.CulpritPassIndex > 0, " ("+code(fmt.Sprintf("-opt-bisect-limit=%d", primary.CulpritPassIndex))+")", ""))
@@ -653,6 +900,18 @@ func syncIssues(ctx context.Context, cfg issueSyncCfg, incs []*incident) ([]issu
 	return actions, nil
 }
 
+func groupQualifiesForIssue(incs []*incident) bool {
+	return slices.ContainsFunc(incs, func(i *incident) bool {
+		if i == nil || i.Status != incidentOpen {
+			return false
+		}
+		if i.isBuildFail() {
+			return isICEExcerpt(i.ErrorExcerpt)
+		}
+		return confRank(i.Confidence) >= confRank(confLikely)
+	})
+}
+
 func syncGroup(ctx context.Context, cli *ghClient, cfg issueSyncCfg, key string, incs []*incident, ex *ghIssue) (*issueAction, bool, error) {
 	var ids []string
 	recNum, recURL := 0, ""
@@ -700,7 +959,7 @@ func syncGroup(ctx context.Context, cli *ghClient, cfg issueSyncCfg, key string,
 	}
 
 	hasOpen := slices.ContainsFunc(incs, func(i *incident) bool { return i.Status == incidentOpen })
-	if ex == nil && !hasOpen {
+	if ex == nil && (!hasOpen || (!(cfg.DryRun && act.IssueNumber > 0) && !groupQualifiesForIssue(incs))) {
 		return nil, false, nil
 	}
 
@@ -854,6 +1113,10 @@ func formatGroupBody(incs []*incident, key, siteURL string) string {
 			fmt.Fprintf(&b, "%s\n%s\n%s\n\n", f, excerpt, f)
 		}
 	} else {
+		if aliveOut := formatAliveTVOutput(primary); aliveOut != "" {
+			f := fenceFor(aliveOut)
+			fmt.Fprintf(&b, "`alive-tv`:\n\n%s\n%s\n%s\n\n", f, aliveOut, f)
+		}
 		if ir := inlineReducedIR(primary.ReducedIR); ir != "" {
 			f := fenceFor(ir)
 			fmt.Fprintf(&b, "`%s`:\n\n%sllvm\n%s\n%s\n\n", reproCommand(primary), f, ir, f)

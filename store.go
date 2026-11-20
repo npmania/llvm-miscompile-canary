@@ -275,10 +275,23 @@ func isOmittedFormalStatus(status string) bool {
 }
 
 func shouldUpgradeFormal(cur, cand string) bool {
-	if isOmittedFormalStatus(cand) {
-		return false
+	formalRank := func(s string) int {
+		if isOmittedFormalStatus(s) {
+			return 0
+		}
+		switch strings.ToLower(strings.TrimSpace(s)) {
+		case formalUnsupported:
+			return 1
+		case formalTimeout:
+			return 2
+		case aliveMiscompile, llubiMismatch:
+			return 4
+		default:
+			return 3
+		}
 	}
-	return isOmittedFormalStatus(cur) || (cur == "unsupported" && cand != "unsupported")
+	candRank := formalRank(cand)
+	return candRank > 0 && candRank > formalRank(cur)
 }
 
 func recordSweep(st *state, rec sweep, incidents []*incident) {
@@ -504,6 +517,9 @@ func mergeIncident(dir string, inc *incident) (*incident, error) {
 		}
 		if shouldUpgradeFormal(ex.LLUBIStatus, inc.LLUBIStatus) {
 			ex.LLUBIStatus, ex.LLUBIOutput = inc.LLUBIStatus, inc.LLUBIOutput
+		}
+		if ex.AliveTVStatus == aliveVerified && ex.Confidence == confLikely {
+			ex.Confidence = confNeedsReview
 		}
 		ex.UpdatedAt = time.Now().UTC()
 		target = ex

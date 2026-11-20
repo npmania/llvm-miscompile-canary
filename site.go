@@ -21,7 +21,7 @@ var tmplFS embed.FS
 var siteTmpl = template.Must(template.ParseFS(tmplFS, "templates/*.html"))
 
 type corpusEntry struct{ Name, Category, Repo, Version, Lang, SmokeTest string }
-type navHeader struct{ LatestSHA12, UpdatedUTC, UpdatedISO string }
+type navHeader struct{ LatestSHA12, LatestCommitURL, UpdatedUTC, UpdatedISO string }
 type matrixColumn struct{ Platform, Profile, Header string }
 type matrixCell struct{ Kind, Text, Href string }
 type sweepLogEntry struct{ Anchor, Heading, Status, FailedTests, Excerpt string }
@@ -30,8 +30,8 @@ type matrixRow struct {
 	Cells            []matrixCell
 }
 type incidentRowView struct {
-	ID, CulpritSHA, FixedSHA, Pass, Function, Targets, IssueURL string
-	IssueNumber                                                 int
+	ID, CulpritSHA, CulpritCommitURL, FixedSHA, FixedCommitURL, Pass, Function, Targets, IssueURL string
+	IssueNumber                                                                                   int
 }
 type kvRow struct{ Label, Value template.HTML }
 type profileSpecView struct {
@@ -154,23 +154,26 @@ func loadSiteCatalog(storeDir, corpusDir string) ([]corpusEntry, error) {
 }
 
 func resolveNav(st *state, sweeps []*sweep) navHeader {
-	sha := "-"
+	sha, rawSHA := "-", ""
 	var ts time.Time
 	if len(sweeps) > 0 {
-		sha, ts = cmp.Or(displaySHA(sweeps[0].LLVMCommit), "-"), sweeps[0].CompletedAt
+		rawSHA = sweeps[0].LLVMCommit
+		sha, ts = cmp.Or(displaySHA(rawSHA), "-"), sweeps[0].CompletedAt
 		if ts.IsZero() {
 			ts = sweeps[0].StartedAt
 		}
 	} else if st != nil && st.LastSweepSHA != "" {
-		sha, ts = cmp.Or(displaySHA(st.LastSweepSHA), "-"), st.UpdatedAt
+		rawSHA = st.LastSweepSHA
+		sha, ts = cmp.Or(displaySHA(rawSHA), "-"), st.UpdatedAt
 		if st.LastSweepAt != nil && !st.LastSweepAt.IsZero() {
 			ts = *st.LastSweepAt
 		}
 	}
+	commitURL := llvmCommitURL(rawSHA)
 	if ts.IsZero() {
-		return navHeader{sha, "-", ""}
+		return navHeader{sha, commitURL, "-", ""}
 	}
-	return navHeader{sha, ts.UTC().Format("2006-01-02 15:04 UTC"), ts.UTC().Format(time.RFC3339)}
+	return navHeader{sha, commitURL, ts.UTC().Format("2006-01-02 15:04 UTC"), ts.UTC().Format(time.RFC3339)}
 }
 
 func buildIndexData(st *state, sweeps []*sweep, incs []*incident, catalog []corpusEntry) (any, []sweepLogEntry) {
@@ -353,6 +356,7 @@ func buildIncidentData(st *state, sweeps []*sweep, inc *incident) any {
 	nav := resolveNav(st, sweeps)
 	if nav.LatestSHA12 == "-" {
 		nav.LatestSHA12 = cmp.Or(displaySHA(inc.BadSHA), "-")
+		nav.LatestCommitURL = llvmCommitURL(inc.BadSHA)
 		if !inc.UpdatedAt.IsZero() {
 			nav.UpdatedUTC, nav.UpdatedISO = inc.UpdatedAt.UTC().Format("2006-01-02 15:04 UTC"), inc.UpdatedAt.UTC().Format(time.RFC3339)
 		}
@@ -367,6 +371,7 @@ func buildIncidentData(st *state, sweeps []*sweep, inc *incident) any {
 		heading = pkgs + ": " + pick(isICEExcerpt(inc.ErrorExcerpt), "compiler ICE", "build failure")
 	}
 	errExcerpt := clipCode(sanitizeCode(strings.ReplaceAll(strings.TrimSpace(inc.ErrorExcerpt), "\r\n", "\n")), 8000)
+	aliveOut := formatAliveTVOutput(inc)
 	cleanedIR := inlineReducedIR(inc.ReducedIR)
 	irBundleURL := pick(!inc.isBuildFail() && cleanedIR == "" && isSafeHTTPURL(inc.BundleURL), strings.TrimSpace(inc.BundleURL), "")
 	return struct {
@@ -374,11 +379,12 @@ func buildIncidentData(st *state, sweeps []*sweep, inc *incident) any {
 		ID, Heading     string
 		Rows            []kvRow
 		ErrorExcerpt    string
+		AliveTVOutput   string
 		ReproCmd        string
 		CleanedIR       string
 		IRBundleURL     string
 		HighlightedDiff template.HTML
-	}{nav, inc.ID, heading, rows, errExcerpt, reproCommand(inc), cleanedIR, irBundleURL, highlightDiffHTML(strings.TrimSpace(inc.PassDiff))}
+	}{nav, inc.ID, heading, rows, errExcerpt, aliveOut, reproCommand(inc), cleanedIR, irBundleURL, highlightDiffHTML(strings.TrimSpace(inc.PassDiff))}
 }
 
 func toIncidentRow(inc *incident) incidentRowView {
@@ -398,13 +404,15 @@ func toIncidentRow(inc *incident) incidentRowView {
 	if !isSafeHTTPURL(issueURL) {
 		issueURL = ""
 	}
-	commit := displaySHA(inc.CulpritSHA)
+	commitRaw := inc.CulpritSHA
 	pass := inc.CulpritPass
 	if inc.isBuildFail() {
-		commit = displaySHA(cmp.Or(inc.CulpritSHA, inc.BadSHA))
+		commitRaw = cmp.Or(inc.CulpritSHA, inc.BadSHA)
 		pass = pick(isICEExcerpt(inc.ErrorExcerpt), "build (ice)", "build")
 	}
+	commit := displaySHA(commitRaw)
 	fixed := displaySHA(inc.FixedSHA)
+	fixedURL := ""
 	if inc.Status == incidentClosed {
 		var lbls []string
 		for _, l := range inc.Labels {
@@ -413,16 +421,20 @@ func toIncidentRow(inc *incident) incidentRowView {
 			}
 		}
 		fixed = cmp.Or(strings.Join(lbls, ", "), "closed")
+	} else {
+		fixedURL = llvmCommitURL(inc.FixedSHA)
 	}
 	return incidentRowView{
-		ID:          inc.ID,
-		CulpritSHA:  dash(commit),
-		FixedSHA:    dash(fixed),
-		Pass:        dash(pass),
-		Function:    dash(cmp.Or(strings.TrimSpace(inc.CulpritFunc), strings.TrimSpace(inc.CulpritTU))),
-		Targets:     dash(targets),
-		IssueNumber: inc.IssueNumber,
-		IssueURL:    issueURL,
+		ID:               inc.ID,
+		CulpritSHA:       dash(commit),
+		CulpritCommitURL: llvmCommitURL(commitRaw),
+		FixedSHA:         dash(fixed),
+		FixedCommitURL:   fixedURL,
+		Pass:             dash(pass),
+		Function:         dash(cmp.Or(strings.TrimSpace(inc.CulpritFunc), strings.TrimSpace(inc.CulpritTU))),
+		Targets:          dash(targets),
+		IssueNumber:      inc.IssueNumber,
+		IssueURL:         issueURL,
 	}
 }
 

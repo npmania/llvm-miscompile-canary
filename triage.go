@@ -338,15 +338,7 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 			llubiBeforeFunc, llubiAfterFunc, passRes.CulpritFunc, 25*time.Second)
 	}
 
-	sanFlags, _ := profileCompilerFlags(profDiagSan, o.Spec)
-	asanUBSanClean := sanPassed && slices.ContainsFunc(sanFlags, func(f string) bool { return strings.Contains(f, "address") })
-
-	conf := confNeedsReview
-	if aliveRes.ProvesBug || llubiRes.ProvesBug {
-		conf = confConfirmed
-	} else if asanUBSanClean && consIndep && diagO0 == "pass" {
-		conf = confLikely
-	}
+	asanUBSanClean, conf := classifyConfidence(o.Spec, sanPassed, consIndep, diagO0, aliveRes)
 
 	var culpritSHA, culpritSubj, commitErr string
 	if strings.TrimSpace(o.LLVMSrcDir) != "" && o.GoodSHA != "" && o.BadSHA != "" {
@@ -439,6 +431,18 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 		}
 	}
 	return &triageResult{Incident: inc, BundlePath: bundlePath, CommitBisectErr: commitErr}, nil
+}
+
+func classifyConfidence(spec platformSpec, sanPassed, consIndep bool, diagO0 string, aliveRes formalResult) (bool, string) {
+	sanFlags, _ := profileCompilerFlags(profDiagSan, spec)
+	asanUBSanClean := sanPassed && slices.ContainsFunc(sanFlags, func(f string) bool { return strings.Contains(f, "address") })
+	conf := confNeedsReview
+	if aliveRes.ProvesBug {
+		conf = confConfirmed
+	} else if sanPassed && consIndep && diagO0 == "pass" && aliveRes.Status != aliveVerified {
+		conf = confLikely
+	}
+	return asanUBSanClean, conf
 }
 
 func containsAny(s string, needles []string) bool {
@@ -677,7 +681,7 @@ func runLLUBI(ctx context.Context, bin, beforeFull, afterFull, beforeFunc, after
 		summary += "\n" + aRes.output
 	}
 	if aRes.ubFailed || aRes.exitCode != bRes.exitCode {
-		return formalResult{Status: llubiMismatch, Output: headText(summary, 2000), ProvesBug: true}
+		return formalResult{Status: llubiMismatch, Output: headText(summary, 2000)}
 	}
 	if strings.Contains(bRes.output, "passing null values for all arguments") || strings.Contains(aRes.output, "passing null values for all arguments") {
 		return formalResult{Status: formalUnsupported, Output: headText(firstNonEmpty(bRes.output, aRes.output), 2000)}
