@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -25,7 +26,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const maxCmdOutput = 8 << 20
+const (
+	maxCmdOutput     = 8 << 20
+	soloShardTimeout = 25 * time.Minute
+)
 
 var (
 	sha256HexRe  = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
@@ -156,6 +160,77 @@ func loadCorpus(dir string) ([]*recipe, error) {
 		out = append(out, r)
 	}
 	return out, nil
+}
+
+// isolate heavy recipes before lpt packing so slow qemu targets never share a shard
+func shardRecipes(recipes []*recipe, shards int) [][]*recipe {
+	if len(recipes) == 0 || shards <= 0 {
+		return nil
+	}
+	k := min(shards, len(recipes))
+	ordered := slices.Clone(recipes)
+	slices.SortFunc(ordered, func(a, b *recipe) int {
+		return cmp.Or(cmp.Compare(b.timeout(), a.timeout()), cmp.Compare(a.Name, b.Name))
+	})
+
+	var heavy, rest []*recipe
+	for _, r := range ordered {
+		if r.timeout() >= soloShardTimeout {
+			heavy = append(heavy, r)
+		} else {
+			rest = append(rest, r)
+		}
+	}
+
+	bins := make([][]*recipe, 0, k)
+	pack := ordered
+	packBins := k
+	if len(heavy) > 0 && len(rest) > 0 && len(heavy) < k {
+		for _, r := range heavy {
+			bins = append(bins, []*recipe{r})
+		}
+		pack = rest
+		packBins = k - len(heavy)
+	}
+
+	lptBins := make([][]*recipe, packBins)
+	loads := make([]time.Duration, packBins)
+	for _, r := range pack {
+		best := 0
+		for i := 1; i < packBins; i++ {
+			if loads[i] < loads[best] {
+				best = i
+			}
+		}
+		lptBins[best] = append(lptBins[best], r)
+		loads[best] += r.timeout()
+	}
+	bins = append(bins, lptBins...)
+	for _, b := range bins {
+		slices.SortFunc(b, func(a, b *recipe) int {
+			return cmp.Compare(a.Name, b.Name)
+		})
+	}
+	return bins
+}
+
+func shardSrcHash(recs []*recipe) string {
+	ordered := slices.Clone(recs)
+	slices.SortFunc(ordered, func(a, b *recipe) int {
+		return cmp.Compare(a.Name, b.Name)
+	})
+	h := sha256.New()
+	for _, r := range ordered {
+		h.Write([]byte(r.Name))
+		h.Write([]byte{0})
+		h.Write([]byte(r.Version))
+		h.Write([]byte{0})
+		h.Write([]byte(r.URL))
+		h.Write([]byte{0})
+		h.Write([]byte(r.SHA256))
+		h.Write([]byte{'\n'})
+	}
+	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
 func validateCorpus(dir string, require int) ([]*recipe, error) {

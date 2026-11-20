@@ -720,6 +720,386 @@ func TestCLISubcommands(t *testing.T) {
 	}
 }
 
+func TestCorpusMatrixSharding(t *testing.T) {
+	dir := t.TempDir()
+	synDir := filepath.Join(dir, "corpus")
+	type spec struct {
+		name    string
+		timeout int
+		plats   []string
+		version string
+		url     string
+		sha     string
+	}
+	specs := []spec{
+		{"heavy-a", 30, []string{platLinuxX86, platLinuxARM64, platLinuxRISCV64, platDarwinARM}, "1.0", "https://example.com/heavy-a.tar.gz", strings.Repeat("1", 64)},
+		{"heavy-b", 25, []string{platLinuxX86, platLinuxARM64, platLinuxRISCV64, platDarwinARM}, "1.0", "https://example.com/heavy-b.tar.gz", strings.Repeat("2", 64)},
+		{"med-a", 20, []string{platLinuxX86, platLinuxARM64, platDarwinARM}, "1.0", "https://example.com/med-a.tar.gz", strings.Repeat("3", 64)},
+		{"med-b", 15, []string{platLinuxX86, platLinuxARM64, platDarwinARM}, "1.0", "https://example.com/med-b.tar.gz", strings.Repeat("4", 64)},
+		{"med-c", 15, []string{platLinuxX86, platLinuxARM64}, "1.0", "https://example.com/med-c.tar.gz", strings.Repeat("5", 64)},
+		{"small-a", 10, []string{platLinuxX86, platLinuxARM64, platLinuxRISCV64, platDarwinARM}, "1.0", "https://example.com/small-a.tar.gz", strings.Repeat("6", 64)},
+		{"small-b", 10, []string{platLinuxX86, platDarwinARM}, "1.0", "https://example.com/small-b.tar.gz", strings.Repeat("7", 64)},
+	}
+	writeRec := func(base string, s spec) {
+		t.Helper()
+		p := filepath.Join(base, s.name)
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		y := fmt.Sprintf("name: %s\ncategory: \"Systems\"\nrepo: a/b\nversion: %q\nurl: %s\nsha256: %s\nlang: c\ntimeout_min: %d\nsmoke_test: s\nplatforms: [%s]\ndescription: d\ncmake: {}\nctest: {}\n",
+			s.name, s.version, s.url, s.sha, s.timeout, strings.Join(s.plats, ", "))
+		if err := os.WriteFile(filepath.Join(p, "recipe.yaml"), []byte(y), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, s := range specs {
+		writeRec(synDir, s)
+	}
+
+	for _, badArgs := range [][]string{
+		{"lmc", "corpus-matrix", "-corpus", synDir, "-shards", "-1"},
+		{"lmc", "corpus-matrix", "-corpus", synDir, "-include", "-shards", "-1"},
+		{"lmc", "corpus-matrix", "-corpus", synDir, "-shards", "4"},
+	} {
+		var out, errBuf bytes.Buffer
+		if code := runCLI(context.Background(), badArgs, &out, &errBuf); code == 0 {
+			t.Fatalf("%v succeeded unexpectedly: %s", badArgs, out.String())
+		}
+	}
+
+	runMatrix := func(args ...string) string {
+		t.Helper()
+		var out, errBuf bytes.Buffer
+		argv := append([]string{"lmc", "corpus-matrix"}, args...)
+		if code := runCLI(context.Background(), argv, &out, &errBuf); code != 0 {
+			t.Fatalf("%v failed (%d): %s", argv, code, errBuf.String())
+		}
+		return out.String()
+	}
+
+	unsharded := runMatrix("-corpus", synDir, "-include")
+	zeroShards := runMatrix("-corpus", synDir, "-include", "-shards", "0")
+	if unsharded != zeroShards {
+		t.Fatalf("-shards 0 diverged from -include:\n%s\nvs\n%s", zeroShards, unsharded)
+	}
+
+	emptyDir := filepath.Join(dir, "empty")
+	if err := os.MkdirAll(emptyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(runMatrix("-corpus", emptyDir, "-include", "-shards", "4")); got != `{"include":[]}` {
+		t.Fatalf("empty sharded matrix = %q, want empty include array", got)
+	}
+
+	type shardRow struct {
+		Shard      string `json:"shard"`
+		Label      string `json:"label"`
+		Packages   string `json:"packages"`
+		SrcHash    string `json:"src_hash"`
+		Platform   string `json:"platform"`
+		Runner     string `json:"runner"`
+		TCPlatform string `json:"tc_platform"`
+	}
+	parseShards := func(raw string) []shardRow {
+		t.Helper()
+		var mat struct {
+			Include []shardRow `json:"include"`
+		}
+		if err := json.Unmarshal([]byte(raw), &mat); err != nil {
+			t.Fatalf("unmarshal matrix: %v\n%s", err, raw)
+		}
+		return mat.Include
+	}
+	checkHex16 := func(h string) {
+		t.Helper()
+		if len(h) != 16 || h != strings.ToLower(h) {
+			t.Fatalf("invalid src_hash %q", h)
+		}
+		if _, err := hex.DecodeString(h); err != nil {
+			t.Fatalf("non-hex src_hash %q: %v", h, err)
+		}
+	}
+
+	raw4A := runMatrix("-corpus", synDir, "-include", "-shards", "4")
+	raw4B := runMatrix("-corpus", synDir, "-include", "-shards", "4")
+	if raw4A != raw4B {
+		t.Fatal("sharded corpus-matrix output is not deterministic")
+	}
+	rows4 := parseShards(raw4A)
+	byPlat := map[string][]shardRow{}
+	for _, row := range rows4 {
+		checkHex16(row.SrcHash)
+		byPlat[row.Platform] = append(byPlat[row.Platform], row)
+	}
+	wantX86 := [][3]string{
+		{"01", "heavy-a", "heavy-a"},
+		{"02", "heavy-b", "heavy-b"},
+		{"03", "shard-03", "med-a,small-a,small-b"},
+		{"04", "shard-04", "med-b,med-c"},
+	}
+	if len(byPlat[platLinuxX86]) != len(wantX86) {
+		t.Fatalf("x86 shards = %+v, want %d", byPlat[platLinuxX86], len(wantX86))
+	}
+	for i, w := range wantX86 {
+		got := byPlat[platLinuxX86][i]
+		if got.Shard != w[0] || got.Label != w[1] || got.Packages != w[2] {
+			t.Fatalf("x86 shard[%d] = %+v, want %v", i, got, w)
+		}
+	}
+	wantRV := [][3]string{
+		{"01", "heavy-a", "heavy-a"},
+		{"02", "heavy-b", "heavy-b"},
+		{"03", "small-a", "small-a"},
+	}
+	if len(byPlat[platLinuxRISCV64]) != len(wantRV) {
+		t.Fatalf("rv64 shards = %+v, want %d", byPlat[platLinuxRISCV64], len(wantRV))
+	}
+	for i, w := range wantRV {
+		got := byPlat[platLinuxRISCV64][i]
+		if got.Shard != w[0] || got.Label != w[1] || got.Packages != w[2] {
+			t.Fatalf("rv64 shard[%d] = %+v, want %v", i, got, w)
+		}
+	}
+	for i := 0; i < 4; i++ {
+		if rows4[i].Shard != "01" || rows4[i].Label != "heavy-a" {
+			t.Fatalf("row[%d] = %+v, want shard 01 heavy-a first", i, rows4[i])
+		}
+	}
+
+	baseRec := &recipe{Name: "p", Version: "1.0", URL: "https://example.com/p-1.0.tar.gz", SHA256: strings.Repeat("a", 64)}
+	otherRec := &recipe{Name: "q", Version: "2.0", URL: "https://example.com/q-2.0.tar.gz", SHA256: strings.Repeat("b", 64)}
+	h0 := shardSrcHash([]*recipe{baseRec, otherRec})
+	checkHex16(h0)
+	if hRev := shardSrcHash([]*recipe{otherRec, baseRec}); hRev != h0 {
+		t.Fatalf("shardSrcHash depended on input order: %q vs %q", h0, hRev)
+	}
+	for name, mut := range map[string]*recipe{
+		"version": {Name: baseRec.Name, Version: "1.1", URL: baseRec.URL, SHA256: baseRec.SHA256},
+		"url":     {Name: baseRec.Name, Version: baseRec.Version, URL: "https://example.com/p-1.0.tar.xz", SHA256: baseRec.SHA256},
+		"sha256":  {Name: baseRec.Name, Version: baseRec.Version, URL: baseRec.URL, SHA256: strings.Repeat("c", 64)},
+	} {
+		if got := shardSrcHash([]*recipe{mut, otherRec}); got == h0 {
+			t.Fatalf("shardSrcHash did not change when %s changed", name)
+		}
+	}
+
+	rows2 := parseShards(runMatrix("-corpus", synDir, "-include", "-shards", "2"))
+	seen2 := map[string]int{}
+	platCounts2 := map[string]int{}
+	for _, row := range rows2 {
+		if row.Packages == "" {
+			t.Fatalf("empty shard in fallback: %+v", row)
+		}
+		platCounts2[row.Platform]++
+		for _, pkg := range strings.Split(row.Packages, ",") {
+			seen2[row.Platform+"|"+pkg]++
+		}
+	}
+	for _, plat := range []string{platLinuxX86, platLinuxARM64, platLinuxRISCV64, platDarwinARM} {
+		if platCounts2[plat] != 2 {
+			t.Fatalf("fallback shards=2 count for %s = %d, want 2", plat, platCounts2[plat])
+		}
+	}
+	for _, s := range specs {
+		for _, plat := range s.plats {
+			if seen2[plat+"|"+s.name] != 1 {
+				t.Fatalf("fallback shards=2 coverage for (%s, %s) = %d, want 1", plat, s.name, seen2[plat+"|"+s.name])
+			}
+		}
+	}
+
+	rowsClamp := parseShards(runMatrix("-corpus", synDir, "-include", "-shards", "20"))
+	clampByPlat := map[string]int{}
+	for _, row := range rowsClamp {
+		pkgs := strings.Split(row.Packages, ",")
+		if len(pkgs) != 1 || row.Packages == "" || row.Label != row.Packages {
+			t.Fatalf("clamped shard not single-pkg: %+v", row)
+		}
+		clampByPlat[row.Platform]++
+	}
+	wantPlatCounts := map[string]int{}
+	for _, s := range specs {
+		for _, plat := range s.plats {
+			wantPlatCounts[plat]++
+		}
+	}
+	for plat, want := range wantPlatCounts {
+		if clampByPlat[plat] != want {
+			t.Fatalf("clamped shards for %s = %d, want %d", plat, clampByPlat[plat], want)
+		}
+	}
+
+	realRecipes, err := loadCorpus("corpus")
+	if err != nil {
+		t.Fatalf("loadCorpus: %v", err)
+	}
+	realRows := parseShards(runMatrix("-corpus", "corpus", "-include", "-shards", "12"))
+	if len(realRows) != 48 || len(realRows) > 256 {
+		t.Fatalf("real corpus sharded matrix count = %d, want 48", len(realRows))
+	}
+	realCovered := map[string]int{}
+	realShardKeys := map[string]bool{}
+	hashByShard := map[string]string{}
+	soloSeen := map[string]int{}
+	soloNames := []string{"duckdb", "z3", "binaryen", "cpython", "ffmpeg"}
+	for idx, row := range realRows {
+		checkHex16(row.SrcHash)
+		if idx < 20 && (row.Shard < "01" || row.Shard > "05") {
+			t.Fatalf("realRows[%d] = %+v, want solo heavy shards 01..05 in first 20 jobs", idx, row)
+		}
+		sk := row.Platform + "|" + row.Shard
+		if realShardKeys[sk] {
+			t.Fatalf("duplicate (platform, shard) key %s", sk)
+		}
+		realShardKeys[sk] = true
+		if prev, ok := hashByShard[row.Shard]; ok && prev != row.SrcHash {
+			t.Fatalf("shard %s src_hash mismatch across platforms: %q vs %q", row.Shard, prev, row.SrcHash)
+		}
+		hashByShard[row.Shard] = row.SrcHash
+		pkgs := strings.Split(row.Packages, ",")
+		if len(pkgs) == 0 || row.Packages == "" {
+			t.Fatalf("empty shard row: %+v", row)
+		}
+		if len(pkgs) == 1 && slices.Contains(soloNames, pkgs[0]) {
+			if row.Label != pkgs[0] {
+				t.Fatalf("solo shard label = %q, want %q", row.Label, pkgs[0])
+			}
+			soloSeen[pkgs[0]]++
+		}
+		for _, pkg := range pkgs {
+			realCovered[row.Platform+"|"+pkg]++
+		}
+	}
+	for _, name := range soloNames {
+		if soloSeen[name] != 4 {
+			t.Fatalf("solo recipe %s appeared solo on %d platforms, want 4", name, soloSeen[name])
+		}
+	}
+	wantRealPairs := map[string]bool{}
+	for _, r := range realRecipes {
+		for _, plat := range r.Platforms {
+			k := plat + "|" + r.Name
+			wantRealPairs[k] = true
+			if realCovered[k] != 1 {
+				t.Fatalf("real corpus coverage for (%s, %s) = %d, want 1", plat, r.Name, realCovered[k])
+			}
+		}
+	}
+	if len(realCovered) != len(wantRealPairs) {
+		t.Fatalf("real corpus covered %d pairs, want %d", len(realCovered), len(wantRealPairs))
+	}
+}
+
+func TestSweepCancelAndIncrementalFlush(t *testing.T) {
+	dir := t.TempDir()
+	tcDir := filepath.Join(dir, "tc")
+	if err := os.MkdirAll(tcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"clang", "clang++", "ld.lld"} {
+		if err := os.WriteFile(filepath.Join(tcDir, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tbPath, sum := makeTestTarGz(t, dir, map[string]string{
+		"pkg-1.0/ok.txt": "ok\n",
+	})
+	startedPath := filepath.Join(dir, "p2.started")
+	corpusDir := filepath.Join(dir, "corpus")
+	writePkg := func(name, buildScript string) {
+		t.Helper()
+		p := filepath.Join(corpusDir, name)
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		y := fmt.Sprintf("name: %s\ncategory: \"Systems\"\nrepo: a/b\nversion: \"1.0\"\nurl: file://%s\nsha256: %s\nstrip_components: 1\nlang: c\ntimeout_min: 5\nsmoke_test: s\nplatforms: [linux-x86_64]\ndescription: d\n",
+			name, tbPath, sum)
+		if err := os.WriteFile(filepath.Join(p, "recipe.yaml"), []byte(y), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		for fn, body := range map[string]string{
+			"build.sh":    buildScript,
+			"test_all.sh": "#!/bin/sh\nexit 0\n",
+			"test_one.sh": "#!/bin/sh\nexit 0\n",
+		} {
+			if err := os.WriteFile(filepath.Join(p, fn), []byte(body), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	writePkg("p1", "#!/bin/sh\nexit 0\n")
+	writePkg("p2", fmt.Sprintf("#!/bin/sh\ntouch '%s'\nsleep 30\n", startedPath))
+
+	fragDir := filepath.Join(dir, "frags")
+	fragPath := filepath.Join(fragDir, "shard-linux-x86_64-01.json")
+	workDir := filepath.Join(dir, "work")
+	cacheDir := filepath.Join(dir, "cache")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		var out, errBuf bytes.Buffer
+		errCh <- cmdSweep(ctx, []string{
+			"-corpus", corpusDir, "-pkg", "p1,p2", "-plat", platLinuxX86,
+			"-prof", profDistroO2, "-tc", tcDir, "-dir", workDir, "-cache", cacheDir, "-frag", fragPath,
+		}, &out, &errBuf)
+	}()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for !fileExists(startedPath) {
+		select {
+		case err := <-errCh:
+			t.Fatalf("cmdSweep exited before p2 started: %v", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			t.Fatal("timed out waiting for p2 build to start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	mid, err := readResultFragments(fragDir)
+	if err != nil || len(mid) != 1 || mid[0].Package != "p1" || mid[0].Status != statusPass {
+		cancel()
+		t.Fatalf("incremental flush before cancel = %+v (err=%v), want 1 pass for p1", mid, err)
+	}
+
+	cancel()
+	var sweepErr error
+	select {
+	case sweepErr = <-errCh:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for cmdSweep after cancel")
+	}
+	if !errors.Is(sweepErr, context.Canceled) {
+		t.Fatalf("cmdSweep err = %v, want context.Canceled", sweepErr)
+	}
+	after, err := readResultFragments(fragDir)
+	if err != nil || len(after) != 1 || after[0].Package != "p1" || after[0].Status != statusPass {
+		t.Fatalf("fragment after cancel = %+v (err=%v), want only p1 pass", after, err)
+	}
+	if _, err := os.Stat(filepath.Join(workDir, "p2-linux-x86_64-distro-O2")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("canceled p2 work dir was not cleaned up (stat err=%v)", err)
+	}
+
+	preCanceled, preCancel := context.WithCancel(context.Background())
+	preCancel()
+	fragPath2 := filepath.Join(dir, "frags2", "shard.json")
+	var out2, errBuf2 bytes.Buffer
+	err2 := cmdSweep(preCanceled, []string{
+		"-corpus", corpusDir, "-pkg", "p1", "-plat", platLinuxX86,
+		"-prof", profDistroO2, "-tc", tcDir, "-dir", workDir, "-cache", cacheDir, "-frag", fragPath2,
+	}, &out2, &errBuf2)
+	if !errors.Is(err2, context.Canceled) {
+		t.Fatalf("pre-canceled cmdSweep err = %v, want context.Canceled", err2)
+	}
+	if fileExists(fragPath2) {
+		t.Fatal("pre-canceled cmdSweep should not create fragment file")
+	}
+}
+
 func makeTestTarGz(t *testing.T, dir string, files map[string]string) (string, string) {
 	t.Helper()
 	var buf bytes.Buffer

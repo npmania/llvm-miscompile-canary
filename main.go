@@ -132,8 +132,15 @@ func cmdCorpusMatrix(args []string, stdout, stderr io.Writer) error {
 	fs.SetOutput(stderr)
 	corpusDir := fs.String("corpus", "corpus", "corpus directory")
 	include := fs.Bool("include", false, "emit GitHub Actions include matrix filtered by recipe platforms")
+	shards := fs.Int("shards", 0, "pack each platform into at most N shards (requires -include)")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *shards < 0 {
+		return errors.New("-shards must be >= 0")
+	}
+	if *shards > 0 && !*include {
+		return errors.New("-shards requires -include")
 	}
 	recipes, err := loadCorpus(*corpusDir)
 	if err != nil {
@@ -141,29 +148,85 @@ func cmdCorpusMatrix(args []string, stdout, stderr io.Writer) error {
 	}
 	var payload any
 	if *include {
-		type entry struct {
-			Package    string `json:"package"`
-			Platform   string `json:"platform"`
-			Runner     string `json:"runner"`
-			TCPlatform string `json:"tc_platform"`
-		}
 		targets := []struct{ plat, runner, tc string }{
 			{platLinuxX86, "ubuntu-24.04", platLinuxX86},
 			{platLinuxARM64, "ubuntu-24.04-arm", platLinuxARM64},
 			{platLinuxRISCV64, "ubuntu-24.04", platLinuxX86},
 			{platDarwinARM, "macos-latest", platDarwinARM},
 		}
-		rows := make([]entry, 0, len(recipes)*len(targets))
-		for _, r := range recipes {
-			for _, t := range targets {
-				if r.supportsPlatform(t.plat) {
-					rows = append(rows, entry{Package: r.Name, Platform: t.plat, Runner: t.runner, TCPlatform: t.tc})
+		if *shards > 0 {
+			type shardEntry struct {
+				Shard      string `json:"shard"`
+				Label      string `json:"label"`
+				Packages   string `json:"packages"`
+				SrcHash    string `json:"src_hash"`
+				Platform   string `json:"platform"`
+				Runner     string `json:"runner"`
+				TCPlatform string `json:"tc_platform"`
+			}
+			binsByTarget := make([][][]*recipe, len(targets))
+			maxShards, total := 0, 0
+			for ti, t := range targets {
+				var supported []*recipe
+				for _, r := range recipes {
+					if r.supportsPlatform(t.plat) {
+						supported = append(supported, r)
+					}
+				}
+				bins := shardRecipes(supported, *shards)
+				binsByTarget[ti] = bins
+				maxShards = max(maxShards, len(bins))
+				total += len(bins)
+			}
+			rows := make([]shardEntry, 0, total)
+			for si := range maxShards {
+				id := fmt.Sprintf("%02d", si+1)
+				for ti, t := range targets {
+					if si >= len(binsByTarget[ti]) {
+						continue
+					}
+					bin := binsByTarget[ti][si]
+					names := make([]string, len(bin))
+					for i, r := range bin {
+						names[i] = r.Name
+					}
+					label := "shard-" + id
+					if len(bin) == 1 {
+						label = bin[0].Name
+					}
+					rows = append(rows, shardEntry{
+						Shard:      id,
+						Label:      label,
+						Packages:   strings.Join(names, ","),
+						SrcHash:    shardSrcHash(bin),
+						Platform:   t.plat,
+						Runner:     t.runner,
+						TCPlatform: t.tc,
+					})
 				}
 			}
+			payload = struct {
+				Include []shardEntry `json:"include"`
+			}{Include: rows}
+		} else {
+			type entry struct {
+				Package    string `json:"package"`
+				Platform   string `json:"platform"`
+				Runner     string `json:"runner"`
+				TCPlatform string `json:"tc_platform"`
+			}
+			rows := make([]entry, 0, len(recipes)*len(targets))
+			for _, r := range recipes {
+				for _, t := range targets {
+					if r.supportsPlatform(t.plat) {
+						rows = append(rows, entry{Package: r.Name, Platform: t.plat, Runner: t.runner, TCPlatform: t.tc})
+					}
+				}
+			}
+			payload = struct {
+				Include []entry `json:"include"`
+			}{Include: rows}
 		}
-		payload = struct {
-			Include []entry `json:"include"`
-		}{Include: rows}
 	} else {
 		names := make([]string, len(recipes))
 		for i, r := range recipes {
@@ -325,16 +388,30 @@ func cmdSweep(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 
 	r := &runner{CacheDir: *cache, Jobs: *jobs}
 	started := time.Now().UTC()
-	var results []pkgResult
+	results := make([]pkgResult, 0, len(recipes)*len(profiles))
 	anyFail := false
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	for _, rec := range recipes {
 		for _, prof := range profiles {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			wd := filepath.Join(*dir, fmt.Sprintf("%s-%s-%s", rec.Name, tc.Spec.ID, prof))
 			pr := r.sweepPackage(ctx, runConfig{Recipe: rec, Spec: tc.Spec, Profile: prof, TC: tc, WorkDir: wd})
 			if !*keep {
 				_ = os.RemoveAll(wd)
 			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			results = append(results, pr)
+			if *frag != "" {
+				if err := writeResultFragment(*frag, results); err != nil {
+					return err
+				}
+			}
 			if pr.Status == statusTestFail || pr.Status == statusBuildFail {
 				anyFail = true
 			}
@@ -343,7 +420,7 @@ func cmdSweep(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	}
 	completed := time.Now().UTC()
 
-	if *frag != "" {
+	if *frag != "" && len(results) == 0 {
 		if err := writeResultFragment(*frag, results); err != nil {
 			return err
 		}

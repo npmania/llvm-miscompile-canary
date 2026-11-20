@@ -730,7 +730,7 @@ func TestWorkflowsAndInitScript(t *testing.T) {
 	checks := map[string][]string{
 		"ci.yml":        {"go build -o lmc .", "validate-corpus -corpus corpus -require 42"},
 		"toolchain.yml": {"'53 3,9,15,21 * * *'", "fail-fast: false", "--target master", "| zstd ", "GH_REPO: ${{ github.repository }}", "git ls-remote --exit-code --heads", `select(.status == "open")`, "grep -Fxq", "--limit 500"},
-		"sweep.yml":     {"corpus-matrix -corpus corpus", "fail-fast: false", "zstd -dc", "| tar -xf -", "GH_REPO: ${{ github.repository }}", "if: always() && !cancelled()", "LLVM_SUBJ: ${{ steps.meta.outputs.subject }}", "./lmc site -store _data -out _site -corpus corpus"},
+		"sweep.yml":     {"corpus-matrix -corpus corpus -include -shards 12", "fail-fast: false", "zstd -dc", "| tar -xf -", "GH_REPO: ${{ github.repository }}", "if: always() && !cancelled()", "LLVM_SUBJ: ${{ steps.meta.outputs.subject }}", "./lmc site -store _data -out _site -corpus corpus", `case ",${PKGS}," in`, "contains(format(',{0},', matrix.packages), ',dav1d,')", "corpus-src-v2-${{ matrix.src_hash }}", "fragments/shard-${PLAT}-${SHARD}.json", "fragment-shard-${{ matrix.platform }}-${{ matrix.shard }}"},
 		"triage.yml":    {"./lmc alive-check", "--target master", "BUILD_ALIVE2_LLVM=1", "GH_REPO: ${{ github.repository }}", "TEST_ID: ${{ matrix.test_id }}", "-print -quit", "Free runner disk space", "Fallback download raw triage artifacts"},
 	}
 	for name, wants := range checks {
@@ -761,6 +761,9 @@ func TestWorkflowsAndInitScript(t *testing.T) {
 		s := string(raw)
 		if strings.Contains(s, "./cmd/lmc") || strings.Contains(s, "miscompile proven by alive-tv") {
 			t.Errorf("%s contains stale command or status", name)
+		}
+		if name == "sweep.yml" && regexp.MustCompile(`\bmatrix\.package\b`).MatchString(s) {
+			t.Errorf("%s contains stale matrix.package reference", name)
 		}
 		for _, w := range wants {
 			if !strings.Contains(s, w) {

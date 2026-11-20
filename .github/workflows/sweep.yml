@@ -44,11 +44,11 @@ jobs:
         id: matrix
         run: |
           go build -o lmc .
-          mat="$(./lmc corpus-matrix -corpus corpus -include)"
+          mat="$(./lmc corpus-matrix -corpus corpus -include -shards 12)"
           echo "matrix=${mat}" >> "$GITHUB_OUTPUT"
 
   sweep:
-    name: ${{ matrix.package }} (${{ matrix.platform }})
+    name: ${{ matrix.label }} (${{ matrix.platform }})
     needs: prepare
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 150
@@ -66,14 +66,14 @@ jobs:
       - name: Install build tools (Linux)
         if: runner.os == 'Linux'
         env:
-          PKG: ${{ matrix.package }}
+          PKGS: ${{ matrix.packages }}
           PLAT: ${{ matrix.platform }}
         run: |
           pkgs=""
           command -v ninja >/dev/null 2>&1 || pkgs="$pkgs ninja-build"
-          if [ "${PKG}" = "dav1d" ]; then
-            command -v meson >/dev/null 2>&1 || pkgs="$pkgs meson"
-          fi
+          case ",${PKGS}," in
+            *,dav1d,*) command -v meson >/dev/null 2>&1 || pkgs="$pkgs meson" ;;
+          esac
           if [ "${PLAT}" = "linux-riscv64" ]; then
             pkgs="$pkgs libc6-dev-riscv64-cross libstdc++-13-dev-riscv64-cross libgcc-13-dev-riscv64-cross"
           fi
@@ -90,7 +90,7 @@ jobs:
           echo "QEMU_LD_PREFIX=/usr/riscv64-linux-gnu" >> "$GITHUB_ENV"
 
       - name: Install build tools (macOS)
-        if: runner.os == 'macOS' && matrix.package == 'dav1d'
+        if: runner.os == 'macOS' && contains(format(',{0},', matrix.packages), ',dav1d,')
         run: brew install meson
 
       - name: Set up Go
@@ -116,35 +116,36 @@ jobs:
           zstd -dc "${RUNNER_TEMP}/tc/llvm-${sha12}-${TC_PLAT}.tar.zst" | tar -xf - -C "${RUNNER_TEMP}/tc"
           rm -f "${RUNNER_TEMP}/tc/llvm-${sha12}-${TC_PLAT}.tar.zst"
 
-      - name: Cache upstream corpus source archive
+      - name: Cache upstream corpus source archives
         uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/lmc-cache/sources
-          key: corpus-src-v1-${{ matrix.package }}-${{ hashFiles(format('corpus/{0}/recipe.yaml', matrix.package)) }}
+          key: corpus-src-v2-${{ matrix.src_hash }}
 
       - name: Run distro-O2 and release-lto (--thinlto-jobs=4)
         env:
           LLVM_SHA: ${{ inputs.llvm_sha }}
-          PKG: ${{ matrix.package }}
+          PKGS: ${{ matrix.packages }}
           PLAT: ${{ matrix.platform }}
+          SHARD: ${{ matrix.shard }}
         run: |
           ./lmc sweep \
             -corpus corpus \
-            -pkg "${PKG}" \
+            -pkg "${PKGS}" \
             -plat "${PLAT}" \
             -prof distro-O2,release-lto \
             -tc "${RUNNER_TEMP}/tc/bin" \
             -sha "${LLVM_SHA}" \
             -dir "${RUNNER_TEMP}/lmc-work" \
             -cache "${RUNNER_TEMP}/lmc-cache" \
-            -frag "fragments/${PKG}-${PLAT}.json"
+            -frag "fragments/shard-${PLAT}-${SHARD}.json"
 
       - name: Upload result JSON fragment
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: fragment-${{ matrix.package }}-${{ matrix.platform }}
-          path: fragments/${{ matrix.package }}-${{ matrix.platform }}.json
+          name: fragment-shard-${{ matrix.platform }}-${{ matrix.shard }}
+          path: fragments/shard-${{ matrix.platform }}-${{ matrix.shard }}.json
           if-no-files-found: warn
           retention-days: 3
 
