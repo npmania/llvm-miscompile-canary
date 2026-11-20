@@ -7,71 +7,42 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <header><strong>llvm-miscompile-canary</strong> · trunk <code>90895e4f8b0f</code> · <time datetime="2026-11-20T10:26:26Z">2026-11-20 10:26 UTC</time> · <a href="/">status</a> · <a href="/corpus/">corpus</a> · <a href="https://github.com/npmania/llvm-miscompile-canary" rel="noopener">git</a></header>
+  <header><strong>llvm-miscompile-canary</strong> · trunk <code>a2042e260b08</code> · <time datetime="2026-11-20T14:30:29Z">2026-11-20 14:30 UTC</time> · <a href="/">status</a> · <a href="/corpus/">corpus</a> · <a href="https://github.com/npmania/llvm-miscompile-canary" rel="noopener">git</a></header>
   <main>
     <h1>Failure Logs</h1>
-    <h2 id="log-aws-lc-linux-riscv64-distro-o2">aws-lc (linux-riscv64 / -O2) <span class="muted">· test failure</span></h2>
-    <p class="cmd"><code>AddrFamily/BIODgramTest.SocketDatagramTimeouts/0, AddrFamily/BIODgramTest.SocketDatagramTimeouts/1, AddrFamily/BIODgramTest.SocketDatagramTimeouts/2</code></p>
+    <h2 id="log-simdutf-linux-riscv64-release-lto">simdutf (linux-riscv64 / -O3 -flto=thin) <span class="muted">· test failure</span></h2>
+    <p class="cmd"><code>validate_utf32_basic_tests, validate_utf32_with_errors_tests</code></p>
     <pre><code>...
-/115
-[       OK ] TrustTokenAllBadKeyTest/TrustTokenBadKeyTest.BadKey/115 (294 ms)
-[ RUN      ] TrustTokenAllBadKeyTest/TrustTokenBadKeyTest.BadKey/116
-[       OK ] TrustTokenAllBadKeyTest/TrustTokenBadKeyTest.BadKey/116 (295 ms)
-[ RUN      ] TrustTokenAllBadKeyTest/TrustTokenBadKeyTest.BadKey/117
-[       OK ] TrustTokenAllBadKeyTest/TrustTokenBadKeyTest.BadKey/117 (297 ms)
-[ RUN      ] TrustTokenAllBadKeyTest/TrustTokenBadKeyTest.BadKey/118
-[       OK ] TrustTokenAllBadKeyTest/TrustTokenBadKeyTest.BadKey/118 (300 ms)
-[ RUN      ] TrustTokenAllBadKeyTest/TrustTokenBadKeyTest.BadKey/119
-[       OK ] TrustTokenAllBadKeyTest/TrustTokenBadKeyTest.BadKey/119 (300 ms)
-[----------] 120 tests from TrustTokenAllBadKeyTest/TrustTokenBadKeyTest (21685 ms total)
+tart 83: convert_utf16_to_utf8_with_replacement_tests
+80/86 Test #83: convert_utf16_to_utf8_with_replacement_tests ...   Passed    0.40 sec
+      Start 84: convert_utf8_to_utf16_with_replacement_tests
+81/86 Test #84: convert_utf8_to_utf16_with_replacement_tests ...   Passed    0.11 sec
+      Start 85: fixed_string_tests
+82/86 Test #85: fixed_string_tests .............................   Passed    0.04 sec
+      Start 86: nostdlibcxx_c_api_test
+83/86 Test #86: nostdlibcxx_c_api_test .........................   Passed    0.02 sec
+84/86 Test #19: validate_utf32_basic_tests .....................***Timeout 540.00 sec
+Checking implementation rvv
+Running &#39;validate utf32 returns true for valid input&#39;... .......... OK
+Running &#39;validate utf32 returns true for empty string&#39;...  OK
 
-[----------] Global test environment tear-down
-[==========] 3114 tests from 149 test suites ran. (730815 ms total)
-[  PASSED  ] 3110 tests.
-[  SKIPPED ] 1 test, listed below:
-[  SKIPPED ] randTest.ReseedIntervalWhenUbeIsSupported
-[  FAILED  ] 3 tests, listed below:
-[  FAILED  ] AddrFamily/BIODgramTest.SocketDatagramTimeouts/0, where GetParam() = 2
-[  FAILED  ] AddrFamily/BIODgramTest.SocketDatagramTimeouts/1, where GetParam() = 10
-[  FAILED  ] AddrFamily/BIODgramTest.SocketDatagramTimeouts/2, where GetParam() = 1
+85/86 Test #20: validate_utf32_with_errors_tests ...............***Timeout 540.00 sec
+Checking implementation rvv
+Running &#39;issue 531&#39;...  OK
+Running &#39;validate utf32 with errors returns success for valid input&#39;... .......... OK
+Running &#39;validate utf32 with errors returns success for empty string&#39;...  OK
+Running &#39;validate utf32 with errors returns error when input in forbidden range&#39;... .......... OK
 
- 3 FAILED TESTS
-  YOU HAVE 3 DISABLED TESTS
+86/86 Test #74: basic_fuzzer ...................................   Passed  407.89 sec
 
-FAIL_ID: AddrFamily/BIODgramTest.SocketDatagramTimeouts/0
-FAIL_ID: AddrFamily/BIODgramTest.SocketDatagramTimeouts/1
-FAIL_ID: AddrFamily/BIODgramTest.SocketDatagramTimeouts/2</code></pre>
-    <h2 id="log-aws-lc-linux-riscv64-release-lto">aws-lc (linux-riscv64 / -O3 -flto=thin) <span class="muted">· test failure</span></h2>
-    <p class="cmd"><code>AddrFamily/BIODgramTest.SocketDatagramTimeouts/0, AddrFamily/BIODgramTest.SocketDatagramTimeouts/1, AddrFamily/BIODgramTest.SocketDatagramTimeouts/2</code></p>
-    <pre><code>...
-115
-[       OK ] TrustTokenAllBadKeyTest/TrustTokenBadKeyTest.BadKey/115 (672 ms)
-[ RUN      ] TrustTokenAllBadKeyTest/TrustTokenBadKeyTest.BadKey/116
-[       OK ] TrustTokenAllBadKeyTest/TrustTokenBadKeyTest.BadKey/116 (668 ms)
-[ RUN      ] TrustTokenAllBadKeyTest/TrustTokenBadKeyTest.BadKey/117
-[       OK ] TrustTokenAllBadKeyTest/TrustTokenBadKeyTest.BadKey/117 (675 ms)
-[ RUN      ] TrustTokenAllBadKeyTest/TrustTokenBadKeyTest.BadKey/118
-[       OK ] TrustTokenAllBadKeyTest/TrustTokenBadKeyTest.BadKey/118 (672 ms)
-[ RUN      ] TrustTokenAllBadKeyTest/TrustTokenBadKeyTest.BadKey/119
-[       OK ] TrustTokenAllBadKeyTest/TrustTokenBadKeyTest.BadKey/119 (678 ms)
-[----------] 120 tests from TrustTokenAllBadKeyTest/TrustTokenBadKeyTest (48617 ms total)
+98% tests passed, 2 tests failed out of 86
 
-[----------] Global test environment tear-down
-[==========] 3114 tests from 149 test suites ran. (1536258 ms total)
-[  PASSED  ] 3110 tests.
-[  SKIPPED ] 1 test, listed below:
-[  SKIPPED ] randTest.ReseedIntervalWhenUbeIsSupported
-[  FAILED  ] 3 tests, listed below:
-[  FAILED  ] AddrFamily/BIODgramTest.SocketDatagramTimeouts/0, where GetParam() = 2
-[  FAILED  ] AddrFamily/BIODgramTest.SocketDatagramTimeouts/1, where GetParam() = 10
-[  FAILED  ] AddrFamily/BIODgramTest.SocketDatagramTimeouts/2, where GetParam() = 1
+Total Test time (real) = 793.59 sec
 
- 3 FAILED TESTS
-  YOU HAVE 3 DISABLED TESTS
-
-FAIL_ID: AddrFamily/BIODgramTest.SocketDatagramTimeouts/0
-FAIL_ID: AddrFamily/BIODgramTest.SocketDatagramTimeouts/1
-FAIL_ID: AddrFamily/BIODgramTest.SocketDatagramTimeouts/2</code></pre>
+The following tests FAILED:
+	 19 - validate_utf32_basic_tests (Timeout)
+	 20 - validate_utf32_with_errors_tests (Timeout)
+Errors while running CTest</code></pre>
   </main>
 </body>
 </html>
