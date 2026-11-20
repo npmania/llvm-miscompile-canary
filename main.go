@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -460,30 +461,143 @@ func cmdAggregate(args []string, stdout, stderr io.Writer) error {
 		maxRegressionsBytes  = 60000
 	)
 	openCovered := make(map[string]bool)
+	closedGoods := make(map[string]map[string]bool)
+	openBuildByPkg := make(map[string]*incident)
+	usedIDs := make(map[string]bool, len(incs))
 	for _, inc := range incs {
-		if inc == nil || inc.Status != incidentOpen {
+		if inc == nil {
 			continue
 		}
-		for _, a := range inc.Affected {
-			openCovered[targetKey(a.Package, a.Platform, a.Profile)] = true
+		if inc.ID != "" {
+			usedIDs[inc.ID] = true
 		}
+		switch inc.Status {
+		case incidentOpen:
+			for _, a := range inc.Affected {
+				openCovered[targetKey(a.Package, a.Platform, a.Profile)] = true
+			}
+			if inc.isBuildFail() {
+				for _, p := range uniquePkgs([]*incident{inc}) {
+					if openBuildByPkg[p] == nil {
+						openBuildByPkg[p] = inc
+					}
+				}
+			}
+		case incidentClosed:
+			for _, a := range inc.Affected {
+				k := targetKey(a.Package, a.Platform, a.Profile)
+				if closedGoods[k] == nil {
+					closedGoods[k] = make(map[string]bool)
+				}
+				closedGoods[k][cmp.Or(a.GoodSHA, inc.GoodSHA)] = true
+			}
+		}
+	}
+	isCovered := func(pkg, plat, prof, curGood string) bool {
+		k := targetKey(pkg, plat, prof)
+		return openCovered[k] || closedGoods[k][curGood]
 	}
 
 	regs := make([]regressionTarget, 0)
+	buildFailsByPkg := make(map[string][]pkgResult)
+	var buildFailPkgs []string
 	for _, r := range results {
-		if r.Status != statusTestFail || openCovered[targetKey(r.Package, r.Platform, r.Profile)] {
-			continue
+		switch r.Status {
+		case statusTestFail:
+			goodSHA := st.goodSHAFor(r.Package, r.Platform, r.Profile)
+			if isCovered(r.Package, r.Platform, r.Profile, goodSHA) {
+				continue
+			}
+			var failed []string
+			if len(r.FailedTests) > 0 {
+				failed = r.FailedTests[:1]
+			}
+			regs = append(regs, regressionTarget{
+				Package: r.Package, Platform: r.Platform, Profile: r.Profile,
+				GoodSHA: goodSHA, BadSHA: *sha, FailedTests: failed,
+			})
+		case statusBuildFail:
+			goodSHA := st.targetGoodSHA(r.Package, r.Platform, r.Profile)
+			if goodSHA == "" || isCovered(r.Package, r.Platform, r.Profile, goodSHA) {
+				continue
+			}
+			if _, ok := buildFailsByPkg[r.Package]; !ok {
+				buildFailPkgs = append(buildFailPkgs, r.Package)
+			}
+			buildFailsByPkg[r.Package] = append(buildFailsByPkg[r.Package], r)
 		}
-		var failed []string
-		if len(r.FailedTests) > 0 {
-			failed = r.FailedTests[:1]
-		}
-		regs = append(regs, regressionTarget{
-			Package: r.Package, Platform: r.Platform, Profile: r.Profile,
-			GoodSHA: st.goodSHAFor(r.Package, r.Platform, r.Profile), BadSHA: *sha, FailedTests: failed,
-		})
 	}
 	regs = capRegressions(regs, maxRegressionTargets, maxRegressionsBytes)
+
+	slices.Sort(buildFailPkgs)
+	buildFails := 0
+	for _, pkg := range buildFailPkgs {
+		list := buildFailsByPkg[pkg]
+		targets := make([]affected, 0, len(list))
+		var bestExcerpt string
+		for _, r := range list {
+			targets = append(targets, affected{
+				Package:  r.Package,
+				Version:  r.Version,
+				Platform: r.Platform,
+				Profile:  r.Profile,
+				GoodSHA:  st.targetGoodSHA(r.Package, r.Platform, r.Profile),
+			})
+			if ex := strings.ReplaceAll(strings.TrimSpace(r.ErrorExcerpt), "\r\n", "\n"); ex != "" {
+				if bestExcerpt == "" || (!isICEExcerpt(bestExcerpt) && isICEExcerpt(ex)) {
+					bestExcerpt = ex
+				}
+			}
+		}
+		excerpt := clipCode(sanitizeCode(bestExcerpt), 8000)
+
+		if ex := openBuildByPkg[pkg]; ex != nil {
+			changed := ex.mergeAffected(targets...)
+			if excerpt != "" && (ex.ErrorExcerpt == "" || (!isICEExcerpt(ex.ErrorExcerpt) && isICEExcerpt(excerpt))) {
+				ex.ErrorExcerpt = excerpt
+				if isICEExcerpt(excerpt) {
+					ex.Title = sanitizeText(pkg + ": compiler ICE")
+				}
+				changed = true
+			}
+			if changed {
+				ex.UpdatedAt = now
+				if _, err := saveIncident(*storeDir, ex); err != nil {
+					return err
+				}
+				buildFails++
+			}
+			continue
+		}
+
+		pkgSlug := cmp.Or(sanitizeSlug(pkg), "pkg")
+		bad12 := cmp.Or(sanitizeSlug(shortSHA(*sha)), "unknown")
+		id := fmt.Sprintf("%s-%s-build-%s", now.Format("20060102"), pkgSlug, bad12)
+		if usedIDs[id] {
+			id = uniqueIncidentID(id, usedIDs)
+		}
+		usedIDs[id] = true
+
+		inc := &incident{
+			ID:           id,
+			Kind:         incidentKindBuildFail,
+			Title:        sanitizeText(pkg + ": " + pick(isICEExcerpt(excerpt), "compiler ICE", "build failure")),
+			Status:       incidentOpen,
+			Confidence:   confNeedsReview,
+			GoodSHA:      targets[0].GoodSHA,
+			BadSHA:       *sha,
+			ErrorExcerpt: excerpt,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		}
+		inc.mergeAffected(targets...)
+		if _, err := saveIncident(*storeDir, inc); err != nil {
+			return err
+		}
+		incs = append(incs, inc)
+		openBuildByPkg[pkg] = inc
+		buildFails++
+	}
 
 	prevSHA := *prev
 	if prevSHA == "" {
@@ -515,7 +629,7 @@ func cmdAggregate(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 	}
-	fmt.Fprintf(stdout, "aggregated %d results -> %s (regressions=%d, resolved=%d)\n", len(results), sweepPath, len(regs), resolved)
+	fmt.Fprintf(stdout, "aggregated %d results -> %s (regressions=%d, build_fails=%d, resolved=%d)\n", len(results), sweepPath, len(regs), buildFails, resolved)
 	return nil
 }
 

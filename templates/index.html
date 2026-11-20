@@ -60,7 +60,7 @@
             {{- if eq .Kind "fail"}}
             <td class="mono num">{{if .IncidentID}}<a class="fail" href="incidents/{{.IncidentID}}/index.html">fail</a>{{else}}<span class="fail">fail</span>{{end}}</td>
             {{- else if eq .Kind "err"}}
-            <td class="mono num err">err</td>
+            <td class="mono num">{{if .IncidentID}}<a class="err" href="incidents/{{.IncidentID}}/index.html">err</a>{{else}}<span class="err">err</span>{{end}}</td>
             {{- else}}
             <td class="mono num muted">{{.Text}}</td>
             {{- end}}

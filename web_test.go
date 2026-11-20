@@ -785,3 +785,856 @@ func TestWorkflowsAndInitScript(t *testing.T) {
 		t.Fatalf("generateSite: %v", err)
 	}
 }
+
+func newFakeGitHub(t *testing.T) (*httptest.Server, *sync.Mutex, map[int]*ghIssue, map[int][]string) {
+	t.Helper()
+	var mu sync.Mutex
+	nextNum := 1
+	issues := map[int]*ghIssue{}
+	comments := map[int][]string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		const prefix = "/repos/npmania/llvm-miscompile-canary/issues"
+		if r.URL.Path == prefix && r.Method == http.MethodGet {
+			var out []ghIssue
+			for _, iss := range issues {
+				out = append(out, *iss)
+			}
+			_ = json.NewEncoder(w).Encode(out)
+			return
+		}
+		if r.URL.Path == prefix && r.Method == http.MethodPost {
+			var p struct {
+				Title, Body string
+				Labels      []string
+			}
+			_ = json.NewDecoder(r.Body).Decode(&p)
+			if err := checkNoCrossRefs(p.Title + "\n" + p.Body); err != nil {
+				t.Errorf("unsanitized POST: %v", err)
+			}
+			n := nextNum
+			nextNum++
+			iss := &ghIssue{
+				Number:  n,
+				HTMLURL: fmt.Sprintf("https://github.com/npmania/llvm-miscompile-canary/issues/%d", n),
+				State:   "open",
+				Title:   p.Title,
+				Body:    p.Body,
+			}
+			for _, l := range p.Labels {
+				iss.Labels = append(iss.Labels, struct{ Name string }{l})
+			}
+			issues[n] = iss
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(iss)
+			return
+		}
+		parts := strings.Split(strings.TrimPrefix(r.URL.Path, prefix+"/"), "/")
+		n, err := strconv.Atoi(parts[0])
+		iss := issues[n]
+		if err != nil || iss == nil {
+			http.NotFound(w, r)
+			return
+		}
+		if len(parts) == 2 && parts[1] == "comments" {
+			var p struct{ Body string }
+			_ = json.NewDecoder(r.Body).Decode(&p)
+			if err := checkNoCrossRefs(p.Body); err != nil {
+				t.Errorf("unsanitized comment: %v", err)
+			}
+			comments[n] = append(comments[n], p.Body)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":1}`))
+			return
+		}
+		var p struct {
+			Title, Body, State *string
+			Labels             []string
+		}
+		_ = json.NewDecoder(r.Body).Decode(&p)
+		if p.Title != nil {
+			iss.Title = *p.Title
+		}
+		if p.Body != nil {
+			iss.Body = *p.Body
+		}
+		if p.State != nil {
+			iss.State = *p.State
+		}
+		if p.Labels != nil {
+			iss.Labels = nil
+			for _, l := range p.Labels {
+				iss.Labels = append(iss.Labels, struct{ Name string }{l})
+			}
+		}
+		_ = json.NewEncoder(w).Encode(iss)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &mu, issues, comments
+}
+
+func TestBuildFailLifecycle(t *testing.T) {
+	ctx := context.Background()
+	srv, mu, issues, comments := newFakeGitHub(t)
+
+	goodSHA1 := "1111111111111111111111111111111111111111"
+	goodSHA2 := "2222222222222222222222222222222222222222"
+	badSHA := "abcdef0123456789abcdef0123456789abcdef01"
+	fixSHA := "fedcba9876543210fedcba9876543210fedcba98"
+
+	storeDir := t.TempDir()
+	st := &state{
+		LastGoodSHA: goodSHA1,
+		LastGoodByTarget: map[string]string{
+			targetKey("zstd", platLinuxX86, profDistroO2):    goodSHA1,
+			targetKey("zstd", platDarwinARM, profReleaseLTO): goodSHA2,
+			targetKey("lua", platLinuxX86, profDistroO2):     goodSHA1,
+		},
+	}
+	if err := saveState(storeDir, st); err != nil {
+		t.Fatal(err)
+	}
+
+	advICE := "clang++: error: foo.cc:12:3: crash\n" +
+		"PLEASE submit a bug report to https://github.com/llvm/llvm-project/issues/ and include backtrace\n" +
+		"see llvm/llvm-project#12345 and llvm/llvm-project@0123456789abcdef0123456789abcdef01234567 and GH-999\n" +
+		"cc @nikic fix (#555)\n" +
+		"```\n@evil (#777)\n```"
+	plainBuildErr := "lua.c:42:9: error: use of undeclared identifier 'x'\nsee https://github.com/llvm/llvm-project/pull/888"
+
+	frags1 := t.TempDir()
+	if err := writeResultFragment(filepath.Join(frags1, "sweep.json"), []pkgResult{
+		{Package: "zstd", Version: "1.5.6", Platform: platLinuxX86, Profile: profDistroO2, Status: statusBuildFail, ErrorExcerpt: "zstd.c:1: error: syntax error"},
+		{Package: "zstd", Version: "1.5.6", Platform: platDarwinARM, Profile: profReleaseLTO, Status: statusBuildFail, ErrorExcerpt: advICE},
+		{Package: "lua", Version: "5.4.7", Platform: platLinuxX86, Profile: profDistroO2, Status: statusBuildFail, ErrorExcerpt: plainBuildErr},
+		{Package: "never-passed", Version: "1.0", Platform: platLinuxX86, Profile: profDistroO2, Status: statusBuildFail, ErrorExcerpt: "LLVM ERROR: never passed before"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	regOut1 := filepath.Join(t.TempDir(), "regressions.json")
+	var out, errBuf bytes.Buffer
+	if code := runCLI(ctx, []string{
+		"lmc", "aggregate", "-frags", frags1, "-store", storeDir, "-sha", badSHA, "-reg-out", regOut1,
+	}, &out, &errBuf); code != 0 {
+		t.Fatalf("aggregate failed (%d): %s", code, errBuf.String())
+	}
+
+	var regs []regressionTarget
+	if err := readJSON(regOut1, &regs); err != nil {
+		t.Fatal(err)
+	}
+	if len(regs) != 0 {
+		t.Fatalf("build_fail leaked into regressions.json: %+v", regs)
+	}
+
+	incs, err := loadAllIncidents(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(incs) != 2 {
+		t.Fatalf("got %d incidents, want 2 (zstd and lua, not never-passed): %+v", len(incs), incs)
+	}
+	byPkg := map[string]*incident{}
+	for _, inc := range incs {
+		if !inc.isBuildFail() || inc.Status != incidentOpen {
+			t.Fatalf("unexpected incident: %+v", inc)
+		}
+		pkgs := uniquePkgs([]*incident{inc})
+		if len(pkgs) != 1 {
+			t.Fatalf("expected 1 pkg per build_fail incident, got %v", pkgs)
+		}
+		byPkg[pkgs[0]] = inc
+	}
+	zstdInc, luaInc := byPkg["zstd"], byPkg["lua"]
+	if zstdInc == nil || luaInc == nil {
+		t.Fatalf("missing zstd or lua incident: %+v", byPkg)
+	}
+	if len(zstdInc.Affected) != 2 {
+		t.Fatalf("zstd Affected = %+v, want 2 grouped targets", zstdInc.Affected)
+	}
+	if !isICEExcerpt(zstdInc.ErrorExcerpt) || isICEExcerpt(luaInc.ErrorExcerpt) {
+		t.Fatalf("unexpected ICE classification: zstd=%q lua=%q", zstdInc.ErrorExcerpt, luaInc.ErrorExcerpt)
+	}
+	if strings.Contains(strings.ToLower(zstdInc.ErrorExcerpt), "github.com/llvm/") || strings.Contains(zstdInc.ErrorExcerpt, "GH-999") || strings.Contains(zstdInc.ErrorExcerpt, "llvm/llvm-project#12345") {
+		t.Fatalf("unsanitized ErrorExcerpt stored: %q", zstdInc.ErrorExcerpt)
+	}
+
+	stAfter, err := loadState(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stAfter.ActiveIncidentIDs) != 2 {
+		t.Fatalf("ActiveIncidentIDs = %v, want 2", stAfter.ActiveIncidentIDs)
+	}
+	if !slices.Contains(stAfter.RetainedToolchains, badSHA) {
+		t.Fatalf("RetainedToolchains missing badSHA: %v", stAfter.RetainedToolchains)
+	}
+
+	cfg := issueSyncCfg{Repo: defaultRepo, Token: "tok", APIBase: srv.URL, StoreDir: storeDir}
+	acts, err := syncIssues(ctx, cfg, incs)
+	if err != nil || len(acts) != 2 {
+		t.Fatalf("syncIssues acts=%+v err=%v", acts, err)
+	}
+	mu.Lock()
+	zstdIss := issues[zstdInc.IssueNumber]
+	luaIss := issues[luaInc.IssueNumber]
+	mu.Unlock()
+	if zstdIss == nil || luaIss == nil {
+		t.Fatalf("issues not created: zstd=%d lua=%d", zstdInc.IssueNumber, luaInc.IssueNumber)
+	}
+	if zstdIss.Title != "[ice] zstd compiler crash on abcdef012345" {
+		t.Errorf("zstd title = %q", zstdIss.Title)
+	}
+	if luaIss.Title != "[build] lua failed to build on abcdef012345" {
+		t.Errorf("lua title = %q", luaIss.Title)
+	}
+	labelNames := func(iss *ghIssue) []string {
+		var ns []string
+		for _, l := range iss.Labels {
+			ns = append(ns, l.Name)
+		}
+		slices.Sort(ns)
+		return ns
+	}
+	if got := labelNames(zstdIss); !slices.Equal(got, []string{labelBuildFail, labelCompilerICE, platDarwinARM, platLinuxX86}) {
+		t.Errorf("zstd labels = %v", got)
+	}
+	if got := labelNames(luaIss); !slices.Equal(got, []string{labelBuildFail, platLinuxX86}) {
+		t.Errorf("lua labels = %v", got)
+	}
+	for _, iss := range []*ghIssue{zstdIss, luaIss} {
+		if err := checkNoCrossRefs(iss.Title + "\n" + iss.Body); err != nil {
+			t.Errorf("issue #%d failed checkNoCrossRefs: %v\n%s", iss.Number, err, iss.Body)
+		}
+		for _, forbid := range []string{"| Sanitizers |", "| Conservative |", "alive-tv", "llubi"} {
+			if strings.Contains(iss.Body, forbid) {
+				t.Errorf("build_fail issue #%d contains miscompile row %q", iss.Number, forbid)
+			}
+		}
+	}
+	if !strings.Contains(zstdIss.Body, "| Kind | compiler ICE |") || !strings.Contains(luaIss.Body, "| Kind | build failure |") {
+		t.Errorf("missing Kind row in bodies:\nzstd=%s\nlua=%s", zstdIss.Body, luaIss.Body)
+	}
+	if !strings.Contains(zstdIss.Body, "````\n") {
+		t.Errorf("expected 4-backtick fence for excerpt containing triple backticks:\n%s", zstdIss.Body)
+	}
+
+	siteOut := t.TempDir()
+	if err := generateSite(storeDir, siteOut, t.TempDir()); err != nil {
+		t.Fatalf("generateSite: %v", err)
+	}
+	idxRaw, err := os.ReadFile(filepath.Join(siteOut, "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := string(idxRaw)
+	if err := checkNoCrossRefs(idx); err != nil {
+		t.Errorf("index.html failed checkNoCrossRefs: %v", err)
+	}
+	for _, want := range []string{
+		fmt.Sprintf(`<a class="err" href="incidents/%s/index.html">err</a>`, zstdInc.ID),
+		fmt.Sprintf(`<a class="err" href="incidents/%s/index.html">err</a>`, luaInc.ID),
+		`<span class="err">err</span>`,
+		">build (ice)<",
+		">build<",
+		">abcdef012345<",
+	} {
+		if !strings.Contains(idx, want) {
+			t.Errorf("index.html missing %q", want)
+		}
+	}
+	zstdPageRaw, err := os.ReadFile(filepath.Join(siteOut, "incidents", zstdInc.ID, "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	zstdPage := string(zstdPageRaw)
+	for _, want := range []string{"<h2>Build Error</h2>", "compiler ICE", "PLEASE submit a bug report"} {
+		if !strings.Contains(zstdPage, want) {
+			t.Errorf("zstd incident page missing %q", want)
+		}
+	}
+	for _, forbid := range []string{"Sanitizers", "Conservative", "github.com/llvm/"} {
+		if strings.Contains(zstdPage, forbid) {
+			t.Errorf("zstd incident page contains %q", forbid)
+		}
+	}
+
+	prefixInc := &incident{
+		ID: "prefixed-ice", Kind: incidentKindBuildFail, Status: incidentOpen,
+		GoodSHA: goodSHA1, BadSHA: badSHA,
+		ErrorExcerpt: "[compiler ICE] stack dump without signature",
+		Affected:     []affected{{Package: "opus", Platform: platLinuxX86, Profile: profDistroO2}},
+	}
+	if got := formatGroupTitle([]*incident{prefixInc}); got != "[ice] opus compiler crash on abcdef012345" {
+		t.Errorf("prefixed ICE title = %q", got)
+	}
+	if got := groupLabels([]*incident{prefixInc}); !slices.Equal(got, []string{labelBuildFail, labelCompilerICE, platLinuxX86}) {
+		t.Errorf("prefixed ICE labels = %v", got)
+	}
+
+	stMid, err := loadState(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stMid.LastGoodByTarget[targetKey("lua", platDarwinARM, profDistroO2)] = goodSHA2
+	if err := saveState(storeDir, stMid); err != nil {
+		t.Fatal(err)
+	}
+	frags2 := t.TempDir()
+	if err := writeResultFragment(filepath.Join(frags2, "sweep.json"), []pkgResult{
+		{Package: "lua", Version: "5.4.7", Platform: platLinuxX86, Profile: profDistroO2, Status: statusBuildFail, ErrorExcerpt: plainBuildErr},
+		{Package: "lua", Version: "5.4.7", Platform: platDarwinARM, Profile: profDistroO2, Status: statusBuildFail, ErrorExcerpt: "LLVM ERROR: darwin crash"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if code := runCLI(ctx, []string{"lmc", "aggregate", "-frags", frags2, "-store", storeDir, "-sha", badSHA}, &out, &errBuf); code != 0 {
+		t.Fatalf("second aggregate failed (%d): %s", code, errBuf.String())
+	}
+	incs2, err := loadAllIncidents(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(incs2) != 2 {
+		t.Fatalf("expected new lua target to merge into existing open build_fail, got %d incidents", len(incs2))
+	}
+	var luaMerged *incident
+	for _, inc := range incs2 {
+		if inc.ID == luaInc.ID {
+			luaMerged = inc
+		}
+	}
+	if luaMerged == nil || len(luaMerged.Affected) != 2 || !isICEExcerpt(luaMerged.ErrorExcerpt) {
+		t.Fatalf("lua merge did not add target or upgrade ICE excerpt: %+v", luaMerged)
+	}
+
+	frags3 := t.TempDir()
+	if err := writeResultFragment(filepath.Join(frags3, "pass.json"), []pkgResult{
+		{Package: "zstd", Version: "1.5.6", Platform: platLinuxX86, Profile: profDistroO2, Status: statusPass},
+		{Package: "zstd", Version: "1.5.6", Platform: platDarwinARM, Profile: profReleaseLTO, Status: statusPass},
+		{Package: "lua", Version: "5.4.7", Platform: platLinuxX86, Profile: profDistroO2, Status: statusPass},
+		{Package: "lua", Version: "5.4.7", Platform: platDarwinARM, Profile: profDistroO2, Status: statusPass},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if code := runCLI(ctx, []string{"lmc", "aggregate", "-frags", frags3, "-store", storeDir, "-sha", fixSHA}, &out, &errBuf); code != 0 {
+		t.Fatalf("pass aggregate failed (%d): %s", code, errBuf.String())
+	}
+	incs3, err := loadAllIncidents(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, inc := range incs3 {
+		if inc.Status != incidentResolved || inc.FixedSHA != fixSHA {
+			t.Fatalf("build_fail incident not auto-resolved: %+v", inc)
+		}
+	}
+	closeCfg := cfg
+	closeCfg.HeadSHA = fixSHA
+	closeActs, err := syncIssues(ctx, closeCfg, incs3)
+	if err != nil || len(closeActs) != 2 {
+		t.Fatalf("close sync acts=%+v err=%v", closeActs, err)
+	}
+	for _, a := range closeActs {
+		if a.Kind != "close" {
+			t.Errorf("expected close action, got %+v", a)
+		}
+	}
+	mu.Lock()
+	if issues[zstdInc.IssueNumber].State != "closed" || issues[luaInc.IssueNumber].State != "closed" {
+		t.Errorf("expected both issues closed")
+	}
+	if !slices.Equal(comments[zstdInc.IssueNumber], []string{"Fixed at `fedcba987654`."}) {
+		t.Errorf("unexpected close comment: %v", comments[zstdInc.IssueNumber])
+	}
+	mu.Unlock()
+}
+
+func TestHumanIssueCloseReopenAndSuppression(t *testing.T) {
+	ctx := context.Background()
+	srv, mu, issues, _ := newFakeGitHub(t)
+
+	goodA := "1111111111111111111111111111111111111111"
+	goodB := "2222222222222222222222222222222222222222"
+	bad1 := "3333333333333333333333333333333333333333"
+	passSHA := "4444444444444444444444444444444444444444"
+	bad2 := "5555555555555555555555555555555555555555"
+
+	storeDir := t.TempDir()
+	now := time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)
+
+	st := &state{
+		LastGoodSHA: goodA,
+		LastGoodByTarget: map[string]string{
+			targetKey("zstd", platLinuxX86, profDistroO2):    goodA,
+			targetKey("zstd", platDarwinARM, profReleaseLTO): goodB,
+			targetKey("opus", platLinuxX86, profDistroO2):    goodA,
+			targetKey("sqlite", platLinuxX86, profDistroO2):  goodA,
+		},
+	}
+	if err := saveState(storeDir, st); err != nil {
+		t.Fatal(err)
+	}
+
+	buildInc := &incident{
+		ID: "20261120-zstd-build-333333333333", Kind: incidentKindBuildFail,
+		Title: "zstd: build failure", Status: incidentOpen, Confidence: confNeedsReview,
+		GoodSHA: goodA, BadSHA: bad1, ErrorExcerpt: "zstd.c:1: error: broken",
+		Affected: []affected{
+			{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2, GoodSHA: goodA},
+			{Package: "zstd", Platform: platDarwinARM, Profile: profReleaseLTO, GoodSHA: goodB},
+		},
+		CreatedAt: now, UpdatedAt: now,
+	}
+	plainBuildInc := &incident{
+		ID: "20261120-opus-build-333333333333", Kind: incidentKindBuildFail,
+		Title: "opus: build failure", Status: incidentOpen, Confidence: confNeedsReview,
+		GoodSHA: goodA, BadSHA: bad1, ErrorExcerpt: "opus.c:1: error: broken",
+		Affected:  []affected{{Package: "opus", Platform: platLinuxX86, Profile: profDistroO2, GoodSHA: goodA}},
+		CreatedAt: now.Add(time.Minute), UpdatedAt: now.Add(time.Minute),
+	}
+	misInc := &incident{
+		ID:    "sqlite-linux-x86-64-distro-o2-33333333",
+		Title: "sqlite: GVNPass", Status: incidentOpen, Confidence: confConfirmed,
+		GoodSHA: goodA, BadSHA: bad1, CulpritSHA: bad1, CulpritPass: "GVNPass",
+		ASanUBSanClean: true,
+		Affected:       []affected{{Package: "sqlite", Platform: platLinuxX86, Profile: profDistroO2, TestID: "t1"}},
+		CreatedAt:      now.Add(2 * time.Minute), UpdatedAt: now.Add(2 * time.Minute),
+	}
+	for _, inc := range []*incident{buildInc, plainBuildInc, misInc} {
+		if _, err := saveIncident(storeDir, inc); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refreshStateIncidents(st, []*incident{buildInc, plainBuildInc, misInc}, false)
+	if err := saveState(storeDir, st); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := issueSyncCfg{Repo: defaultRepo, Token: "tok", APIBase: srv.URL, StoreDir: storeDir}
+	if acts, err := syncIssues(ctx, cfg, []*incident{buildInc, plainBuildInc, misInc}); err != nil || len(acts) != 3 {
+		t.Fatalf("initial syncIssues acts=%+v err=%v", acts, err)
+	}
+
+	mu.Lock()
+	issues[buildInc.IssueNumber].Labels = append(issues[buildInc.IssueNumber].Labels, struct{ Name string }{"upstream"}, struct{ Name string }{"package-bug"})
+	issues[buildInc.IssueNumber].State = "closed"
+	issues[plainBuildInc.IssueNumber].State = "closed"
+	issues[misInc.IssueNumber].Labels = append(issues[misInc.IssueNumber].Labels, struct{ Name string }{"upstream"})
+	issues[misInc.IssueNumber].State = "closed"
+	mu.Unlock()
+
+	incs, err := loadAllIncidents(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acts, err := syncIssues(ctx, cfg, incs)
+	if err != nil || len(acts) != 3 {
+		t.Fatalf("close-sync acts=%+v err=%v", acts, err)
+	}
+	for _, a := range acts {
+		if a.Kind != "noop" {
+			t.Errorf("expected noop on human-closed issue, got %+v", a)
+		}
+	}
+
+	reloaded, err := loadAllIncidents(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]*incident{}
+	for _, inc := range reloaded {
+		byID[inc.ID] = inc
+	}
+	if byID[buildInc.ID].Status != incidentClosed || !slices.Equal(byID[buildInc.ID].Labels, []string{"package-bug", "upstream"}) || byID[buildInc.ID].ResolvedAt == nil {
+		t.Fatalf("zstd closed sync mismatch: %+v", byID[buildInc.ID])
+	}
+	if byID[plainBuildInc.ID].Status != incidentClosed || len(byID[plainBuildInc.ID].Labels) != 0 || byID[plainBuildInc.ID].ResolvedAt == nil {
+		t.Fatalf("opus plain closed sync mismatch: %+v", byID[plainBuildInc.ID])
+	}
+	if byID[misInc.ID].Status != incidentClosed || !slices.Equal(byID[misInc.ID].Labels, []string{"upstream"}) {
+		t.Fatalf("sqlite closed sync mismatch: %+v", byID[misInc.ID])
+	}
+
+	stClosed, err := loadState(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stClosed.ActiveIncidentIDs) != 0 || len(stClosed.RetainedToolchains) != 0 {
+		t.Fatalf("expected empty active/retained after all closed: active=%v retained=%v", stClosed.ActiveIncidentIDs, stClosed.RetainedToolchains)
+	}
+
+	fragsStillFail := t.TempDir()
+	if err := writeResultFragment(filepath.Join(fragsStillFail, "f.json"), []pkgResult{
+		{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2, Status: statusBuildFail, ErrorExcerpt: "still broken x86"},
+		{Package: "zstd", Platform: platDarwinARM, Profile: profReleaseLTO, Status: statusBuildFail, ErrorExcerpt: "still broken darwin"},
+		{Package: "opus", Platform: platLinuxX86, Profile: profDistroO2, Status: statusBuildFail, ErrorExcerpt: "still broken opus"},
+		{Package: "sqlite", Platform: platLinuxX86, Profile: profDistroO2, Status: statusTestFail, FailedTests: []string{"t1"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	regOutSuppressed := filepath.Join(t.TempDir(), "regs-suppressed.json")
+	var out, errBuf bytes.Buffer
+	if code := runCLI(ctx, []string{
+		"lmc", "aggregate", "-frags", fragsStillFail, "-store", storeDir, "-sha", bad1, "-reg-out", regOutSuppressed,
+	}, &out, &errBuf); code != 0 {
+		t.Fatalf("suppressed aggregate failed (%d): %s", code, errBuf.String())
+	}
+	var supRegs []regressionTarget
+	if err := readJSON(regOutSuppressed, &supRegs); err != nil {
+		t.Fatal(err)
+	}
+	if len(supRegs) != 0 {
+		t.Fatalf("human-closed test_fail re-triggered: %+v", supRegs)
+	}
+	afterSup, err := loadAllIncidents(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(afterSup) != 3 {
+		t.Fatalf("human-closed build_fail created duplicate incident: count=%d", len(afterSup))
+	}
+
+	siteClosed := t.TempDir()
+	if err := generateSite(storeDir, siteClosed, t.TempDir()); err != nil {
+		t.Fatalf("generateSite closed: %v", err)
+	}
+	idxClosedRaw, err := os.ReadFile(filepath.Join(siteClosed, "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	idxClosed := string(idxClosedRaw)
+	if strings.Contains(idxClosed, "<h2>Open</h2>") {
+		t.Errorf("closed incidents should not appear under Open:\n%s", idxClosed)
+	}
+	for _, want := range []string{"<h2>Resolved</h2>", ">package-bug, upstream<", ">closed<", `<span class="err">err</span>`} {
+		if !strings.Contains(idxClosed, want) {
+			t.Errorf("closed index.html missing %q", want)
+		}
+	}
+	if strings.Contains(idxClosed, fmt.Sprintf(`href="incidents/%s/index.html">err</a>`, buildInc.ID)) {
+		t.Errorf("closed build_fail should not link err matrix cell")
+	}
+	zstdClosedPageRaw, err := os.ReadFile(filepath.Join(siteClosed, "incidents", buildInc.ID, "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(zstdClosedPageRaw), "closed (package-bug, upstream)") {
+		t.Errorf("zstd closed page missing status with labels:\n%s", string(zstdClosedPageRaw))
+	}
+	opusClosedPageRaw, err := os.ReadFile(filepath.Join(siteClosed, "incidents", plainBuildInc.ID, "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(opusClosedPageRaw), "<td>closed</td>") {
+		t.Errorf("opus closed page missing plain closed status:\n%s", string(opusClosedPageRaw))
+	}
+
+	orphanClosed := &incident{
+		ID: "20261120-orphan-build-333333333333", Kind: incidentKindBuildFail, Status: incidentClosed,
+		GoodSHA: goodA, BadSHA: bad1,
+		Affected: []affected{{Package: "orphan", Platform: platLinuxX86, Profile: profDistroO2, GoodSHA: goodA}},
+	}
+	mu.Lock()
+	countBeforeOrphan := len(issues)
+	mu.Unlock()
+	if oActs, err := syncIssues(ctx, cfg, []*incident{orphanClosed}); err != nil || len(oActs) != 0 {
+		t.Fatalf("closed incident without GH issue should be skipped: acts=%+v err=%v", oActs, err)
+	}
+	mu.Lock()
+	if len(issues) != countBeforeOrphan {
+		t.Fatalf("closed incident without GH issue created a new issue")
+	}
+	mu.Unlock()
+
+	fragsPass := t.TempDir()
+	if err := writeResultFragment(filepath.Join(fragsPass, "pass.json"), []pkgResult{
+		{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2, Status: statusPass},
+		{Package: "zstd", Platform: platDarwinARM, Profile: profReleaseLTO, Status: statusPass},
+		{Package: "sqlite", Platform: platLinuxX86, Profile: profDistroO2, Status: statusPass},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if code := runCLI(ctx, []string{"lmc", "aggregate", "-frags", fragsPass, "-store", storeDir, "-sha", passSHA}, &out, &errBuf); code != 0 {
+		t.Fatalf("pass aggregate failed (%d): %s", code, errBuf.String())
+	}
+	afterPass, err := loadAllIncidents(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, inc := range afterPass {
+		if inc.Status != incidentClosed {
+			t.Fatalf("pass sweep overwrote incidentClosed to %q: %+v", inc.Status, inc)
+		}
+	}
+
+	fragsRegress := t.TempDir()
+	if err := writeResultFragment(filepath.Join(fragsRegress, "reg.json"), []pkgResult{
+		{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2, Status: statusBuildFail, ErrorExcerpt: "LLVM ERROR: new crash"},
+		{Package: "opus", Platform: platLinuxX86, Profile: profDistroO2, Status: statusBuildFail, ErrorExcerpt: "still never passed"},
+		{Package: "sqlite", Platform: platLinuxX86, Profile: profDistroO2, Status: statusTestFail, FailedTests: []string{"t2"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	regOutFresh := filepath.Join(t.TempDir(), "regs-fresh.json")
+	if code := runCLI(ctx, []string{
+		"lmc", "aggregate", "-frags", fragsRegress, "-store", storeDir, "-sha", bad2, "-reg-out", regOutFresh,
+	}, &out, &errBuf); code != 0 {
+		t.Fatalf("regress aggregate failed (%d): %s", code, errBuf.String())
+	}
+	var freshRegs []regressionTarget
+	if err := readJSON(regOutFresh, &freshRegs); err != nil {
+		t.Fatal(err)
+	}
+	if len(freshRegs) != 1 || freshRegs[0].Package != "sqlite" || freshRegs[0].GoodSHA != passSHA {
+		t.Fatalf("expected fresh sqlite regression after pass, got %+v", freshRegs)
+	}
+	afterFresh, err := loadAllIncidents(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(afterFresh) != 4 {
+		t.Fatalf("expected 4 incidents (fresh zstd build_fail, opus still suppressed), got %d", len(afterFresh))
+	}
+	var freshZstd *incident
+	for _, inc := range afterFresh {
+		if inc.Status == incidentOpen && inc.isBuildFail() {
+			freshZstd = inc
+		}
+	}
+	if freshZstd == nil || freshZstd.GoodSHA != passSHA || dedupKey(freshZstd) == dedupKey(buildInc) {
+		t.Fatalf("expected fresh zstd build_fail with new dedupKey: fresh=%+v oldKey=%q", freshZstd, dedupKey(buildInc))
+	}
+	mu.Lock()
+	countBeforeFreshSync := len(issues)
+	mu.Unlock()
+	if _, err := syncIssues(ctx, cfg, afterFresh); err != nil {
+		t.Fatalf("fresh syncIssues: %v", err)
+	}
+	mu.Lock()
+	if len(issues) != countBeforeFreshSync+1 {
+		t.Fatalf("expected 1 new GH issue for fresh build_fail, count %d -> %d", countBeforeFreshSync, len(issues))
+	}
+	mu.Unlock()
+
+	mu.Lock()
+	issues[plainBuildInc.IssueNumber].State = "open"
+	issues[plainBuildInc.IssueNumber].Labels = append(issues[plainBuildInc.IssueNumber].Labels, struct{ Name string }{"needs-bisect"})
+	mu.Unlock()
+
+	allBeforeReopen, err := loadAllIncidents(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := syncIssues(ctx, cfg, allBeforeReopen); err != nil {
+		t.Fatalf("reopen syncIssues: %v", err)
+	}
+	allAfterReopen, err := loadAllIncidents(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reopenedOpus *incident
+	for _, inc := range allAfterReopen {
+		if inc.ID == plainBuildInc.ID {
+			reopenedOpus = inc
+		}
+	}
+	if reopenedOpus == nil || reopenedOpus.Status != incidentOpen || reopenedOpus.ResolvedAt != nil || !slices.Equal(reopenedOpus.Labels, []string{"needs-bisect"}) {
+		t.Fatalf("human reopen did not restore incidentOpen/labels: %+v", reopenedOpus)
+	}
+	stReopen, err := loadState(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(stReopen.ActiveIncidentIDs, plainBuildInc.ID) || !slices.Contains(stReopen.RetainedToolchains, goodA) {
+		t.Fatalf("state.json not refreshed after human reopen: active=%v retained=%v", stReopen.ActiveIncidentIDs, stReopen.RetainedToolchains)
+	}
+
+	siteReopen := t.TempDir()
+	if err := generateSite(storeDir, siteReopen, t.TempDir()); err != nil {
+		t.Fatalf("generateSite reopen: %v", err)
+	}
+	opusOpenPageRaw, err := os.ReadFile(filepath.Join(siteReopen, "incidents", plainBuildInc.ID, "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(opusOpenPageRaw), "open (needs-bisect)") {
+		t.Errorf("reopened opus page missing open status with human label:\n%s", string(opusOpenPageRaw))
+	}
+}
+
+func TestBuildFailDedupAndLabelSync(t *testing.T) {
+	if got := dedupKey(&incident{
+		ID: "b1", Kind: incidentKindBuildFail, GoodSHA: "111111111111abcdef",
+		Affected: []affected{{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2}},
+	}); got != "build:zstd|111111111111" {
+		t.Errorf("dedupKey full = %q", got)
+	}
+	if got := dedupKey(&incident{
+		ID: "b2", Kind: incidentKindBuildFail,
+		Affected: []affected{{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2}},
+	}); got != "build:zstd" {
+		t.Errorf("dedupKey no-good = %q", got)
+	}
+	if got := dedupKey(&incident{ID: "b3", Kind: incidentKindBuildFail}); got != "incident:b3" {
+		t.Errorf("dedupKey no-pkg = %q", got)
+	}
+
+	iss := &ghIssue{
+		Labels: []struct{ Name string }{
+			{confConfirmed}, {confNeedsReview}, {labelBuildFail}, {labelCompilerICE},
+			{platLinuxX86}, {platLinuxARM64}, {platLinuxRISCV64}, {platDarwinARM},
+			{"Linux-x86_64"}, {"upstream"}, {"package-bug"}, {"@nikic (#99)"},
+		},
+	}
+	if got := humanLabels(iss, []string{"custom-bot"}); !slices.Equal(got, []string{"nikic", "package-bug", "upstream"}) {
+		t.Errorf("humanLabels = %v", got)
+	}
+
+	storeDir := t.TempDir()
+	inc1 := &incident{
+		ID: "m1", Kind: incidentKindBuildFail, Title: "zstd: build failure", Status: incidentOpen,
+		GoodSHA: "1111111111111111111111111111111111111111", BadSHA: "2222222222222222222222222222222222222222",
+		ErrorExcerpt: "a.c:1: error: bad",
+		Affected:     []affected{{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2, GoodSHA: "1111111111111111111111111111111111111111"}},
+	}
+	if _, err := mergeIncident(storeDir, inc1); err != nil {
+		t.Fatal(err)
+	}
+	inc2 := &incident{
+		ID: "m2", Kind: incidentKindBuildFail, Status: incidentOpen,
+		GoodSHA: "1111111111111111111111111111111111111111", BadSHA: "2222222222222222222222222222222222222222",
+		ErrorExcerpt: "LLVM ERROR: ice",
+		Affected: []affected{
+			{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2},
+			{Package: "zstd", Platform: platDarwinARM, Profile: profReleaseLTO, GoodSHA: "3333333333333333333333333333333333333333"},
+		},
+	}
+	merged, err := mergeIncident(storeDir, inc2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if merged.ID != "m1" || merged.Title != "zstd: compiler ICE" || !isICEExcerpt(merged.ErrorExcerpt) || len(merged.Affected) != 2 ||
+		merged.Affected[0].GoodSHA != "1111111111111111111111111111111111111111" ||
+		merged.Affected[1].GoodSHA != "3333333333333333333333333333333333333333" {
+		t.Fatalf("unexpected merged build_fail incident: %+v", merged)
+	}
+	stMerged, err := loadState(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, wantSHA := range []string{
+		"1111111111111111111111111111111111111111",
+		"2222222222222222222222222222222222222222",
+		"3333333333333333333333333333333333333333",
+	} {
+		if !slices.Contains(stMerged.RetainedToolchains, wantSHA) {
+			t.Fatalf("RetainedToolchains missing multi-target SHA %s: %v", wantSHA, stMerged.RetainedToolchains)
+		}
+	}
+
+	otherOpen := &incident{
+		ID: "m-other", Kind: incidentKindBuildFail, Title: "lua: build failure", Status: incidentOpen,
+		GoodSHA: "4444444444444444444444444444444444444444", BadSHA: "5555555555555555555555555555555555555555",
+		ErrorExcerpt: "lua.c:1: error: boom",
+		Affected:     []affected{{Package: "lua", Platform: platLinuxX86, Profile: profDistroO2, GoodSHA: "6666666666666666666666666666666666666666"}},
+	}
+	if _, err := saveIncident(storeDir, otherOpen); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	srv, mu, issues, _ := newFakeGitHub(t)
+	cfg := issueSyncCfg{Repo: defaultRepo, Token: "tok", APIBase: srv.URL, StoreDir: storeDir}
+	if _, err := syncIssues(ctx, cfg, []*incident{merged}); err != nil {
+		t.Fatal(err)
+	}
+	stSubset, err := loadState(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(stSubset.ActiveIncidentIDs, "m1") || !slices.Contains(stSubset.ActiveIncidentIDs, "m-other") {
+		t.Fatalf("subset syncIssues dropped other open incident from ActiveIncidentIDs: %v", stSubset.ActiveIncidentIDs)
+	}
+	for _, wantSHA := range []string{
+		"1111111111111111111111111111111111111111",
+		"2222222222222222222222222222222222222222",
+		"3333333333333333333333333333333333333333",
+		"4444444444444444444444444444444444444444",
+		"5555555555555555555555555555555555555555",
+		"6666666666666666666666666666666666666666",
+	} {
+		if !slices.Contains(stSubset.RetainedToolchains, wantSHA) {
+			t.Fatalf("subset syncIssues dropped SHA %s from RetainedToolchains: %v", wantSHA, stSubset.RetainedToolchains)
+		}
+	}
+
+	mu.Lock()
+	issues[merged.IssueNumber].Labels = append(issues[merged.IssueNumber].Labels, struct{ Name string }{"triaged"})
+	mu.Unlock()
+	if acts, err := syncIssues(ctx, cfg, []*incident{merged}); err != nil || len(acts) != 1 || acts[0].Kind != "noop" {
+		t.Fatalf("open human label sync acts=%+v err=%v", acts, err)
+	}
+	var onDisk incident
+	if err := readJSON(filepath.Join(storeDir, "incidents", "m1.json"), &onDisk); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(onDisk.Labels, []string{"triaged"}) {
+		t.Fatalf("open issue human label not persisted: %+v", onDisk.Labels)
+	}
+
+	mu.Lock()
+	issues[merged.IssueNumber].State = "closed"
+	mu.Unlock()
+	if _, err := syncIssues(ctx, cfg, []*incident{merged}); err != nil {
+		t.Fatal(err)
+	}
+	stAfterClose, err := loadState(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(stAfterClose.ActiveIncidentIDs, "m1") || !slices.Contains(stAfterClose.ActiveIncidentIDs, "m-other") {
+		t.Fatalf("subset close corrupted ActiveIncidentIDs: %v", stAfterClose.ActiveIncidentIDs)
+	}
+	if slices.Contains(stAfterClose.RetainedToolchains, "3333333333333333333333333333333333333333") ||
+		!slices.Contains(stAfterClose.RetainedToolchains, "6666666666666666666666666666666666666666") {
+		t.Fatalf("subset close corrupted RetainedToolchains: %v", stAfterClose.RetainedToolchains)
+	}
+
+	xssStore, xssOut := t.TempDir(), t.TempDir()
+	xssInc := &incident{
+		ID: "xss-build", Kind: incidentKindBuildFail, Title: "zstd: build failure", Status: incidentClosed,
+		GoodSHA: "1111111111111111111111111111111111111111", BadSHA: "2222222222222222222222222222222222222222",
+		ErrorExcerpt: "foo.cc:1: error: <script>alert(1)</script> & bad",
+		Labels:       []string{"<script>alert(2)</script>", "a&b"},
+		Affected:     []affected{{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2}},
+	}
+	if _, err := saveIncident(xssStore, xssInc); err != nil {
+		t.Fatal(err)
+	}
+	if err := generateSite(xssStore, xssOut, t.TempDir()); err != nil {
+		t.Fatalf("generateSite xss: %v", err)
+	}
+	xssPageRaw, err := os.ReadFile(filepath.Join(xssOut, "incidents", "xss-build", "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	xssPage := string(xssPageRaw)
+	if strings.Contains(xssPage, "<script>") || strings.Contains(xssPage, "&amp;lt;") {
+		t.Fatalf("incident page allowed raw script or double-escaped:\n%s", xssPage)
+	}
+	for _, want := range []string{"&lt;script&gt;alert(1)&lt;/script&gt; &amp; bad", "closed (&lt;script&gt;alert(2)&lt;/script&gt;, a&amp;b)"} {
+		if !strings.Contains(xssPage, want) {
+			t.Errorf("incident page missing escaped %q:\n%s", want, xssPage)
+		}
+	}
+	xssIdxRaw, err := os.ReadFile(filepath.Join(xssOut, "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	xssIdx := string(xssIdxRaw)
+	if strings.Contains(xssIdx, "<script>") || !strings.Contains(xssIdx, "&lt;script&gt;alert(2)&lt;/script&gt;, a&amp;b") {
+		t.Fatalf("index page script escaping failed:\n%s", xssIdx)
+	}
+}

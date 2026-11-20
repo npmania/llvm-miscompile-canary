@@ -21,6 +21,11 @@
       </tbody>
     </table>
 
+    {{- if .ErrorExcerpt}}
+    <h2>Build Error</h2>
+    <pre><code>{{.ErrorExcerpt}}</code></pre>
+    {{- end}}
+
     {{- if .CleanedIR}}
     <h2>Reduced IR</h2>
     <p class="cmd"><code>{{.OptCmd}}</code></p>

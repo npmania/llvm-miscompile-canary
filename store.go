@@ -22,6 +22,10 @@ const (
 
 	incidentOpen     = "open"
 	incidentResolved = "resolved"
+	incidentClosed   = "closed"
+
+	incidentKindMiscompile = "miscompile"
+	incidentKindBuildFail  = "build_fail"
 
 	confConfirmed   = "confirmed"
 	confNeedsReview = "needs-review"
@@ -55,10 +59,12 @@ type affected struct {
 	Platform string `json:"platform"`
 	Profile  string `json:"profile"`
 	TestID   string `json:"test_id"`
+	GoodSHA  string `json:"good_sha,omitempty"`
 }
 
 type incident struct {
 	ID                          string     `json:"id"`
+	Kind                        string     `json:"kind,omitempty"`
 	Title                       string     `json:"title"`
 	Status                      string     `json:"status"`
 	Confidence                  string     `json:"confidence"`
@@ -81,9 +87,11 @@ type incident struct {
 	ReducedIR                   string     `json:"reduced_ir,omitempty"`
 	StandaloneReproCmd          string     `json:"standalone_repro_cmd,omitempty"`
 	PassDiff                    string     `json:"pass_diff,omitempty"`
+	ErrorExcerpt                string     `json:"error_excerpt,omitempty"`
 	BundleURL                   string     `json:"bundle_url,omitempty"`
 	IssueNumber                 int        `json:"issue_number,omitempty"`
 	IssueURL                    string     `json:"issue_url,omitempty"`
+	Labels                      []string   `json:"labels,omitempty"`
 	Affected                    []affected `json:"affected"`
 	CreatedAt                   time.Time  `json:"created_at"`
 	UpdatedAt                   time.Time  `json:"updated_at"`
@@ -114,12 +122,27 @@ func formatSweepID(ts time.Time, sha string) string {
 	return ts.UTC().Format("20060102T150405Z") + "-" + s
 }
 
-func (s *state) goodSHAFor(pkg, plat, prof string) string {
+func (i *incident) isBuildFail() bool {
+	return i != nil && i.Kind == incidentKindBuildFail
+}
+
+func isICEExcerpt(s string) bool {
+	return strings.HasPrefix(strings.TrimSpace(s), "[compiler ICE]") || detectICE(s)
+}
+
+func (s *state) targetGoodSHA(pkg, plat, prof string) string {
 	if s == nil {
 		return ""
 	}
-	if sha := s.LastGoodByTarget[targetKey(pkg, plat, prof)]; sha != "" {
+	return s.LastGoodByTarget[targetKey(pkg, plat, prof)]
+}
+
+func (s *state) goodSHAFor(pkg, plat, prof string) string {
+	if sha := s.targetGoodSHA(pkg, plat, prof); sha != "" {
 		return sha
+	}
+	if s == nil {
+		return ""
 	}
 	return s.LastGoodSHA
 }
@@ -127,11 +150,20 @@ func (s *state) goodSHAFor(pkg, plat, prof string) string {
 func (i *incident) mergeAffected(targets ...affected) bool {
 	changed := false
 	for _, t := range targets {
-		dup := slices.ContainsFunc(i.Affected, func(c affected) bool {
+		idx := slices.IndexFunc(i.Affected, func(c affected) bool {
 			return c.Package == t.Package && c.Platform == t.Platform && c.Profile == t.Profile && c.TestID == t.TestID
 		})
-		if !dup {
+		if idx < 0 {
 			i.Affected = append(i.Affected, t)
+			changed = true
+			continue
+		}
+		if i.Affected[idx].GoodSHA == "" && t.GoodSHA != "" {
+			i.Affected[idx].GoodSHA = t.GoodSHA
+			changed = true
+		}
+		if i.Affected[idx].Version == "" && t.Version != "" {
+			i.Affected[idx].Version = t.Version
 			changed = true
 		}
 	}
@@ -152,6 +184,25 @@ func sortAffected(list []affected) {
 func dedupKey(inc *incident) string {
 	if inc == nil {
 		return ""
+	}
+	if inc.isBuildFail() {
+		var pkg string
+		good := shortSHA(inc.GoodSHA)
+		if len(inc.Affected) > 0 {
+			sorted := slices.Clone(inc.Affected)
+			sortAffected(sorted)
+			pkg = strings.TrimSpace(sorted[0].Package)
+			if good == "" {
+				good = shortSHA(sorted[0].GoodSHA)
+			}
+		}
+		if pkg != "" && good != "" {
+			return fmt.Sprintf("build:%s|%s", keyToken(pkg), keyToken(good))
+		}
+		if pkg != "" {
+			return "build:" + keyToken(pkg)
+		}
+		return "incident:" + keyToken(inc.ID)
 	}
 	if sha := shortSHA(inc.CulpritSHA); sha != "" {
 		return "culprit:" + keyToken(sha)
@@ -269,6 +320,11 @@ func refreshStateIncidents(st *state, incidents []*incident, keepRetained bool) 
 		}
 		if inc.BadSHA != "" {
 			retainedSet[inc.BadSHA] = struct{}{}
+		}
+		for _, a := range inc.Affected {
+			if a.GoodSHA != "" {
+				retainedSet[a.GoodSHA] = struct{}{}
+			}
 		}
 	}
 	st.ActiveIncidentIDs = active
@@ -393,7 +449,22 @@ func mergeIncident(dir string, inc *incident) (*incident, error) {
 		if ex == nil || ex.Status != incidentOpen || key == "" || dedupKey(ex) != key {
 			continue
 		}
-		ex.mergeAffected(inc.Affected...)
+		targets := slices.Clone(inc.Affected)
+		if inc.GoodSHA != "" && inc.GoodSHA != ex.GoodSHA {
+			for i := range targets {
+				targets[i].GoodSHA = cmp.Or(targets[i].GoodSHA, inc.GoodSHA)
+			}
+		}
+		ex.mergeAffected(targets...)
+		setIfEmpty(&ex.Kind, inc.Kind)
+		if inc.ErrorExcerpt != "" && (ex.ErrorExcerpt == "" || (!isICEExcerpt(ex.ErrorExcerpt) && isICEExcerpt(inc.ErrorExcerpt))) {
+			ex.ErrorExcerpt = inc.ErrorExcerpt
+			if ex.isBuildFail() && isICEExcerpt(ex.ErrorExcerpt) {
+				if pkgs := uniquePkgs([]*incident{ex}); len(pkgs) > 0 {
+					ex.Title = sanitizeText(strings.Join(pkgs, ", ") + ": compiler ICE")
+				}
+			}
+		}
 		if ex.Confidence != confConfirmed && inc.Confidence == confConfirmed {
 			ex.Confidence = confConfirmed
 		}

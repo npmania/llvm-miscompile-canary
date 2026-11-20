@@ -1,9 +1,9 @@
 name: binaryen
 category: Compilers & IR
 repo: WebAssembly/binaryen
-version: version_133
-url: https://github.com/WebAssembly/binaryen/archive/refs/tags/version_133.tar.gz
-sha256: 2f3e3d9edc56751499571da073a8a81943ca3fcbc08a945d2c619a7a1d4eb88b
+version: version_133-206-g4479c7d
+url: https://github.com/npmania/binaryen/archive/4479c7d3a7d3a9609474ce69198b432de0b10eb2.tar.gz
+sha256: 420e5d0f1f05efc054571e53c9d6e7d087ae66fefc77d9d602b967750caa0348
 strip_components: 1
 lang: cxx
 timeout_min: 25

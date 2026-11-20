@@ -24,6 +24,8 @@ const (
 	defaultSiteURL    = "https://llvm-miscompile-canary.glendalab.com"
 	siteDomain        = "llvm-miscompile-canary.glendalab.com"
 	maxIssueBodyBytes = 60000
+	labelBuildFail    = "build-fail"
+	labelCompilerICE  = "compiler-ice"
 )
 
 type rxRepl struct {
@@ -335,7 +337,25 @@ func incidentMetaRows(incs []*incident, htmlMode bool, siteURL string) [][2]stri
 
 	if htmlMode {
 		f := sha(primary.FixedSHA)
-		add("Status", pick(primary.Status == incidentResolved, pick(f != "", "resolved at "+code(f), "resolved"), "open"))
+		var lbls []string
+		for _, l := range primary.Labels {
+			if s := txt(l); s != "" {
+				lbls = append(lbls, s)
+			}
+		}
+		suffix := pick(len(lbls) > 0, " ("+strings.Join(lbls, ", ")+")", "")
+		switch primary.Status {
+		case incidentResolved:
+			add("Status", pick(f != "", "resolved at "+code(f), "resolved"))
+		case incidentClosed:
+			add("Status", "closed"+suffix)
+		default:
+			add("Status", "open"+suffix)
+		}
+	}
+	isBuild := primary.isBuildFail()
+	if isBuild {
+		add("Kind", pick(isICEExcerpt(primary.ErrorExcerpt), "compiler ICE", "build failure"))
 	}
 	if c := sha(primary.CulpritSHA); c != "" {
 		subj := txt(primary.CulpritSubject)
@@ -357,21 +377,23 @@ func incidentMetaRows(incs []*incident, htmlMode bool, siteURL string) [][2]stri
 	if tgt := formatTargets(mergedAffected(incs), htmlMode); tgt != "" {
 		add(pick(htmlMode, "Targets", "Target"), tgt)
 	}
-	sanVal := code("asan,ubsan") + " clean"
-	if hasASanFail {
-		sanVal = code("asan,ubsan") + " failed"
-	} else if !hasASanClean && hasUBSanOnly {
-		sanVal = code("ubsan") + " clean (asan disabled)"
-	}
-	add("Sanitizers", sanVal)
-	add("Conservative", pick(consIndep, "reproduces ("+code("-fno-strict-aliasing -fwrapv -ftrivial-auto-var-init=zero")+")", "masked"))
-	if !isOmittedFormalStatus(primary.AliveTVStatus) {
-		add(code("alive-tv"), txt(primary.AliveTVStatus))
-	}
-	if m := reLLUBIExits.FindStringSubmatch(primary.LLUBIOutput); len(m) >= 3 {
-		add(code("llubi"), code(m[1])+" (before)"+pick(htmlMode, " -&gt; ", " -> ")+code(m[2])+" (after)")
-	} else if !isOmittedFormalStatus(primary.LLUBIStatus) {
-		add(code("llubi"), txt(primary.LLUBIStatus))
+	if !isBuild {
+		sanVal := code("asan,ubsan") + " clean"
+		if hasASanFail {
+			sanVal = code("asan,ubsan") + " failed"
+		} else if !hasASanClean && hasUBSanOnly {
+			sanVal = code("ubsan") + " clean (asan disabled)"
+		}
+		add("Sanitizers", sanVal)
+		add("Conservative", pick(consIndep, "reproduces ("+code("-fno-strict-aliasing -fwrapv -ftrivial-auto-var-init=zero")+")", "masked"))
+		if !isOmittedFormalStatus(primary.AliveTVStatus) {
+			add(code("alive-tv"), txt(primary.AliveTVStatus))
+		}
+		if m := reLLUBIExits.FindStringSubmatch(primary.LLUBIOutput); len(m) >= 3 {
+			add(code("llubi"), code(m[1])+" (before)"+pick(htmlMode, " -&gt; ", " -> ")+code(m[2])+" (after)")
+		} else if !isOmittedFormalStatus(primary.LLUBIStatus) {
+			add(code("llubi"), txt(primary.LLUBIStatus))
+		}
 	}
 	var arts []string
 	if u := strings.TrimSpace(primary.BundleURL); u != "" {
@@ -532,6 +554,7 @@ func syncIssues(ctx context.Context, cfg issueSyncCfg, incs []*incident) ([]issu
 	slices.Sort(keys)
 
 	var actions []issueAction
+	anyChanged := false
 	for _, key := range keys {
 		grp := byGroup[key]
 		slices.SortFunc(grp, func(a, b *incident) int { return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), cmp.Compare(a.ID, b.ID)) })
@@ -546,10 +569,11 @@ func syncIssues(ctx context.Context, cfg issueSyncCfg, incs []*incident) ([]issu
 				}
 			}
 		}
-		act, err := syncGroup(ctx, cli, cfg, key, grp, ex)
+		act, changed, err := syncGroup(ctx, cli, cfg, key, grp, ex)
 		if err != nil {
 			return nil, err
 		}
+		anyChanged = anyChanged || changed
 		if act != nil {
 			actions = append(actions, *act)
 			if cfg.DryRun && cfg.Out != nil && act.Kind != "noop" {
@@ -566,10 +590,25 @@ func syncIssues(ctx context.Context, cfg issueSyncCfg, incs []*incident) ([]issu
 			}
 		}
 	}
+	if anyChanged && !cfg.DryRun && cfg.StoreDir != "" {
+		st, err := loadState(cfg.StoreDir)
+		if err != nil {
+			return actions, err
+		}
+		all, err := loadAllIncidents(cfg.StoreDir)
+		if err != nil {
+			return actions, err
+		}
+		refreshStateIncidents(st, all, false)
+		st.UpdatedAt = time.Now().UTC()
+		if err := saveState(cfg.StoreDir, st); err != nil {
+			return actions, err
+		}
+	}
 	return actions, nil
 }
 
-func syncGroup(ctx context.Context, cli *ghClient, cfg issueSyncCfg, key string, incs []*incident, ex *ghIssue) (*issueAction, error) {
+func syncGroup(ctx context.Context, cli *ghClient, cfg issueSyncCfg, key string, incs []*incident, ex *ghIssue) (*issueAction, bool, error) {
 	var ids []string
 	recNum, recURL := 0, ""
 	for _, inc := range incs {
@@ -583,46 +622,58 @@ func syncGroup(ctx context.Context, cli *ghClient, cfg issueSyncCfg, key string,
 	if !slices.ContainsFunc(incs, func(i *incident) bool { return i.Status != incidentResolved }) {
 		if ex != nil {
 			if strings.EqualFold(ex.State, "closed") {
-				return nil, nil
+				return nil, false, nil
 			}
 			act.IssueNumber, act.IssueURL = ex.Number, ex.HTMLURL
 		} else if act.IssueNumber == 0 || !cfg.DryRun {
-			return nil, nil
+			return nil, false, nil
 		}
 		act.Kind, act.Comment = "close", formatCloseComment(incs, cfg.HeadSHA)
 		if err := errors.Join(checkNoCrossRefs(act.Comment), checkNoCrossRefs(act.Title)); err != nil {
-			return nil, fmt.Errorf("close %s: %w", key, err)
+			return nil, false, fmt.Errorf("close %s: %w", key, err)
 		}
 		if !cfg.DryRun {
 			base := fmt.Sprintf("/repos/%s/issues/%d", cfg.Repo, act.IssueNumber)
 			if err := cli.do(ctx, http.MethodPost, base+"/comments", map[string]any{"body": act.Comment}, nil); err != nil {
-				return nil, err
+				return nil, false, err
 			}
 			if err := cli.do(ctx, http.MethodPatch, base, map[string]any{"state": "closed", "state_reason": "completed"}, nil); err != nil {
-				return nil, err
+				return nil, false, err
 			}
 		}
-		return act, nil
+		return act, false, nil
 	}
 
+	botLabels := groupLabels(incs)
 	if ex != nil && strings.EqualFold(ex.State, "closed") {
-		propagateIssueRef(cfg.StoreDir, incs, ex.Number, ex.HTMLURL)
+		changed, err := syncLocalIncidents(cfg, incs, ex.Number, ex.HTMLURL, humanLabels(ex, botLabels), true)
+		if err != nil {
+			return nil, false, err
+		}
 		act.Kind, act.IssueNumber, act.IssueURL = "noop", ex.Number, ex.HTMLURL
-		return act, nil
+		return act, changed, nil
 	}
 
-	act.Body, act.Labels = formatGroupBody(incs, key, cfg.SiteURL), groupLabels(incs)
+	hasOpen := slices.ContainsFunc(incs, func(i *incident) bool { return i.Status == incidentOpen })
+	if ex == nil && !hasOpen {
+		return nil, false, nil
+	}
+
+	act.Body, act.Labels = formatGroupBody(incs, key, cfg.SiteURL), botLabels
 	if err := errors.Join(checkNoCrossRefs(act.Title), checkNoCrossRefs(act.Body)); err != nil {
-		return nil, fmt.Errorf("issue %s: %w", key, err)
+		return nil, false, fmt.Errorf("issue %s: %w", key, err)
 	}
 	method, path := http.MethodPost, fmt.Sprintf("/repos/%s/issues", cfg.Repo)
 	if ex != nil {
 		act.IssueNumber, act.IssueURL = ex.Number, ex.HTMLURL
 		act.Labels = mergeLabels(ex, act.Labels)
 		if ex.Title == act.Title && strings.TrimSpace(ex.Body) == strings.TrimSpace(act.Body) && sameLabels(ex, act.Labels) {
-			propagateIssueRef(cfg.StoreDir, incs, ex.Number, ex.HTMLURL)
+			changed, err := syncLocalIncidents(cfg, incs, ex.Number, ex.HTMLURL, humanLabels(ex, botLabels), false)
+			if err != nil {
+				return nil, false, err
+			}
 			act.Kind, act.Body = "noop", ""
-			return act, nil
+			return act, changed, nil
 		}
 		act.Kind, method, path = "update", http.MethodPatch, fmt.Sprintf("/repos/%s/issues/%d", cfg.Repo, ex.Number)
 	} else {
@@ -631,28 +682,47 @@ func syncGroup(ctx context.Context, cli *ghClient, cfg issueSyncCfg, key string,
 	if !cfg.DryRun {
 		var res ghIssue
 		if err := cli.do(ctx, method, path, map[string]any{"title": act.Title, "body": act.Body, "labels": act.Labels}, &res); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		act.IssueNumber, act.IssueURL = res.Number, res.HTMLURL
-		propagateIssueRef(cfg.StoreDir, incs, res.Number, res.HTMLURL)
+		changed, err := syncLocalIncidents(cfg, incs, res.Number, res.HTMLURL, humanLabels(&res, botLabels), false)
+		if err != nil {
+			return nil, false, err
+		}
+		return act, changed, nil
 	}
-	return act, nil
+	return act, false, nil
 }
 
 func groupLabels(incs []*incident) []string {
-	conf := confNeedsReview
+	var valid []*incident
 	var plats []string
 	for _, inc := range incs {
-		if inc.Confidence == confConfirmed {
-			conf = confConfirmed
+		if inc == nil {
+			continue
 		}
+		valid = append(valid, inc)
 		for _, a := range inc.Affected {
 			if a.Platform != "" {
 				plats = append(plats, a.Platform)
 			}
 		}
 	}
-	return append([]string{conf}, sortedUnique(plats)...)
+	plats = sortedUnique(plats)
+	if len(valid) > 0 && pickPrimary(valid).isBuildFail() {
+		labels := []string{labelBuildFail}
+		if isICEExcerpt(pickPrimary(valid).ErrorExcerpt) {
+			labels = append(labels, labelCompilerICE)
+		}
+		return append(labels, plats...)
+	}
+	conf := confNeedsReview
+	for _, inc := range valid {
+		if inc.Confidence == confConfirmed {
+			conf = confConfirmed
+		}
+	}
+	return append([]string{conf}, plats...)
 }
 
 func formatGroupTitle(incs []*incident) string {
@@ -678,6 +748,21 @@ func formatGroupTitle(incs []*incident) string {
 		bad = cmp.Or(bad, hexSHA(inc.BadSHA))
 	}
 	subj := cmp.Or(plainTitlePart(pkgStr), plainTitlePart(primary.ID))
+	if primary.isBuildFail() {
+		tag, verb := "build", "failed to build"
+		if isICEExcerpt(primary.ErrorExcerpt) {
+			tag, verb = "ice", "compiler crash"
+		}
+		title := fmt.Sprintf("[%s] %s %s", tag, cmp.Or(subj, "unknown"), verb)
+		if bad != "" {
+			title += " on " + bad
+		}
+		title = cmp.Or(plainTitlePart(title), "[build] unknown failed to build")
+		if r := []rune(title); len(r) > 240 {
+			return string(r[:237]) + "..."
+		}
+		return title
+	}
 	if subj == "" && pass == "" && culprit == "" && bad == "" {
 		return "unknown miscompile"
 	}
@@ -717,13 +802,21 @@ func formatGroupBody(incs []*incident, key, siteURL string) string {
 		fmt.Fprintf(&b, "| %s | %s |\n", r[0], r[1])
 	}
 	b.WriteByte('\n')
-	if ir := clipCode(sanitizeCode(cleanIR(primary.ReducedIR)), 14000); ir != "" {
-		f := fenceFor(ir)
-		fmt.Fprintf(&b, "`%s`:\n\n%sllvm\n%s\n%s\n\n", optCommand(primary.CulpritPass), f, ir, f)
-	}
-	if diff := clipCode(sanitizeCode(strings.TrimSpace(primary.PassDiff)), 18000); diff != "" {
-		f := fenceFor(diff)
-		fmt.Fprintf(&b, "%sdiff\n%s\n%s\n\n", f, diff, f)
+	if primary.isBuildFail() {
+		rawErr := strings.ReplaceAll(strings.TrimSpace(primary.ErrorExcerpt), "\r\n", "\n")
+		if excerpt := clipCode(sanitizeCode(rawErr), 8000); excerpt != "" {
+			f := fenceFor(excerpt)
+			fmt.Fprintf(&b, "%s\n%s\n%s\n\n", f, excerpt, f)
+		}
+	} else {
+		if ir := clipCode(sanitizeCode(cleanIR(primary.ReducedIR)), 14000); ir != "" {
+			f := fenceFor(ir)
+			fmt.Fprintf(&b, "`%s`:\n\n%sllvm\n%s\n%s\n\n", optCommand(primary.CulpritPass), f, ir, f)
+		}
+		if diff := clipCode(sanitizeCode(strings.TrimSpace(primary.PassDiff)), 18000); diff != "" {
+			f := fenceFor(diff)
+			fmt.Fprintf(&b, "%sdiff\n%s\n%s\n\n", f, diff, f)
+		}
 	}
 	body := truncateBody(strings.TrimRight(b.String(), "\n")+"\n", maxIssueBodyBytes)
 	var ids []string
@@ -792,7 +885,11 @@ func mergedAffected(incs []*incident) []affected {
 func pickPrimary(incs []*incident) *incident {
 	best := incs[0]
 	for _, inc := range incs[1:] {
-		if (best.Confidence != confConfirmed && inc.Confidence == confConfirmed) || (best.ReducedIR == "" && inc.ReducedIR != "") || (best.PassDiff == "" && inc.PassDiff != "") {
+		if (best.Confidence != confConfirmed && inc.Confidence == confConfirmed) ||
+			(best.ReducedIR == "" && inc.ReducedIR != "") ||
+			(best.PassDiff == "" && inc.PassDiff != "") ||
+			(best.ErrorExcerpt == "" && inc.ErrorExcerpt != "") ||
+			(!isICEExcerpt(best.ErrorExcerpt) && isICEExcerpt(inc.ErrorExcerpt)) {
 			best = inc
 		}
 	}
@@ -811,20 +908,90 @@ func uniquePkgs(incs []*incident) []string {
 	return sortedUnique(pkgs)
 }
 
-func propagateIssueRef(storeDir string, incs []*incident, num int, url string) {
-	now := time.Now().UTC()
-	for _, inc := range incs {
-		if inc.IssueNumber == num && (url == "" || inc.IssueURL == url) {
+func isBotLabel(name string, botLabels []string) bool {
+	low := strings.ToLower(strings.TrimSpace(name))
+	switch low {
+	case confConfirmed, confNeedsReview, labelBuildFail, labelCompilerICE:
+		return true
+	}
+	if _, ok := platformSpecs[low]; ok {
+		return true
+	}
+	return slices.ContainsFunc(botLabels, func(b string) bool {
+		return strings.EqualFold(strings.TrimSpace(b), low)
+	})
+}
+
+func humanLabels(iss *ghIssue, botLabels []string) []string {
+	if iss == nil {
+		return nil
+	}
+	var out []string
+	for _, l := range iss.Labels {
+		name := sanitizeText(strings.TrimSpace(l.Name))
+		if name == "" || isBotLabel(name, botLabels) {
 			continue
 		}
-		inc.IssueNumber, inc.UpdatedAt = num, now
-		if url != "" {
-			inc.IssueURL = url
-		}
-		if storeDir != "" {
-			_, _ = saveIncident(storeDir, inc)
+		if !slices.ContainsFunc(out, func(s string) bool { return strings.EqualFold(s, name) }) {
+			out = append(out, name)
 		}
 	}
+	return sortedUnique(out)
+}
+
+func syncLocalIncidents(cfg issueSyncCfg, incs []*incident, num int, url string, labels []string, closed bool) (bool, error) {
+	if cfg.DryRun {
+		return false, nil
+	}
+	now := time.Now().UTC()
+	diskChanged := false
+	for _, inc := range incs {
+		if inc == nil {
+			continue
+		}
+		changed := false
+		if closed {
+			if inc.Status == incidentResolved {
+				continue
+			}
+			if inc.Status != incidentClosed {
+				inc.Status = incidentClosed
+				changed = true
+			}
+			if inc.ResolvedAt == nil {
+				ts := now
+				inc.ResolvedAt = &ts
+				changed = true
+			}
+		} else if inc.Status == incidentClosed {
+			inc.Status = incidentOpen
+			inc.ResolvedAt = nil
+			changed = true
+		}
+		if num > 0 && inc.IssueNumber != num {
+			inc.IssueNumber = num
+			changed = true
+		}
+		if url != "" && inc.IssueURL != url {
+			inc.IssueURL = url
+			changed = true
+		}
+		if inc.Status != incidentResolved && !slices.Equal(inc.Labels, labels) {
+			inc.Labels = slices.Clone(labels)
+			changed = true
+		}
+		if !changed {
+			continue
+		}
+		inc.UpdatedAt = now
+		if cfg.StoreDir != "" && inc.ID != "" {
+			if _, err := saveIncident(cfg.StoreDir, inc); err != nil {
+				return diskChanged, err
+			}
+			diskChanged = true
+		}
+	}
+	return diskChanged, nil
 }
 
 func mergeLabels(iss *ghIssue, desired []string) []string {

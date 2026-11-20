@@ -176,7 +176,7 @@ func buildIndexData(st *state, sweeps []*sweep, incs []*incident, catalog []corp
 			continue
 		}
 		rv := toIncidentRow(inc)
-		if inc.Status == incidentResolved {
+		if inc.Status != incidentOpen {
 			resolvedRows = append(resolvedRows, rv)
 			continue
 		}
@@ -208,7 +208,7 @@ func buildIndexData(st *state, sweeps []*sweep, incs []*incident, catalog []corp
 			case statusTestFail:
 				row.Cells = append(row.Cells, matrixCell{"fail", "fail", cmp.Or(res.IncidentID, openByTarget[ck])})
 			case statusBuildFail:
-				row.Cells = append(row.Cells, matrixCell{"err", "err", ""})
+				row.Cells = append(row.Cells, matrixCell{"err", "err", cmp.Or(res.IncidentID, openByTarget[ck])})
 			default:
 				row.Cells = append(row.Cells, matrixCell{"skip", "-", ""})
 			}
@@ -243,15 +243,19 @@ func buildIncidentData(st *state, sweeps []*sweep, inc *incident) any {
 	heading := cmp.Or(sanitizeText(strings.TrimSpace(inc.Title)), pkgs, inc.ID)
 	if pkgs != "" && pass != "" {
 		heading = pkgs + ": " + pass + pick(target != "", " in "+target, "")
+	} else if inc.isBuildFail() && strings.TrimSpace(inc.Title) == "" && pkgs != "" {
+		heading = pkgs + ": " + pick(isICEExcerpt(inc.ErrorExcerpt), "compiler ICE", "build failure")
 	}
+	errExcerpt := clipCode(sanitizeCode(strings.ReplaceAll(strings.TrimSpace(inc.ErrorExcerpt), "\r\n", "\n")), 8000)
 	return struct {
 		Nav             navHeader
 		ID, Heading     string
 		Rows            []kvRow
+		ErrorExcerpt    string
 		OptCmd          string
 		CleanedIR       string
 		HighlightedDiff template.HTML
-	}{nav, inc.ID, heading, rows, optCommand(inc.CulpritPass), cleanIR(inc.ReducedIR), highlightDiffHTML(strings.TrimSpace(inc.PassDiff))}
+	}{nav, inc.ID, heading, rows, errExcerpt, optCommand(inc.CulpritPass), cleanIR(inc.ReducedIR), highlightDiffHTML(strings.TrimSpace(inc.PassDiff))}
 }
 
 func toIncidentRow(inc *incident) incidentRowView {
@@ -271,11 +275,27 @@ func toIncidentRow(inc *incident) incidentRowView {
 	if !isSafeHTTPURL(issueURL) {
 		issueURL = ""
 	}
+	commit := displaySHA(inc.CulpritSHA)
+	pass := inc.CulpritPass
+	if inc.isBuildFail() {
+		commit = displaySHA(cmp.Or(inc.CulpritSHA, inc.BadSHA))
+		pass = pick(isICEExcerpt(inc.ErrorExcerpt), "build (ice)", "build")
+	}
+	fixed := displaySHA(inc.FixedSHA)
+	if inc.Status == incidentClosed {
+		var lbls []string
+		for _, l := range inc.Labels {
+			if s := sanitizeText(strings.TrimSpace(l)); s != "" {
+				lbls = append(lbls, s)
+			}
+		}
+		fixed = cmp.Or(strings.Join(lbls, ", "), "closed")
+	}
 	return incidentRowView{
 		ID:          inc.ID,
-		CulpritSHA:  dash(displaySHA(inc.CulpritSHA)),
-		FixedSHA:    dash(displaySHA(inc.FixedSHA)),
-		Pass:        dash(inc.CulpritPass),
+		CulpritSHA:  dash(commit),
+		FixedSHA:    dash(fixed),
+		Pass:        dash(pass),
 		Function:    dash(cmp.Or(strings.TrimSpace(inc.CulpritFunc), strings.TrimSpace(inc.CulpritTU))),
 		Targets:     dash(targets),
 		IssueNumber: inc.IssueNumber,
