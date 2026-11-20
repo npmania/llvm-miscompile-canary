@@ -205,10 +205,7 @@ func buildIndexData(st *state, sweeps []*sweep, incs []*incident, catalog []corp
 			resolvedRows = append(resolvedRows, rv)
 			if inc.Status == incidentClosed {
 				for _, a := range inc.Affected {
-					curGood := st.goodSHAFor(a.Package, a.Platform, a.Profile)
-					if inc.isBuildFail() {
-						curGood = st.targetGoodSHA(a.Package, a.Platform, a.Profile)
-					}
+					curGood := st.targetGoodSHA(a.Package, a.Platform, a.Profile)
 					if curGood != cmp.Or(a.GoodSHA, inc.GoodSHA) {
 						continue
 					}

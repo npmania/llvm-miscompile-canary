@@ -505,7 +505,6 @@ type regCandidate struct {
 
 func cmpRegCandidate(a, b regCandidate) int {
 	return cmp.Or(
-		cmp.Compare(boolRank(b.goodSHA != ""), boolRank(a.goodSHA != "")),
 		cmpDuration(a.res.DurationSec, b.res.DurationSec),
 		cmp.Compare(regPlatRank(a.res.Platform), regPlatRank(b.res.Platform)),
 		cmp.Compare(regProfRank(a.res.Profile), regProfRank(b.res.Profile)),
@@ -638,8 +637,8 @@ func cmdAggregate(args []string, stdout, stderr io.Writer) error {
 	for _, r := range results {
 		switch r.Status {
 		case statusTestFail:
-			goodSHA := st.goodSHAFor(r.Package, r.Platform, r.Profile)
-			if isCovered(r.Package, r.Platform, r.Profile, goodSHA) {
+			goodSHA := st.targetGoodSHA(r.Package, r.Platform, r.Profile)
+			if goodSHA == "" || isCovered(r.Package, r.Platform, r.Profile, goodSHA) {
 				continue
 			}
 			cand := regCandidate{res: r, goodSHA: goodSHA}

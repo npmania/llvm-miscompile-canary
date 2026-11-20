@@ -152,16 +152,6 @@ func (s *state) targetGoodSHA(pkg, plat, prof string) string {
 	return s.LastGoodByTarget[targetKey(pkg, plat, prof)]
 }
 
-func (s *state) goodSHAFor(pkg, plat, prof string) string {
-	if sha := s.targetGoodSHA(pkg, plat, prof); sha != "" {
-		return sha
-	}
-	if s == nil {
-		return ""
-	}
-	return s.LastGoodSHA
-}
-
 func (i *incident) mergeAffected(targets ...affected) bool {
 	changed := false
 	for _, t := range targets {

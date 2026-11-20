@@ -629,15 +629,23 @@ func TestAggregateAndStoreFixes(t *testing.T) {
 	if _, err := saveIncident(aggStore, openInc); err != nil {
 		t.Fatal(err)
 	}
+	aggGood := map[string]string{
+		targetKey("zstd", platLinuxX86, profDistroO2): "1111111111111111111111111111111111111111",
+	}
 	fragsDir := t.TempDir()
 	results := []pkgResult{
 		{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2, Status: statusTestFail, FailedTests: []string{"t1", "t2"}},
 	}
 	for i := range 80 {
+		pkg := fmt.Sprintf("pkg-%02d", i)
+		aggGood[targetKey(pkg, platLinuxX86, profDistroO2)] = "1111111111111111111111111111111111111111"
 		results = append(results, pkgResult{
-			Package: fmt.Sprintf("pkg-%02d", i), Platform: platLinuxX86, Profile: profDistroO2,
+			Package: pkg, Platform: platLinuxX86, Profile: profDistroO2,
 			Status: statusTestFail, FailedTests: []string{"first", "second", "third"},
 		})
+	}
+	if err := saveState(aggStore, &state{LastGoodByTarget: aggGood}); err != nil {
+		t.Fatal(err)
 	}
 	if err := writeResultFragment(filepath.Join(fragsDir, "all.json"), results); err != nil {
 		t.Fatal(err)
@@ -2151,10 +2159,6 @@ func TestAggregateRegressionSelection(t *testing.T) {
 	fragsDir := t.TempDir()
 	goodSHA := "1111111111111111111111111111111111111111"
 	badSHA := "2222222222222222222222222222222222222222"
-	if err := saveState(storeDir, &state{LastGoodSHA: goodSHA}); err != nil {
-		t.Fatal(err)
-	}
-
 	results := []pkgResult{
 		{Package: "p-fast", Platform: platLinuxRISCV64, Profile: profReleaseLTO, Status: statusTestFail, DurationSec: 25, FailedTests: []string{"t-rv"}},
 		{Package: "p-fast", Platform: platDarwinARM, Profile: profDistroO2, Status: statusTestFail, DurationSec: 12, FailedTests: []string{"t-mac"}},
@@ -2178,6 +2182,13 @@ func TestAggregateRegressionSelection(t *testing.T) {
 		{Package: "p-lex-b", Platform: platLinuxX86, Profile: profDistroO2, Status: statusTestFail, DurationSec: 20, FailedTests: []string{"t1"}},
 		{Package: "p-zero-mac", Platform: platDarwinARM, Profile: profDistroO2, Status: statusTestFail, DurationSec: 0, FailedTests: []string{"t1"}},
 		{Package: "p-zero-rv", Platform: platLinuxRISCV64, Profile: profDistroO2, Status: statusTestFail, DurationSec: -1, FailedTests: []string{"t1"}},
+	}
+	goodByTarget1 := make(map[string]string, len(results))
+	for _, r := range results {
+		goodByTarget1[targetKey(r.Package, r.Platform, r.Profile)] = goodSHA
+	}
+	if err := saveState(storeDir, &state{LastGoodByTarget: goodByTarget1}); err != nil {
+		t.Fatal(err)
 	}
 	if err := writeResultFragment(filepath.Join(fragsDir, "all.json"), results); err != nil {
 		t.Fatal(err)
@@ -2225,17 +2236,22 @@ func TestAggregateRegressionSelection(t *testing.T) {
 
 	frags2 := t.TempDir()
 	store2 := t.TempDir()
-	if err := saveState(store2, &state{LastGoodSHA: goodSHA}); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeResultFragment(filepath.Join(frags2, "zero.json"), []pkgResult{
+	zeroResults := []pkgResult{
 		{Package: "p-pos", Platform: platLinuxX86, Profile: profDistroO2, Status: statusTestFail, DurationSec: 0, FailedTests: []string{"t-zero"}},
 		{Package: "p-pos", Platform: platLinuxRISCV64, Profile: profReleaseLTO, Status: statusTestFail, DurationSec: 30, FailedTests: []string{"t-pos"}},
 		{Package: "p-zero-tie", Platform: platLinuxRISCV64, Profile: profDistroO2, Status: statusTestFail, DurationSec: 0, FailedTests: []string{"t-rv"}},
 		{Package: "p-zero-tie", Platform: platLinuxX86, Profile: profDistroO2, Status: statusTestFail, DurationSec: -1, FailedTests: []string{"t-x86"}},
 		{Package: "p-zero-rv", Platform: platLinuxRISCV64, Profile: profDistroO2, Status: statusTestFail, DurationSec: -1, FailedTests: []string{"t1"}},
 		{Package: "p-zero-mac", Platform: platDarwinARM, Profile: profDistroO2, Status: statusTestFail, DurationSec: 0, FailedTests: []string{"t1"}},
-	}); err != nil {
+	}
+	goodByTarget2 := make(map[string]string, len(zeroResults))
+	for _, r := range zeroResults {
+		goodByTarget2[targetKey(r.Package, r.Platform, r.Profile)] = goodSHA
+	}
+	if err := saveState(store2, &state{LastGoodByTarget: goodByTarget2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeResultFragment(filepath.Join(frags2, "zero.json"), zeroResults); err != nil {
 		t.Fatal(err)
 	}
 	regOut2 := filepath.Join(t.TempDir(), "regs2.json")
@@ -2271,6 +2287,7 @@ func TestAggregateRegressionSelection(t *testing.T) {
 	frags3 := t.TempDir()
 	store3 := t.TempDir()
 	if err := saveState(store3, &state{
+		LastGoodSHA: goodSHA,
 		LastGoodByTarget: map[string]string{
 			targetKey("p-shadow", platLinuxARM64, profDistroO2):     goodSHA,
 			targetKey("p-real-1", platLinuxRISCV64, profReleaseLTO): goodSHA,
@@ -2309,11 +2326,6 @@ func TestAggregateRegressionSelection(t *testing.T) {
 		{"p-shadow", platLinuxARM64, profDistroO2, "t-has-good", goodSHA},
 		{"p-real-2", platDarwinARM, profDistroO2, "t-r2", goodSHA},
 		{"p-real-1", platLinuxRISCV64, profReleaseLTO, "t-r1", goodSHA},
-		{"p-never-0", platLinuxX86, profDistroO2, "t-never", ""},
-		{"p-never-1", platLinuxX86, profDistroO2, "t-never", ""},
-		{"p-never-2", platLinuxX86, profDistroO2, "t-never", ""},
-		{"p-never-3", platLinuxX86, profDistroO2, "t-never", ""},
-		{"p-never-4", platLinuxX86, profDistroO2, "t-never", ""},
 	}
 	if len(regs3) != len(want3) {
 		t.Fatalf("len(regs3) = %d, want %d: %+v", len(regs3), len(want3), regs3)
