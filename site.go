@@ -344,15 +344,18 @@ func buildIncidentData(st *state, sweeps []*sweep, inc *incident) any {
 		heading = pkgs + ": " + pick(isICEExcerpt(inc.ErrorExcerpt), "compiler ICE", "build failure")
 	}
 	errExcerpt := clipCode(sanitizeCode(strings.ReplaceAll(strings.TrimSpace(inc.ErrorExcerpt), "\r\n", "\n")), 8000)
+	cleanedIR := inlineReducedIR(inc.ReducedIR)
+	irBundleURL := pick(!inc.isBuildFail() && cleanedIR == "" && isSafeHTTPURL(inc.BundleURL), strings.TrimSpace(inc.BundleURL), "")
 	return struct {
 		Nav             navHeader
 		ID, Heading     string
 		Rows            []kvRow
 		ErrorExcerpt    string
-		OptCmd          string
+		ReproCmd        string
 		CleanedIR       string
+		IRBundleURL     string
 		HighlightedDiff template.HTML
-	}{nav, inc.ID, heading, rows, errExcerpt, optCommand(inc.CulpritPass), cleanIR(inc.ReducedIR), highlightDiffHTML(strings.TrimSpace(inc.PassDiff))}
+	}{nav, inc.ID, heading, rows, errExcerpt, reproCommand(inc), cleanedIR, irBundleURL, highlightDiffHTML(strings.TrimSpace(inc.PassDiff))}
 }
 
 func toIncidentRow(inc *incident) incidentRowView {

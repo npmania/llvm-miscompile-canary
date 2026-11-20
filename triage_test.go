@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -494,7 +495,7 @@ func TestCommitBisect(t *testing.T) {
 	if sha != shas[6] || subj != "[GVN] Aggressive load coercion" {
 		t.Fatalf("got (%s, %q), want (%s, [GVN] Aggressive load coercion)", sha, subj, shas[6])
 	}
-	if out := runGit("worktree", "list"); strings.Contains(out, "llvm-wt") {
+	if out := runGit("worktree", "list"); strings.Contains(out, "llvm-project") {
 		t.Fatalf("worktree leaked:\n%s", out)
 	}
 }
@@ -589,6 +590,106 @@ func TestAliveTV(t *testing.T) {
 			}
 		})
 	}
+
+	mixedIR := filepath.Join(dir, "mixed.ll")
+	mixedBody := strings.Join([]string{
+		"declare void @llvm.dbg.value(metadata, metadata, metadata)",
+		"@g = global i32 0",
+		"define i32 @single(i32 %x) { ret i32 %x }",
+		"define i32 @multi(i32 %x) {",
+		"",
+		"  ; comment line",
+		"  #dbg_value(i32 %x, !1, !DIExpression(), !2)",
+		"  call void @llvm.dbg.value(metadata i32 %x, metadata !1, metadata !DIExpression())",
+		"  tail call void @llvm.dbg.declare(metadata ptr null, metadata !1, metadata !DIExpression())",
+		"entry:",
+		"  %y = add i32 %x, 1, !dbg !3",
+		"  ret i32 %y",
+		"}",
+		"!0 = distinct !DICompileUnit(language: DW_LANG_C99)",
+		"",
+	}, "\n")
+	if err := os.WriteFile(mixedIR, []byte(mixedBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if n := countIRBodyLines(mixedIR); n != 4 {
+		t.Fatalf("countIRBodyLines(mixed) = %d, want 4", n)
+	}
+
+	trickyIR := filepath.Join(dir, "tricky.ll")
+	trickyBody := strings.Join([]string{
+		"define { i32, i32 } @pair(i32 %x)",
+		"{",
+		"  %a = add i32 %x, 1",
+		"  %b = add i32 %a, 2",
+		"  ret { i32, i32 } zeroinitializer",
+		"}",
+		"define void @commented() { ; }",
+		"  ret void",
+		"}",
+		`define i32 @"a;b"() {`,
+		"  ret i32 0",
+		"} ; end",
+		"",
+	}, "\n")
+	if err := os.WriteFile(trickyIR, []byte(trickyBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if n := countIRBodyLines(trickyIR); n != 5 {
+		t.Fatalf("countIRBodyLines(tricky) = %d, want 5", n)
+	}
+	if !smallerReducedPair(mixedIR, mixedIR, "", "") {
+		t.Fatal("smallerReducedPair with empty orig paths = false, want true")
+	}
+	if !smallerReducedPair(mixedIR, mixedIR, trickyIR, trickyIR) {
+		t.Fatal("smallerReducedPair(4 < 5) = false, want true")
+	}
+	if smallerReducedPair(trickyIR, trickyIR, mixedIR, mixedIR) {
+		t.Fatal("smallerReducedPair(5 < 4) = true, want false")
+	}
+	if smallerReducedPair(mixedIR, mixedIR, mixedIR, mixedIR) {
+		t.Fatal("smallerReducedPair(4 < 4) = true, want false")
+	}
+
+	var metaHeavy strings.Builder
+	metaHeavy.WriteString("declare void @ext()\ndefine i32 @small(i32 %x) {\nentry:\n")
+	for i := range 700 {
+		fmt.Fprintf(&metaHeavy, "  #dbg_value(i32 %%x, !%d, !DIExpression(), !%d)\n", i, i)
+	}
+	metaHeavy.WriteString("  %y = add i32 %x, 1\n  ret i32 %y\n}\n")
+	for i := range 700 {
+		fmt.Fprintf(&metaHeavy, "!%d = !{}\n", i)
+	}
+	metaHeavyIR := filepath.Join(dir, "meta_heavy.ll")
+	if err := os.WriteFile(metaHeavyIR, []byte(metaHeavy.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if n := countIRBodyLines(metaHeavyIR); n != 3 {
+		t.Fatalf("countIRBodyLines(metaHeavy) = %d, want 3", n)
+	}
+	if r := runAliveTV(ctx, "", metaHeavyIR, aIR, 5*time.Second); r.Status != formalUnavailable {
+		t.Fatalf("meta-heavy IR with empty bin = %+v, want unavailable", r)
+	}
+
+	var bigBuf strings.Builder
+	bigBuf.WriteString("define i32 @big(i32 %x) {\n")
+	for i := range maxAliveTVIRBodyLines {
+		fmt.Fprintf(&bigBuf, "  %%v%d = add i32 %%x, %d\n", i, i)
+	}
+	bigBuf.WriteString("  ret i32 %x\n}\n")
+	bigIR := filepath.Join(dir, "big.ll")
+	if err := os.WriteFile(bigIR, []byte(bigBuf.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if n := countIRBodyLines(bigIR); n != maxAliveTVIRBodyLines+1 {
+		t.Fatalf("countIRBodyLines(big) = %d, want %d", n, maxAliveTVIRBodyLines+1)
+	}
+	if r := runAliveTV(ctx, "", bigIR, aIR, 5*time.Second); r.Status != formalUnsupported || r.ProvesBug || !strings.Contains(r.Output, "cutoff") {
+		t.Fatalf("oversized IR with empty bin = %+v, want unsupported cutoff", r)
+	}
+	if r := runAliveTV(ctx, writeMock("big-ok", "echo \"Transformation seems to be correct!\""), bigIR, aIR, 5*time.Second); r.Status != formalUnsupported || r.ProvesBug {
+		t.Fatalf("oversized IR with mock bin = %+v, want unsupported cutoff", r)
+	}
 }
 
 func TestLLUBI(t *testing.T) {
@@ -632,6 +733,15 @@ if grep -q "ret i32 0" "$last"; then exit 0; fi
 exit 1`)
 	if r := runLLUBI(ctx, mSc, "", "", bSc, aSc, "scalar_fn", 5*time.Second); r.Status != llubiMismatch || !r.ProvesBug {
 		t.Fatalf("scalar mismatch: got %+v", r)
+	}
+
+	bEq, aEq := filepath.Join(dir, "b_eq.ll"), filepath.Join(dir, "a_eq.ll")
+	_ = os.WriteFile(bEq, []byte("define i32 @eq_fn(ptr %p) {\n  ret i32 0\n}\n"), 0o644)
+	_ = os.WriteFile(aEq, []byte("define i32 @eq_fn(ptr %p) {\n  ret i32 0\n}\n"), 0o644)
+	mEqNull := writeMock("llubi-eq-null", `echo "warning: passing null values for all arguments" >&2
+exit 0`)
+	if r := runLLUBI(ctx, mEqNull, "", "", bEq, aEq, "eq_fn", 5*time.Second); r.Status != formalUnsupported || r.ProvesBug || strings.Contains(r.Output, "before_exit=") {
+		t.Fatalf("null-arg equivalent: got %+v", r)
 	}
 
 	for _, msg := range []string{
@@ -722,6 +832,134 @@ exec %s "$@"
 	if !evalReduceCheck(context.Background(), rsGoodBad, goodIR) {
 		t.Fatal("expected GoodTC vs BadTC reduce-check to succeed")
 	}
+
+	selfExe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recDir := filepath.Join(tmp, "rec")
+	if err := os.MkdirAll(recDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(recDir, "test_one.sh"), []byte("#!/bin/sh\nexec "+shQuote(appBin)+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rec := &recipe{Name: "redpkg", Dir: recDir}
+	badWS := &workspace{BuildDir: tmp, Env: os.Environ(), Spec: spec}
+	mockReduce := filepath.Join(tmp, "mock-reduce")
+	reduceScript := `#!/bin/sh
+set -eu
+out=""
+in=""
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "-o" ]; then
+    out="$a"
+  else
+    case "$a" in *.ll) in="$a" ;; esac
+  fi
+  prev="$a"
+done
+cp "$in" "$out"
+`
+	if err := os.WriteFile(mockReduce, []byte(reduceScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mockOpt := filepath.Join(tmp, "mock-opt")
+	optScript := `#!/bin/sh
+set -eu
+out=""
+in=""
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "-o" ]; then
+    out="$a"
+  else
+    case "$a" in *.ll) in="$a" ;; esac
+  fi
+  prev="$a"
+done
+sed 's/ret i32 0/ret i32 1/' "$in" > "$out"
+`
+	if err := os.WriteFile(mockOpt, []byte(optScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	redTC := *tc
+	redTC.Clang = mockClang
+	redTC.LLVMReduce = mockReduce
+	redTC.Opt = mockOpt
+	redTC.LLVMExtract = ""
+
+	fullIR := filepath.Join(tmp, "full.ll")
+	fullBody := "define i32 @helper(i32 %x) {\n  %a = add i32 %x, 1\n  %b = add i32 %a, 2\n  %c = add i32 %b, 3\n  ret i32 %c\n}\ndefine i32 @main() {\n  ret i32 0\n}\n"
+	if err := os.WriteFile(fullIR, []byte(fullBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	smallBefore := filepath.Join(tmp, "small_before.ll")
+	smallAfter := filepath.Join(tmp, "small_after.ll")
+	_ = os.WriteFile(smallBefore, []byte("define i32 @main() {\n  ret i32 0\n}\n"), 0o644)
+	_ = os.WriteFile(smallAfter, []byte("define i32 @main() {\n  ret i32 1\n}\n"), 0o644)
+
+	scratchBig := filepath.Join(tmp, "scratch-big")
+	if err := os.MkdirAll(scratchBig, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(scratchBig, "reduced_before.ll"), []byte("stale"), 0o644)
+	_ = os.WriteFile(filepath.Join(scratchBig, "reduced_after.ll"), []byte("stale"), 0o644)
+	makeRelink := func(c string) (reduceRelink, error) {
+		args := slices.Clone(linkArgs)
+		for i, a := range args {
+			if a == candObj {
+				args[i] = c
+			}
+		}
+		return reduceRelink{LinkDriver: tc.Clang, LinkDir: tmp, LinkArgs: args, CandObj: c}, nil
+	}
+	objRes := &objectBisectResult{buildRelink: makeRelink}
+	resBig, err := runLLVMReduce(context.Background(), triageOpts{
+		Runner: &runner{LMCBin: selfExe}, Recipe: rec, Spec: spec, Profile: profDistroO2, GoodTC: tc, BadTC: &redTC,
+	}, badWS, "t1", objRes, &passBisectResult{
+		CulpritPass: "instcombine", BeforeFullIRPath: fullIR, BeforeIRPath: smallBefore, AfterIRPath: smallAfter,
+	}, scratchBig)
+	if err != nil {
+		t.Fatalf("runLLVMReduce(larger): %v", err)
+	}
+	if resBig.ReducedBeforePath != "" || resBig.ReducedAfterPath != "" {
+		t.Fatalf("larger reduced pair shadowed smaller before.ll: %+v", resBig)
+	}
+	if fileExists(filepath.Join(scratchBig, "reduced_before.ll")) || fileExists(filepath.Join(scratchBig, "reduced_after.ll")) {
+		t.Fatal("stale or larger reduced_before.ll/reduced_after.ll left on disk")
+	}
+
+	largeBefore := filepath.Join(tmp, "large_before.ll")
+	largeAfter := filepath.Join(tmp, "large_after.ll")
+	_ = os.WriteFile(largeBefore, []byte(fullBody), 0o644)
+	_ = os.WriteFile(largeAfter, []byte(strings.ReplaceAll(fullBody, "ret i32 0", "ret i32 1")), 0o644)
+	scratchSmall := filepath.Join(tmp, "scratch-small")
+	resSmall, err := runLLVMReduce(context.Background(), triageOpts{
+		Runner: &runner{LMCBin: selfExe}, Recipe: rec, Spec: spec, Profile: profDistroO2, GoodTC: tc, BadTC: &redTC,
+	}, badWS, "t1", objRes, &passBisectResult{
+		CulpritPass: "instcombine", BeforeFullIRPath: goodIR, BeforeIRPath: largeBefore, AfterIRPath: largeAfter,
+	}, scratchSmall)
+	if err != nil {
+		t.Fatalf("runLLVMReduce(smaller): %v", err)
+	}
+	if !fileNonEmpty(resSmall.ReducedBeforePath) || !fileNonEmpty(resSmall.ReducedAfterPath) {
+		t.Fatalf("expected verified smaller reduced pair, got %+v", resSmall)
+	}
+
+	noRedTC := redTC
+	noRedTC.LLVMReduce = ""
+	if _, err := runLLVMReduce(context.Background(), triageOpts{
+		Runner: &runner{LMCBin: selfExe}, Recipe: rec, Spec: spec, Profile: profDistroO2, GoodTC: tc, BadTC: &noRedTC,
+	}, badWS, "t1", objRes, &passBisectResult{
+		CulpritPass: "instcombine", BeforeFullIRPath: goodIR, BeforeIRPath: largeBefore, AfterIRPath: largeAfter,
+	}, scratchSmall); err != nil {
+		t.Fatalf("runLLVMReduce(fallback): %v", err)
+	}
+	if fileExists(filepath.Join(scratchSmall, "reduced_before.ll")) || fileExists(filepath.Join(scratchSmall, "reduced_after.ll")) {
+		t.Fatal("fallback left stale reduced_before.ll/reduced_after.ll on disk")
+	}
 }
 
 func TestTriageHelpers(t *testing.T) {
@@ -769,6 +1007,77 @@ func TestTriageHelpers(t *testing.T) {
 	}
 	if ar, mem := parseResolutionArchive("/tmp/m0000_main.o"); ar != "" || mem != "" {
 		t.Fatalf("direct obj parseResolutionArchive = (%q, %q)", ar, mem)
+	}
+
+	rvSpec, err := lookupPlatform(platLinuxRISCV64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	x86Spec, err := lookupPlatform(platLinuxX86)
+	if err != nil {
+		t.Fatal(err)
+	}
+	armSpec, err := lookupPlatform(platDarwinARM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := bisectLLVMTargets(rvSpec, "linux", "amd64"); got != "X86;RISCV" {
+		t.Fatalf("bisectLLVMTargets(rv64, linux/amd64) = %q, want X86;RISCV", got)
+	}
+	if got := bisectLLVMTargets(rvSpec, "linux", "arm64"); got != "RISCV" {
+		t.Fatalf("bisectLLVMTargets(rv64, linux/arm64) = %q, want RISCV", got)
+	}
+	if got := bisectLLVMTargets(x86Spec, "linux", "amd64"); got != "X86" {
+		t.Fatalf("bisectLLVMTargets(x86, linux/amd64) = %q, want X86", got)
+	}
+	if got := bisectLLVMTargets(armSpec, "darwin", "arm64"); got != "AArch64" {
+		t.Fatalf("bisectLLVMTargets(darwin-arm64) = %q, want AArch64", got)
+	}
+
+	candPath := filepath.Join(tmp, "cand.o")
+	restPath := filepath.Join(tmp, "lmc_reduce_rest.o")
+
+	rrAr := reduceRelink{ArOut: filepath.Join(tmp, "lib.a"), ArMembers: []string{"a.o", candPath}, CandObj: candPath}
+	gotAr, ok := appendExtraReduceObj(rrAr, restPath, tmp)
+	if !ok || !slices.Equal(gotAr.ArMembers, []string{"a.o", candPath, restPath}) || len(rrAr.ArMembers) != 2 {
+		t.Fatalf("appendExtraReduceObj(ArMembers) = (%+v, %v), orig=%v", gotAr, ok, rrAr.ArMembers)
+	}
+
+	rrDirect := reduceRelink{LinkDir: tmp, CandObj: candPath, LinkArgs: []string{"a.o", candPath, "b.o", "-o", "app"}}
+	gotDirect, ok := appendExtraReduceObj(rrDirect, restPath, tmp)
+	if !ok || !slices.Equal(gotDirect.LinkArgs, []string{"a.o", candPath, restPath, "b.o", "-o", "app"}) || len(rrDirect.LinkArgs) != 5 {
+		t.Fatalf("appendExtraReduceObj(LinkArgs) = (%+v, %v), orig=%v", gotDirect, ok, rrDirect.LinkArgs)
+	}
+
+	origFL := filepath.Join(tmp, "objs.filelist")
+	if err := os.WriteFile(origFL, []byte("a.o\n"+candPath+"\nb.o\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	flScratch1 := filepath.Join(tmp, "fl1")
+	if err := os.MkdirAll(flScratch1, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rrFL := reduceRelink{LinkDir: tmp, CandObj: candPath, LinkArgs: []string{"-filelist", origFL, "-o", "app"}}
+	gotFL, ok := appendExtraReduceObj(rrFL, restPath, flScratch1)
+	if !ok || gotFL.LinkArgs[1] != filepath.Join(flScratch1, "filelist_reduce_split.txt") || rrFL.LinkArgs[1] != origFL {
+		t.Fatalf("appendExtraReduceObj(-filelist) = (%+v, %v)", gotFL, ok)
+	}
+	if raw, err := os.ReadFile(gotFL.LinkArgs[1]); err != nil || string(raw) != "a.o\n"+candPath+"\n"+restPath+"\nb.o\n" {
+		t.Fatalf("split filelist content = %q (%v)", string(raw), err)
+	}
+
+	flScratch2 := filepath.Join(tmp, "fl2")
+	if err := os.MkdirAll(flScratch2, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rrWlFL := reduceRelink{LinkDir: tmp, CandObj: candPath, LinkArgs: []string{"-Wl,-filelist," + origFL, "-o", "app"}}
+	gotWlFL, ok := appendExtraReduceObj(rrWlFL, restPath, flScratch2)
+	wantWlArg := "-Wl,-filelist," + filepath.Join(flScratch2, "filelist_reduce_split.txt")
+	if !ok || gotWlFL.LinkArgs[0] != wantWlArg {
+		t.Fatalf("appendExtraReduceObj(-Wl,-filelist) = (%+v, %v), want %q", gotWlFL, ok, wantWlArg)
+	}
+	if raw, err := os.ReadFile(filepath.Join(flScratch2, "filelist_reduce_split.txt")); err != nil || string(raw) != "a.o\n"+candPath+"\n"+restPath+"\nb.o\n" {
+		t.Fatalf("split -Wl,-filelist content = %q (%v)", string(raw), err)
 	}
 }
 
@@ -859,32 +1168,135 @@ func TestTriageDrops(t *testing.T) {
 		rec := makeTestRecipe(t, filepath.Join(tmp, "corpus"), "ubpkg", tarPath, makeTarGz(t, tarPath, ubFiles))
 		r := &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2}
 
-		writeWrap := func(name, sanBody string) *toolchain {
+		writeBadO2 := func(name string) *toolchain {
 			p := filepath.Join(tmp, name)
-			body := fmt.Sprintf("#!/bin/sh\nfor a in \"$@\"; do\n  case \"$a\" in\n    -fsanitize=*) %s ;;\n    -O2) exec %s -DBAD_MISCOMPILE=1 \"$@\" ;;\n  esac\ndone\nexec %s \"$@\"\n",
-				sanBody, shQuote(goodTC.Clang), shQuote(goodTC.Clang))
+			body := fmt.Sprintf("#!/bin/sh\nfor a in \"$@\"; do\n  if [ \"$a\" = \"-O2\" ]; then exec %s -DBAD_MISCOMPILE=1 \"$@\"; fi\ndone\nexec %s \"$@\"\n",
+				shQuote(goodTC.Clang), shQuote(goodTC.Clang))
 			_ = os.WriteFile(p, []byte(body), 0o755)
 			tc := *goodTC
 			tc.Clang = p
 			return &tc
 		}
+		writeGoodSan := func(name, sanBody string) *toolchain {
+			p := filepath.Join(tmp, name)
+			body := fmt.Sprintf("#!/bin/sh\nfor a in \"$@\"; do\n  case \"$a\" in\n    -fsanitize=*) %s ;;\n  esac\ndone\nexec %s \"$@\"\n",
+				sanBody, shQuote(goodTC.Clang))
+			_ = os.WriteFile(p, []byte(body), 0o755)
+			tc := *goodTC
+			tc.Clang = p
+			return &tc
+		}
+		badO2TC := writeBadO2("bad-o2")
 
 		res, err := triage(context.Background(), triageOpts{
-			Runner: r, Recipe: rec, Spec: spec, Profile: profDistroO2, GoodTC: goodTC,
-			BadTC:   writeWrap("no-rt", `echo "ld.lld: error: cannot open libclang_rt.asan.a: No such file or directory" >&2; exit 1`),
-			GoodSHA: "111111111111", BadSHA: "222222222222", TestID: "check_calc", WorkDir: filepath.Join(tmp, "w1"),
+			Runner:  r,
+			Recipe:  rec,
+			Spec:    spec,
+			Profile: profDistroO2,
+			GoodTC:  writeGoodSan("no-rt", `echo "ld.lld: error: cannot open libclang_rt.asan.a: No such file or directory" >&2; exit 1`),
+			BadTC:   badO2TC,
+			GoodSHA: "111111111111",
+			BadSHA:  "222222222222",
+			TestID:  "check_calc",
+			WorkDir: filepath.Join(tmp, "w1"),
 		})
 		if err != nil || !res.Dropped || res.DropReason != "upstream_ub" {
 			t.Fatalf("missing clang_rt fallback: res=%+v err=%v", res, err)
 		}
 
 		_, err = triage(context.Background(), triageOpts{
-			Runner: r, Recipe: rec, Spec: spec, Profile: profDistroO2, GoodTC: goodTC,
-			BadTC:   writeWrap("broken-san", `echo "error: unrelated compiler flag error" >&2; exit 1`),
-			GoodSHA: "111111111111", BadSHA: "222222222222", TestID: "check_calc", WorkDir: filepath.Join(tmp, "w2"),
+			Runner:  r,
+			Recipe:  rec,
+			Spec:    spec,
+			Profile: profDistroO2,
+			GoodTC:  writeGoodSan("broken-san", `echo "error: unrelated compiler flag error" >&2; exit 1`),
+			BadTC:   badO2TC,
+			GoodSHA: "111111111111",
+			BadSHA:  "222222222222",
+			TestID:  "check_calc",
+			WorkDir: filepath.Join(tmp, "w2"),
 		})
 		if err == nil || !strings.Contains(err.Error(), "without sanitizer trap") {
 			t.Fatalf("expected non-sanitizer build error, got %v", err)
+		}
+	})
+
+	cleanFiles := map[string]string{
+		"a.c": "int fa(int x) { return x; }\n",
+		"b.c": "int fb(int x) { return x; }\n",
+		"culprit.c": `int calc(int x) {
+#if defined(BAD_MISCOMPILE) || defined(FAIL_IN_SAN)
+    return x + 99;
+#else
+    return x + 1;
+#endif
+}
+`,
+		"main.c": "extern int calc(int); int main(void) { return calc(5) == 6 ? 0 : 1; }\n",
+	}
+
+	t.Run("bad-tc-asan-segv-not-dropped", func(t *testing.T) {
+		tmp := t.TempDir()
+		tarPath := filepath.Join(tmp, "clean.tar.gz")
+		rec := makeTestRecipe(t, filepath.Join(tmp, "corpus"), "cleansegv", tarPath, makeTarGz(t, tarPath, cleanFiles))
+		r := &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2}
+
+		badPath := filepath.Join(tmp, "bad-asan-segv")
+		badBody := fmt.Sprintf("#!/bin/sh\nfor a in \"$@\"; do\n  case \"$a\" in\n    -fsanitize=*|-O1) echo \"AddressSanitizer: SEGV on unknown address 0x0\" >&2; exit 1 ;;\n    -O2) exec %s -DBAD_MISCOMPILE=1 \"$@\" ;;\n  esac\ndone\nexec %s \"$@\"\n",
+			shQuote(goodTC.Clang), shQuote(goodTC.Clang))
+		if err := os.WriteFile(badPath, []byte(badBody), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		badTC := *goodTC
+		badTC.Clang = badPath
+		badTC.AliveTV, badTC.LLUBI, badTC.LLVMReduce = "", "", ""
+
+		res, err := triage(context.Background(), triageOpts{
+			Runner: r, Recipe: rec, Spec: spec, Profile: profDistroO2, GoodTC: goodTC, BadTC: &badTC,
+			GoodSHA: "111111111111", BadSHA: "222222222222", TestID: "check_calc", WorkDir: filepath.Join(tmp, "w"),
+		})
+		if err != nil || res.Dropped || res.Incident == nil {
+			t.Fatalf("bad-tc asan segv falsely dropped or errored: res=%+v err=%v", res, err)
+		}
+		if !res.Incident.ASanUBSanClean || res.Incident.Confidence != confLikely {
+			t.Fatalf("expected asan clean + likely, got %+v", res.Incident)
+		}
+	})
+
+	t.Run("san-test-non-sanitizer-fail", func(t *testing.T) {
+		tmp := t.TempDir()
+		tarPath := filepath.Join(tmp, "clean.tar.gz")
+		rec := makeTestRecipe(t, filepath.Join(tmp, "corpus"), "sanfail", tarPath, makeTarGz(t, tarPath, cleanFiles))
+		r := &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2}
+
+		goodPath := filepath.Join(tmp, "good-san-fail")
+		goodBody := fmt.Sprintf("#!/bin/sh\nfor a in \"$@\"; do\n  case \"$a\" in\n    -fsanitize=*) exec %s -DFAIL_IN_SAN=1 \"$@\" ;;\n  esac\ndone\nexec %s \"$@\"\n",
+			shQuote(goodTC.Clang), shQuote(goodTC.Clang))
+		if err := os.WriteFile(goodPath, []byte(goodBody), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		gTC := *goodTC
+		gTC.Clang = goodPath
+
+		badPath := filepath.Join(tmp, "bad-o2")
+		badBody := fmt.Sprintf("#!/bin/sh\nfor a in \"$@\"; do\n  if [ \"$a\" = \"-O2\" ]; then exec %s -DBAD_MISCOMPILE=1 \"$@\"; fi\ndone\nexec %s \"$@\"\n",
+			shQuote(goodTC.Clang), shQuote(goodTC.Clang))
+		if err := os.WriteFile(badPath, []byte(badBody), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		badTC := *goodTC
+		badTC.Clang = badPath
+		badTC.AliveTV, badTC.LLUBI, badTC.LLVMReduce = "", "", ""
+
+		res, err := triage(context.Background(), triageOpts{
+			Runner: r, Recipe: rec, Spec: spec, Profile: profDistroO2, GoodTC: &gTC, BadTC: &badTC,
+			GoodSHA: "111111111111", BadSHA: "222222222222", TestID: "check_calc", WorkDir: filepath.Join(tmp, "w"),
+		})
+		if err != nil || res.Dropped || res.Incident == nil {
+			t.Fatalf("non-sanitizer test fail dropped or errored: res=%+v err=%v", res, err)
+		}
+		if res.Incident.ASanUBSanClean || res.Incident.Confidence != confNeedsReview {
+			t.Fatalf("expected ASanUBSanClean=false and needs-review, got %+v", res.Incident)
 		}
 	})
 }
@@ -1025,8 +1437,12 @@ exec %s "$@"
 		t.Fatalf("triage: res=%+v err=%v", res, err)
 	}
 	inc := res.Incident
-	if inc.Confidence != confConfirmed || !inc.ASanUBSanClean || !inc.ConservativeFlagIndependent {
-		t.Fatalf("unexpected confidence/ub flags: %+v", inc)
+	wantConf := confLikely
+	if inc.AliveTVStatus == aliveMiscompile || inc.LLUBIStatus == llubiMismatch {
+		wantConf = confConfirmed
+	}
+	if inc.Confidence != wantConf || !inc.ASanUBSanClean || !inc.ConservativeFlagIndependent || inc.DiagO0Status != "pass" {
+		t.Fatalf("unexpected confidence/ub flags: %+v (want conf=%q)", inc, wantConf)
 	}
 	if inc.CulpritTU != "culprit.c" || inc.CulpritPassIndex != bugPass || inc.CulpritSHA != commits[3] {
 		t.Fatalf("culprit mismatch: tu=%q pass=%d sha=%s", inc.CulpritTU, inc.CulpritPassIndex, inc.CulpritSHA)

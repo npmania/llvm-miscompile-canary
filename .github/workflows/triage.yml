@@ -39,6 +39,10 @@ permissions:
 env:
   GH_REPO: ${{ github.repository }}
 
+concurrency:
+  group: miscompile-triage
+  cancel-in-progress: false
+
 jobs:
   prepare:
     name: Build Triage Matrix
@@ -84,6 +88,7 @@ jobs:
           enriched="$(printf '%s' "${raw}" | jq -c --arg bad "${BAD_SHA}" '
             map(select((.good_sha // "") != "") | . + {
               bad_sha: (.bad_sha // $bad),
+              bad_sha12: ((.bad_sha // $bad)[0:12]),
               test_id: ((.failed_tests // [])[0] // ""),
               runner: (
                 if .platform == "linux-x86_64" or .platform == "linux-riscv64" then "ubuntu-24.04"
@@ -116,6 +121,7 @@ jobs:
     timeout-minutes: 240
     strategy:
       fail-fast: false
+      max-parallel: 4
       matrix: ${{ fromJson(needs.prepare.outputs.matrix_json) }}
     env:
       GOTOOLCHAIN: auto
@@ -203,8 +209,9 @@ jobs:
           path: ${{ runner.temp }}/ccache
           key: ccache-bisect-${{ matrix.platform }}-${{ matrix.bad_sha }}
           restore-keys: |
-            ccache-bisect-${{ matrix.platform }}-
+            ccache-toolchain-${{ matrix.tc_platform }}-${{ matrix.bad_sha12 }}
             ccache-toolchain-${{ matrix.tc_platform }}-
+            ccache-bisect-${{ matrix.platform }}-
 
       - name: Fetch llvm-project history
         env:
@@ -252,7 +259,25 @@ jobs:
             -out out/incident.json \
             "${extra_args[@]}"
 
-          find "${RUNNER_TEMP}/triage-work" -maxdepth 4 \( -name 'before.ll' -o -name 'after.ll' \) -exec cp {} out/ir/ \; 2>/dev/null || true
+          alive_status=""
+          if [ -f out/incident.json ]; then
+            alive_status="$(jq -r '.alive_tv_status // ""' out/incident.json)"
+          fi
+          if [ -f out/incident.json ] && { [ -z "${alive_status}" ] || [ "${alive_status}" = "unavailable" ]; }; then
+            rb="$(find "${RUNNER_TEMP}/triage-work" -maxdepth 4 -name 'reduced_before.ll' -print -quit 2>/dev/null || true)"
+            ra="$(find "${RUNNER_TEMP}/triage-work" -maxdepth 4 -name 'reduced_after.ll' -print -quit 2>/dev/null || true)"
+            if [ -s "${rb}" ] && [ -s "${ra}" ]; then
+              cp "${rb}" out/ir/before.ll
+              cp "${ra}" out/ir/after.ll
+            else
+              b="$(find "${RUNNER_TEMP}/triage-work" -maxdepth 4 -name 'before.ll' -print -quit 2>/dev/null || true)"
+              a="$(find "${RUNNER_TEMP}/triage-work" -maxdepth 4 -name 'after.ll' -print -quit 2>/dev/null || true)"
+              if [ -s "${b}" ] && [ -s "${a}" ]; then
+                cp "${b}" out/ir/before.ll
+                cp "${a}" out/ir/after.ll
+              fi
+            fi
+          fi
 
       - name: Upload triage output artifact
         if: always()

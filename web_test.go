@@ -290,7 +290,7 @@ func TestIssueSync(t *testing.T) {
 	if iss.Title != "[InstCombinePass] sqlite, zstd miscompiled at 0212d77fa269" {
 		t.Errorf("title = %q", iss.Title)
 	}
-	for _, want := range []string{"| | |\n| --- | --- |\n", "`11` (before) -> `2` (after)", "`opt -passes=InstCombinePass -S`:", "<!-- lmc-dedup-key: culprit:0212d77fa269 -->"} {
+	for _, want := range []string{"| | |\n| --- | --- |\n", "`11` (before) -> `2` (after)", "`opt -O2 -S`:", "<!-- lmc-dedup-key: culprit:0212d77fa269 -->"} {
 		if !strings.Contains(iss.Body, want) {
 			t.Errorf("body missing %q", want)
 		}
@@ -455,7 +455,7 @@ func TestSiteGenerate(t *testing.T) {
 		t.Errorf("index.html cross-ref: %v", err)
 	}
 	incPage := html.UnescapeString(read(filepath.Join("incidents", "inc-open-1", "index.html")))
-	for _, w := range []string{"<h1>zstd: InstCombinePass in ZSTD_compressBlock</h1>", "-opt-bisect-limit=77", "<code>11</code> (before) -> <code>2</code> (after)", "opt -passes=InstCombinePass -S", "define i32 @ZSTD_compressBlock(i32 %a) {"} {
+	for _, w := range []string{"<h1>zstd: InstCombinePass in ZSTD_compressBlock</h1>", "-opt-bisect-limit=77", "<code>11</code> (before) -> <code>2</code> (after)", "opt -O2 -S", "define i32 @ZSTD_compressBlock(i32 %a) {"} {
 		if !strings.Contains(incPage, w) {
 			t.Errorf("incident page missing %q", w)
 		}
@@ -654,8 +654,8 @@ func TestAggregateAndStoreFixes(t *testing.T) {
 	if err := readJSON(regOut, &regs); err != nil {
 		t.Fatal(err)
 	}
-	if len(regs) != 64 {
-		t.Fatalf("len(regs) = %d, want 64", len(regs))
+	if len(regs) != 8 {
+		t.Fatalf("len(regs) = %d, want 8", len(regs))
 	}
 	for _, r := range regs {
 		if r.Package == "zstd" {
@@ -729,9 +729,9 @@ func TestAggregateAndStoreFixes(t *testing.T) {
 func TestWorkflowsAndInitScript(t *testing.T) {
 	checks := map[string][]string{
 		"ci.yml":        {"go build -o lmc .", "validate-corpus -corpus corpus -require 42"},
-		"toolchain.yml": {"'53 3,9,15,21 * * *'", "fail-fast: false", "--target master", "| zstd ", "GH_REPO: ${{ github.repository }}", "git ls-remote --exit-code --heads", `select(.status == "open")`, "grep -Fxq", "--limit 500"},
+		"toolchain.yml": {"'53 3,9,15,21 * * *'", "fail-fast: false", "--target master", "| zstd ", "GH_REPO: ${{ github.repository }}", "git ls-remote --exit-code --heads", `select(.status == "open")`, "grep -Fxq", "--limit 500", "CCACHE_BASEDIR: ${{ github.workspace }}"},
 		"sweep.yml":     {"corpus-matrix -corpus corpus -include -shards 12", "fail-fast: false", "zstd -dc", "| tar -xf -", "GH_REPO: ${{ github.repository }}", "if: always() && !cancelled()", "LLVM_SUBJ: ${{ steps.meta.outputs.subject }}", "./lmc site -store _data -out _site -corpus corpus", `case ",${PKGS}," in`, "contains(format(',{0},', matrix.packages), ',dav1d,')", "corpus-src-v2-${{ matrix.src_hash }}", "fragments/shard-${PLAT}-${SHARD}.json", "fragment-shard-${{ matrix.platform }}-${{ matrix.shard }}"},
-		"triage.yml":    {"./lmc alive-check", "--target master", "BUILD_ALIVE2_LLVM=1", "GH_REPO: ${{ github.repository }}", "TEST_ID: ${{ matrix.test_id }}", "-print -quit", "Free runner disk space", "Fallback download raw triage artifacts"},
+		"triage.yml":    {"./lmc alive-check", "--target master", "BUILD_ALIVE2_LLVM=1", "GH_REPO: ${{ github.repository }}", "TEST_ID: ${{ matrix.test_id }}", "-print -quit", "Free runner disk space", "Fallback download raw triage artifacts", "group: miscompile-triage", "max-parallel: 4", "bad_sha12:", "ccache-toolchain-${{ matrix.tc_platform }}-${{ matrix.bad_sha12 }}", "reduced_before.ll", ".alive_tv_status"},
 	}
 	for name, wants := range checks {
 		raw, err := os.ReadFile(filepath.Join(".github", "workflows", name))
@@ -765,10 +765,36 @@ func TestWorkflowsAndInitScript(t *testing.T) {
 		if name == "sweep.yml" && regexp.MustCompile(`\bmatrix\.package\b`).MatchString(s) {
 			t.Errorf("%s contains stale matrix.package reference", name)
 		}
+		if name == "triage.yml" {
+			_, after, ok := strings.Cut(s, "key: ccache-bisect-")
+			if !ok {
+				t.Errorf("%s missing key: ccache-bisect-", name)
+			} else {
+				tcIdx := strings.Index(after, "ccache-toolchain-${{ matrix.tc_platform }}-${{ matrix.bad_sha12 }}")
+				biIdx := strings.Index(after, "ccache-bisect-${{ matrix.platform }}-")
+				if tcIdx < 0 || biIdx < 0 || tcIdx >= biIdx {
+					t.Errorf("%s restore-keys order: tcIdx=%d biIdx=%d", name, tcIdx, biIdx)
+				}
+			}
+		}
 		for _, w := range wants {
 			if !strings.Contains(s, w) {
 				t.Errorf("%s missing %q", name, w)
 			}
+		}
+	}
+
+	cmakeRaw, err := os.ReadFile(filepath.Join("scripts", "toolchain.cmake"))
+	if err != nil {
+		t.Fatalf("read scripts/toolchain.cmake: %v", err)
+	}
+	cmakeStr := string(cmakeRaw)
+	for _, w := range []string{
+		`set(LLVM_ENABLE_ASSERTIONS ON CACHE BOOL "" FORCE)`,
+		`set(LLVM_CCACHE_PARAMS "CCACHE_CPP2=yes CCACHE_NOHASHDIR=yes CCACHE_SLOPPINESS=pch_defines,time_macros" CACHE STRING "" FORCE)`,
+	} {
+		if !strings.Contains(cmakeStr, w) {
+			t.Errorf("scripts/toolchain.cmake missing %q", w)
 		}
 	}
 
@@ -1507,7 +1533,7 @@ func TestBuildFailDedupAndLabelSync(t *testing.T) {
 
 	iss := &ghIssue{
 		Labels: []struct{ Name string }{
-			{confConfirmed}, {confNeedsReview}, {labelBuildFail}, {labelCompilerICE},
+			{confConfirmed}, {confLikely}, {confNeedsReview}, {labelBuildFail}, {labelCompilerICE},
 			{platLinuxX86}, {platLinuxARM64}, {platLinuxRISCV64}, {platDarwinARM},
 			{"Linux-x86_64"}, {"upstream"}, {"package-bug"}, {"@nikic (#99)"},
 		},
@@ -1781,5 +1807,522 @@ func TestSiteFailureLogsPage(t *testing.T) {
 	}
 	if fileExists(filepath.Join(outDir, "logs", "index.html")) {
 		t.Errorf("stale logs/index.html was not removed after sweep recovered")
+	}
+}
+
+func TestIssueReproCommandAndPassName(t *testing.T) {
+	passCases := []struct {
+		pass string
+		want bool
+	}{
+		{"instcombine", true},
+		{"loop-vectorize", true},
+		{"  gvn  ", true},
+		{"sroa", true},
+		{"", false},
+		{"a", false},
+		{"InstCombinePass", false},
+		{"InvalidateAnalysisPass<llvm::AAManager>", false},
+		{"frontend-irgen", false},
+		{"inliner-ml-advisor-release", false},
+		{"X86 Atom pad short functions", false},
+		{"loop_vectorize", false},
+	}
+	for _, tc := range passCases {
+		if got := isValidOptPassName(tc.pass); got != tc.want {
+			t.Errorf("isValidOptPassName(%q) = %v, want %v", tc.pass, got, tc.want)
+		}
+	}
+
+	reproCases := []struct {
+		name string
+		inc  *incident
+		want string
+	}{
+		{"nil", nil, "opt -O2 -S"},
+		{"codegenO2", &incident{CulpritPass: "x86-isel", IsCodeGenPass: true, Affected: []affected{{Profile: profDistroO2}}}, "llc -O2"},
+		{"codegenLTO", &incident{CulpritPass: "codegenprepare", IsCodeGenPass: true, Affected: []affected{{Profile: profReleaseLTO}}}, "llc -O3"},
+		{"codegenNoAffected", &incident{CulpritPass: "x86-isel", IsCodeGenPass: true}, "llc -O2"},
+		{"validNPM", &incident{CulpritPass: "instcombine", Affected: []affected{{Profile: profDistroO2}}}, "opt -passes=instcombine -S"},
+		{"validNPMLTO", &incident{CulpritPass: "loop-vectorize", Affected: []affected{{Profile: profReleaseLTO}}}, "opt -passes=loop-vectorize -S"},
+		{"legacyClassO2", &incident{CulpritPass: "InstCombinePass", Affected: []affected{{Profile: profDistroO2}}}, "opt -O2 -S"},
+		{"legacyClassLTO", &incident{CulpritPass: "InstCombinePass", Affected: []affected{{Profile: profReleaseLTO}}}, "opt -O3 -S"},
+		{"invalidateO2", &incident{CulpritPass: "InvalidateAnalysisPass<llvm::AAManager>", Affected: []affected{{Profile: profDistroO2}}}, "opt -O2 -S"},
+		{"frontendIrgen", &incident{CulpritPass: "frontend-irgen", Affected: []affected{{Profile: profReleaseLTO}}}, "opt -O3 -S"},
+		{"mlAdvisor", &incident{CulpritPass: "inliner-ml-advisor-release", Affected: []affected{{Profile: profDistroO2}}}, "opt -O2 -S"},
+	}
+	for _, tc := range reproCases {
+		if got := reproCommand(tc.inc); got != tc.want {
+			t.Errorf("reproCommand(%s) = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestStoreConfidenceDiagO0AndLLUBI(t *testing.T) {
+	if confRank("") != 0 || confRank(confNeedsReview) != 0 || confRank(confLikely) != 1 || confRank(confConfirmed) != 2 {
+		t.Fatalf("unexpected confRank values")
+	}
+
+	storeDir := t.TempDir()
+	sha := "1234567890abcdef1234567890abcdef12345678"
+	base := &incident{
+		ID: "inc-merge-1", Status: incidentOpen, Confidence: confNeedsReview,
+		GoodSHA: "1111111111111111111111111111111111111111", BadSHA: sha, CulpritSHA: sha,
+		ReducedIR: "define i32 @f() {\n...[truncated]",
+		Affected:  []affected{{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2, TestID: "t1"}},
+	}
+	if _, err := mergeIncident(storeDir, base); err != nil {
+		t.Fatal(err)
+	}
+	stepLikely := &incident{
+		ID: "inc-merge-2", Status: incidentOpen, Confidence: confLikely,
+		GoodSHA: base.GoodSHA, BadSHA: sha, CulpritSHA: sha,
+		DiagO0Status: "test_fail", CulpritPass: "x86-isel", CulpritPassIndex: 17,
+		ReducedIR: "define i32 @f(i32 %x) {\n  ret i32 %x\n}",
+		Affected:  []affected{{Package: "zstd", Platform: platLinuxARM64, Profile: profDistroO2, TestID: "t1"}},
+	}
+	m1, err := mergeIncident(storeDir, stepLikely)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m1.Confidence != confLikely || m1.DiagO0Status != "test_fail" || m1.CulpritPass != "x86-isel" || m1.CulpritPassIndex != 17 || m1.IsCodeGenPass || !strings.Contains(m1.ReducedIR, "ret i32 %x") {
+		t.Fatalf("merge likely mismatch: %+v", m1)
+	}
+
+	stepConfirm := &incident{
+		ID: "inc-merge-3", Status: incidentOpen, Confidence: confConfirmed,
+		GoodSHA: base.GoodSHA, BadSHA: sha, CulpritSHA: sha,
+		DiagO0Status: "pass", CulpritPass: "x86-isel", IsCodeGenPass: true,
+		ReducedIR: "define i32 @other(i32 %x) {\n  ret i32 0\n}",
+		Affected:  []affected{{Package: "zstd", Platform: platDarwinARM, Profile: profReleaseLTO, TestID: "t1"}},
+	}
+	m2, err := mergeIncident(storeDir, stepConfirm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m2.Confidence != confConfirmed || m2.DiagO0Status != "pass" || !m2.IsCodeGenPass || !strings.Contains(m2.ReducedIR, "ret i32 %x") {
+		t.Fatalf("merge confirmed mismatch: %+v", m2)
+	}
+
+	stepDowngrade := &incident{
+		ID: "inc-merge-4", Status: incidentOpen, Confidence: confLikely,
+		GoodSHA: base.GoodSHA, BadSHA: sha, CulpritSHA: sha,
+		DiagO0Status: "build_fail", CulpritPass: "instcombine", IsCodeGenPass: false,
+		Affected: []affected{{Package: "zstd", Platform: platLinuxRISCV64, Profile: profDistroO2, TestID: "t1"}},
+	}
+	m3, err := mergeIncident(storeDir, stepDowngrade)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m3.Confidence != confConfirmed || m3.DiagO0Status != "pass" || m3.CulpritPass != "x86-isel" || !m3.IsCodeGenPass {
+		t.Fatalf("merge downgraded fields: %+v", m3)
+	}
+
+	otherStore := t.TempDir()
+	otherBase := &incident{
+		ID: "inc-diff-pass-1", Status: incidentOpen, Confidence: confNeedsReview,
+		GoodSHA: base.GoodSHA, BadSHA: sha, CulpritSHA: sha,
+		CulpritPass: "instcombine", CulpritPassIndex: 5, IsCodeGenPass: false,
+		Affected: []affected{{Package: "lua", Platform: platLinuxX86, Profile: profDistroO2, TestID: "t1"}},
+	}
+	if _, err := mergeIncident(otherStore, otherBase); err != nil {
+		t.Fatal(err)
+	}
+	otherCG := &incident{
+		ID: "inc-diff-pass-2", Status: incidentOpen, Confidence: confNeedsReview,
+		GoodSHA: base.GoodSHA, BadSHA: sha, CulpritSHA: sha,
+		CulpritPass: "x86-isel", CulpritPassIndex: 99, IsCodeGenPass: true,
+		Affected: []affected{{Package: "lua", Platform: platLinuxARM64, Profile: profDistroO2, TestID: "t1"}},
+	}
+	mOther, err := mergeIncident(otherStore, otherCG)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mOther.CulpritPass != "instcombine" || mOther.IsCodeGenPass {
+		t.Fatalf("mismatched CulpritPass wrongly set IsCodeGenPass: %+v", mOther)
+	}
+
+	if got := groupLabels([]*incident{
+		{Confidence: confNeedsReview, Affected: []affected{{Platform: platLinuxX86}}},
+		{Confidence: confLikely, Affected: []affected{{Platform: platLinuxARM64}}},
+	}); !slices.Equal(got, []string{confLikely, platLinuxARM64, platLinuxX86}) {
+		t.Errorf("groupLabels likely = %v", got)
+	}
+	if got := groupLabels([]*incident{
+		{Confidence: confLikely, Affected: []affected{{Platform: platLinuxX86}}},
+		{Confidence: confConfirmed, Affected: []affected{{Platform: platLinuxX86}}},
+	}); !slices.Equal(got, []string{confConfirmed, platLinuxX86}) {
+		t.Errorf("groupLabels confirmed = %v", got)
+	}
+
+	iss := &ghIssue{
+		Labels: []struct{ Name string }{
+			{confLikely}, {platLinuxX86}, {"reported-upstream"}, {"Needs-Review"},
+		},
+	}
+	if got := mergeLabels(iss, []string{confConfirmed, platLinuxX86}); !slices.Equal(got, []string{confConfirmed, platLinuxX86, "reported-upstream"}) {
+		t.Errorf("mergeLabels likely->confirmed = %v", got)
+	}
+	if got := mergeLabels(&ghIssue{Labels: []struct{ Name string }{{confNeedsReview}, {"triaged"}}}, []string{confLikely, platDarwinARM}); !slices.Equal(got, []string{platDarwinARM, confLikely, "triaged"}) {
+		t.Errorf("mergeLabels needs-review->likely = %v", got)
+	}
+
+	validIR := "define i32 @f(i32 %x) {\n  ret i32 %x\n}"
+	oversizedIR := strings.Repeat("define i32 @big(i32 %x) {\n  ret i32 %x\n}\n", 400)
+	if got := pickPrimary([]*incident{
+		{ID: "low-rich", Confidence: confNeedsReview, ReducedIR: validIR, PassDiff: "diff", ErrorExcerpt: "LLVM ERROR: boom"},
+		{ID: "likely-bare", Confidence: confLikely},
+		{ID: "conf-bare", Confidence: confConfirmed},
+	}); got.ID != "conf-bare" {
+		t.Errorf("pickPrimary confRank = %q, want conf-bare", got.ID)
+	}
+	if got := pickPrimary([]*incident{
+		{ID: "oversized", Confidence: confLikely, ReducedIR: oversizedIR, PassDiff: "diff"},
+		{ID: "truncated", Confidence: confLikely, ReducedIR: validIR + "\n...[truncated]", PassDiff: "diff"},
+		{ID: "inline", Confidence: confLikely, ReducedIR: validIR},
+	}); got.ID != "inline" {
+		t.Errorf("pickPrimary inlineIR = %q, want inline", got.ID)
+	}
+	if got := pickPrimary([]*incident{
+		{ID: "plain-err", Confidence: confNeedsReview, ErrorExcerpt: "a.c:1: error: bad"},
+		{ID: "ice", Confidence: confNeedsReview, ErrorExcerpt: "LLVM ERROR: crash"},
+	}); got.ID != "ice" {
+		t.Errorf("pickPrimary ICE = %q, want ice", got.ID)
+	}
+
+	rowVal := func(rows [][2]string, key string) (string, bool) {
+		for _, r := range rows {
+			if r[0] == key {
+				return r[1], true
+			}
+		}
+		return "", false
+	}
+	noO0 := &incident{
+		ID: "no-o0", Status: incidentOpen, Confidence: confLikely,
+		BadSHA: sha, LLUBIStatus: formalUnsupported,
+		LLUBIOutput: "before_exit=0 after_exit=0\nwarning: passing null values for all arguments.",
+		Affected:    []affected{{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2}},
+	}
+	mdRows := incidentMetaRows([]*incident{noO0}, false, defaultSiteURL)
+	if _, ok := rowVal(mdRows, "`-O0`"); ok {
+		t.Errorf("expected -O0 row omitted when empty: %v", mdRows)
+	}
+	if got, ok := rowVal(mdRows, "`llubi`"); !ok || got != "unsupported" {
+		t.Errorf("md llubi unsupported = (%q, %v), want unsupported", got, ok)
+	}
+	htmlRows := incidentMetaRows([]*incident{noO0}, true, "")
+	if _, ok := rowVal(htmlRows, "<code>-O0</code>"); ok {
+		t.Errorf("expected HTML -O0 row omitted when empty: %v", htmlRows)
+	}
+	if got, ok := rowVal(htmlRows, "<code>llubi</code>"); !ok || got != "unsupported" {
+		t.Errorf("html llubi unsupported = (%q, %v), want unsupported", got, ok)
+	}
+
+	o0Fail := &incident{ID: "o0-fail", Status: incidentOpen, BadSHA: sha, DiagO0Status: "test_fail", Affected: []affected{{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2}}}
+	o0Pass := &incident{ID: "o0-pass", Status: incidentOpen, BadSHA: sha, DiagO0Status: "pass", Affected: []affected{{Package: "zstd", Platform: platLinuxARM64, Profile: profDistroO2}}}
+	if got, ok := rowVal(incidentMetaRows([]*incident{o0Fail, o0Pass}, false, defaultSiteURL), "`-O0`"); !ok || got != "pass" {
+		t.Errorf("md -O0 prefer pass = (%q, %v)", got, ok)
+	}
+	if got, ok := rowVal(incidentMetaRows([]*incident{o0Fail}, true, ""), "<code>-O0</code>"); !ok || got != "test_fail" {
+		t.Errorf("html -O0 test_fail = (%q, %v)", got, ok)
+	}
+}
+
+func TestSiteAndIssueInlineReducedIR(t *testing.T) {
+	smallIR := "define i32 @f(i32 %x) {\n  ret i32 %x\n}"
+	noisyButClean := smallIR + "\n" + strings.Repeat("!1 = !DILocation(line: 1, column: 1, scope: !2)\n", 400)
+	if got := inlineReducedIR(noisyButClean); got != smallIR {
+		t.Errorf("inlineReducedIR noisy = %q, want %q", got, smallIR)
+	}
+	hugeIR := strings.Repeat("define i32 @big(i32 %x) {\n  ret i32 %x\n}\n", 400)
+	if got := inlineReducedIR(hugeIR); got != "" {
+		t.Errorf("inlineReducedIR >14KB = len %d, want empty", len(got))
+	}
+	if got := inlineReducedIR(smallIR + "\n...[truncated]"); got != "" {
+		t.Errorf("inlineReducedIR legacy truncated = %q, want empty", got)
+	}
+	if got := inlineReducedIR(smallIR + "\n; ... [truncated]"); got != "" {
+		t.Errorf("inlineReducedIR clipCode truncated = %q, want empty", got)
+	}
+
+	bundleURL := "https://github.com/npmania/llvm-miscompile-canary/releases/download/reproducers/reproducer-big.tar.zst"
+	sha := "abcdef0123456789abcdef0123456789abcdef01"
+	bigWithBundle := &incident{
+		ID: "inc-big-bundle", Status: incidentOpen, Confidence: confLikely,
+		GoodSHA: "1111111111111111111111111111111111111111", BadSHA: sha, CulpritSHA: sha,
+		CulpritPass: "instcombine", ReducedIR: hugeIR, BundleURL: bundleURL,
+		Affected: []affected{{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2, TestID: "t1"}},
+	}
+	body := formatGroupBody([]*incident{bigWithBundle}, "", defaultSiteURL)
+	if err := checkNoCrossRefs(body); err != nil {
+		t.Fatalf("bigWithBundle cross-ref: %v", err)
+	}
+	wantNote := fmt.Sprintf("Reduced IR exceeds inline limit; see `reduced.ll` in [reproducer.tar.zst](%s).", bundleURL)
+	if !strings.Contains(body, wantNote) || strings.Contains(body, "```llvm") || strings.Contains(body, "[truncated]") {
+		t.Errorf("bigWithBundle unexpected body:\n%s", body)
+	}
+
+	truncNoBundle := &incident{
+		ID: "inc-trunc-none", Status: incidentOpen, Confidence: confLikely,
+		GoodSHA: bigWithBundle.GoodSHA, BadSHA: sha, CulpritSHA: sha,
+		CulpritPass: "instcombine", ReducedIR: smallIR + "\n...[truncated]",
+		Affected: []affected{{Package: "lua", Platform: platLinuxX86, Profile: profDistroO2, TestID: "t1"}},
+	}
+	bodyNoBundle := formatGroupBody([]*incident{truncNoBundle}, "", defaultSiteURL)
+	if strings.Contains(bodyNoBundle, "```llvm") || strings.Contains(bodyNoBundle, "Reduced IR exceeds inline limit") || strings.Contains(bodyNoBundle, "[truncated]") {
+		t.Errorf("truncNoBundle should omit IR and bundle note:\n%s", bodyNoBundle)
+	}
+
+	unsafeBundle := &incident{
+		ID: "inc-unsafe-bundle", Status: incidentOpen, Confidence: confLikely,
+		GoodSHA: bigWithBundle.GoodSHA, BadSHA: sha, CulpritSHA: sha,
+		CulpritPass: "instcombine", ReducedIR: hugeIR, BundleURL: "javascript:alert(1)",
+		Affected: []affected{{Package: "opus", Platform: platLinuxX86, Profile: profDistroO2, TestID: "t1"}},
+	}
+	bodyUnsafe := formatGroupBody([]*incident{unsafeBundle}, "", defaultSiteURL)
+	if strings.Contains(bodyUnsafe, "Reduced IR exceeds inline limit") || strings.Contains(strings.ToLower(bodyUnsafe), "javascript:") {
+		t.Errorf("unsafeBundle leaked note or javascript URL:\n%s", bodyUnsafe)
+	}
+
+	cgInc := &incident{
+		ID: "inc-cg", Status: incidentOpen, Confidence: confConfirmed,
+		GoodSHA: bigWithBundle.GoodSHA, BadSHA: sha, CulpritSHA: sha,
+		CulpritPass: "x86-isel", IsCodeGenPass: true, ReducedIR: smallIR,
+		Affected: []affected{{Package: "sqlite", Platform: platLinuxX86, Profile: profReleaseLTO, TestID: "t1"}},
+	}
+	bodyCG := formatGroupBody([]*incident{cgInc}, "", defaultSiteURL)
+	if !strings.Contains(bodyCG, "`llc -O3`:") {
+		t.Errorf("cgInc missing llc -O3:\n%s", bodyCG)
+	}
+
+	buildWithBundle := &incident{
+		ID: "inc-build-bundle", Kind: incidentKindBuildFail, Status: incidentOpen,
+		GoodSHA: bigWithBundle.GoodSHA, BadSHA: sha, BundleURL: bundleURL,
+		ErrorExcerpt: "foo.c:1: error: bad",
+		Affected:     []affected{{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2}},
+	}
+
+	storeDir, outDir := t.TempDir(), t.TempDir()
+	for _, inc := range []*incident{bigWithBundle, truncNoBundle, unsafeBundle, cgInc, buildWithBundle} {
+		if _, err := saveIncident(storeDir, inc); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := generateSite(storeDir, outDir, t.TempDir()); err != nil {
+		t.Fatalf("generateSite: %v", err)
+	}
+	readPage := func(id string) string {
+		t.Helper()
+		b, err := os.ReadFile(filepath.Join(outDir, "incidents", id, "index.html"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	bigPage := readPage(bigWithBundle.ID)
+	wantHTMLNote := fmt.Sprintf(`<h2>Reduced IR</h2>`+"\n    "+`<p>Reduced IR exceeds inline limit; see <code>reduced.ll</code> in <a href="%s">reproducer.tar.zst</a>.</p>`, bundleURL)
+	if !strings.Contains(bigPage, wantHTMLNote) || strings.Contains(bigPage, "@big") || strings.Contains(bigPage, "[truncated]") {
+		t.Errorf("bigPage unexpected HTML:\n%s", bigPage)
+	}
+	truncPage := readPage(truncNoBundle.ID)
+	if strings.Contains(truncPage, "<h2>Reduced IR</h2>") || strings.Contains(truncPage, "Reduced IR exceeds inline limit") {
+		t.Errorf("truncPage should omit Reduced IR section:\n%s", truncPage)
+	}
+	unsafePage := readPage(unsafeBundle.ID)
+	if strings.Contains(unsafePage, "<h2>Reduced IR</h2>") || strings.Contains(strings.ToLower(unsafePage), "javascript:") {
+		t.Errorf("unsafePage should omit Reduced IR section:\n%s", unsafePage)
+	}
+	cgPage := readPage(cgInc.ID)
+	if !strings.Contains(cgPage, `<p class="cmd"><code>llc -O3</code></p>`) {
+		t.Errorf("cgPage missing llc -O3:\n%s", cgPage)
+	}
+	buildPage := readPage(buildWithBundle.ID)
+	if strings.Contains(buildPage, "<h2>Reduced IR</h2>") || strings.Contains(buildPage, "Reduced IR exceeds inline limit") {
+		t.Errorf("buildPage should not show Reduced IR section:\n%s", buildPage)
+	}
+}
+
+func TestAggregateRegressionSelection(t *testing.T) {
+	storeDir := t.TempDir()
+	fragsDir := t.TempDir()
+	goodSHA := "1111111111111111111111111111111111111111"
+	badSHA := "2222222222222222222222222222222222222222"
+	if err := saveState(storeDir, &state{LastGoodSHA: goodSHA}); err != nil {
+		t.Fatal(err)
+	}
+
+	results := []pkgResult{
+		{Package: "p-fast", Platform: platLinuxRISCV64, Profile: profReleaseLTO, Status: statusTestFail, DurationSec: 25, FailedTests: []string{"t-rv"}},
+		{Package: "p-fast", Platform: platDarwinARM, Profile: profDistroO2, Status: statusTestFail, DurationSec: 12, FailedTests: []string{"t-mac"}},
+		{Package: "p-fast", Platform: platLinuxX86, Profile: profDistroO2, Status: statusTestFail, DurationSec: 5, FailedTests: []string{"t-x86"}},
+
+		{Package: "p-pos", Platform: platLinuxX86, Profile: profDistroO2, Status: statusTestFail, DurationSec: 0, FailedTests: []string{"t-zero"}},
+		{Package: "p-pos", Platform: platLinuxRISCV64, Profile: profReleaseLTO, Status: statusTestFail, DurationSec: 30, FailedTests: []string{"t-pos"}},
+
+		{Package: "p-plat", Platform: platLinuxRISCV64, Profile: profDistroO2, Status: statusTestFail, DurationSec: 10, FailedTests: []string{"t-rv"}},
+		{Package: "p-plat", Platform: platDarwinARM, Profile: profDistroO2, Status: statusTestFail, DurationSec: 10, FailedTests: []string{"t-mac"}},
+		{Package: "p-plat", Platform: platLinuxARM64, Profile: profDistroO2, Status: statusTestFail, DurationSec: 10, FailedTests: []string{"t-arm"}},
+		{Package: "p-plat", Platform: platLinuxX86, Profile: profDistroO2, Status: statusTestFail, DurationSec: 10, FailedTests: []string{"t-x86"}},
+
+		{Package: "p-prof", Platform: platLinuxARM64, Profile: profReleaseLTO, Status: statusTestFail, DurationSec: 10, FailedTests: []string{"t-lto"}},
+		{Package: "p-prof", Platform: platLinuxARM64, Profile: profDistroO2, Status: statusTestFail, DurationSec: 10, FailedTests: []string{"t-o2"}},
+
+		{Package: "p-rv-slow", Platform: platLinuxRISCV64, Profile: profDistroO2, Status: statusTestFail, DurationSec: 10, FailedTests: []string{"t1"}},
+		{Package: "p-mac-tie", Platform: platDarwinARM, Profile: profDistroO2, Status: statusTestFail, DurationSec: 10, FailedTests: []string{"t1"}},
+		{Package: "p-arm-lto", Platform: platLinuxARM64, Profile: profReleaseLTO, Status: statusTestFail, DurationSec: 10, FailedTests: []string{"t1"}},
+		{Package: "p-lex-a", Platform: platLinuxX86, Profile: profDistroO2, Status: statusTestFail, DurationSec: 20, FailedTests: []string{"t1"}},
+		{Package: "p-lex-b", Platform: platLinuxX86, Profile: profDistroO2, Status: statusTestFail, DurationSec: 20, FailedTests: []string{"t1"}},
+		{Package: "p-zero-mac", Platform: platDarwinARM, Profile: profDistroO2, Status: statusTestFail, DurationSec: 0, FailedTests: []string{"t1"}},
+		{Package: "p-zero-rv", Platform: platLinuxRISCV64, Profile: profDistroO2, Status: statusTestFail, DurationSec: -1, FailedTests: []string{"t1"}},
+	}
+	if err := writeResultFragment(filepath.Join(fragsDir, "all.json"), results); err != nil {
+		t.Fatal(err)
+	}
+	regOut := filepath.Join(t.TempDir(), "regs.json")
+	var out, errBuf bytes.Buffer
+	if code := runCLI(context.Background(), []string{
+		"lmc", "aggregate", "-frags", fragsDir, "-store", storeDir, "-sha", badSHA, "-reg-out", regOut,
+	}, &out, &errBuf); code != 0 {
+		t.Fatalf("aggregate failed (%d): %s", code, errBuf.String())
+	}
+	var regs []regressionTarget
+	if err := readJSON(regOut, &regs); err != nil {
+		t.Fatal(err)
+	}
+	type wantReg struct{ pkg, plat, prof, test string }
+	want := []wantReg{
+		{"p-fast", platLinuxX86, profDistroO2, "t-x86"},
+		{"p-plat", platLinuxX86, profDistroO2, "t-x86"},
+		{"p-prof", platLinuxARM64, profDistroO2, "t-o2"},
+		{"p-arm-lto", platLinuxARM64, profReleaseLTO, "t1"},
+		{"p-mac-tie", platDarwinARM, profDistroO2, "t1"},
+		{"p-rv-slow", platLinuxRISCV64, profDistroO2, "t1"},
+		{"p-lex-a", platLinuxX86, profDistroO2, "t1"},
+		{"p-lex-b", platLinuxX86, profDistroO2, "t1"},
+	}
+	if len(regs) != len(want) {
+		t.Fatalf("len(regs) = %d, want %d: %+v", len(regs), len(want), regs)
+	}
+	seenPkg := map[string]bool{}
+	for i, w := range want {
+		r := regs[i]
+		if seenPkg[r.Package] {
+			t.Errorf("duplicate package in regs: %q", r.Package)
+		}
+		seenPkg[r.Package] = true
+		gotTest := ""
+		if len(r.FailedTests) > 0 {
+			gotTest = r.FailedTests[0]
+		}
+		if r.Package != w.pkg || r.Platform != w.plat || r.Profile != w.prof || gotTest != w.test || r.GoodSHA != goodSHA || r.BadSHA != badSHA {
+			t.Errorf("regs[%d] = (%s, %s, %s, %s), want (%s, %s, %s, %s)", i, r.Package, r.Platform, r.Profile, gotTest, w.pkg, w.plat, w.prof, w.test)
+		}
+	}
+
+	frags2 := t.TempDir()
+	store2 := t.TempDir()
+	if err := saveState(store2, &state{LastGoodSHA: goodSHA}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeResultFragment(filepath.Join(frags2, "zero.json"), []pkgResult{
+		{Package: "p-pos", Platform: platLinuxX86, Profile: profDistroO2, Status: statusTestFail, DurationSec: 0, FailedTests: []string{"t-zero"}},
+		{Package: "p-pos", Platform: platLinuxRISCV64, Profile: profReleaseLTO, Status: statusTestFail, DurationSec: 30, FailedTests: []string{"t-pos"}},
+		{Package: "p-zero-tie", Platform: platLinuxRISCV64, Profile: profDistroO2, Status: statusTestFail, DurationSec: 0, FailedTests: []string{"t-rv"}},
+		{Package: "p-zero-tie", Platform: platLinuxX86, Profile: profDistroO2, Status: statusTestFail, DurationSec: -1, FailedTests: []string{"t-x86"}},
+		{Package: "p-zero-rv", Platform: platLinuxRISCV64, Profile: profDistroO2, Status: statusTestFail, DurationSec: -1, FailedTests: []string{"t1"}},
+		{Package: "p-zero-mac", Platform: platDarwinARM, Profile: profDistroO2, Status: statusTestFail, DurationSec: 0, FailedTests: []string{"t1"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	regOut2 := filepath.Join(t.TempDir(), "regs2.json")
+	if code := runCLI(context.Background(), []string{
+		"lmc", "aggregate", "-frags", frags2, "-store", store2, "-sha", badSHA, "-reg-out", regOut2,
+	}, &out, &errBuf); code != 0 {
+		t.Fatalf("aggregate2 failed (%d): %s", code, errBuf.String())
+	}
+	var regs2 []regressionTarget
+	if err := readJSON(regOut2, &regs2); err != nil {
+		t.Fatal(err)
+	}
+	want2 := []wantReg{
+		{"p-pos", platLinuxRISCV64, profReleaseLTO, "t-pos"},
+		{"p-zero-tie", platLinuxX86, profDistroO2, "t-x86"},
+		{"p-zero-mac", platDarwinARM, profDistroO2, "t1"},
+		{"p-zero-rv", platLinuxRISCV64, profDistroO2, "t1"},
+	}
+	if len(regs2) != len(want2) {
+		t.Fatalf("len(regs2) = %d, want %d: %+v", len(regs2), len(want2), regs2)
+	}
+	for i, w := range want2 {
+		r := regs2[i]
+		gotTest := ""
+		if len(r.FailedTests) > 0 {
+			gotTest = r.FailedTests[0]
+		}
+		if r.Package != w.pkg || r.Platform != w.plat || r.Profile != w.prof || gotTest != w.test {
+			t.Errorf("regs2[%d] = (%s, %s, %s, %s), want (%s, %s, %s, %s)", i, r.Package, r.Platform, r.Profile, gotTest, w.pkg, w.plat, w.prof, w.test)
+		}
+	}
+
+	frags3 := t.TempDir()
+	store3 := t.TempDir()
+	if err := saveState(store3, &state{
+		LastGoodByTarget: map[string]string{
+			targetKey("p-shadow", platLinuxARM64, profDistroO2):     goodSHA,
+			targetKey("p-real-1", platLinuxRISCV64, profReleaseLTO): goodSHA,
+			targetKey("p-real-2", platDarwinARM, profDistroO2):      goodSHA,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mixed := []pkgResult{
+		{Package: "p-shadow", Platform: platLinuxX86, Profile: profDistroO2, Status: statusTestFail, DurationSec: 1, FailedTests: []string{"t-no-good"}},
+		{Package: "p-shadow", Platform: platLinuxARM64, Profile: profDistroO2, Status: statusTestFail, DurationSec: 50, FailedTests: []string{"t-has-good"}},
+		{Package: "p-real-1", Platform: platLinuxRISCV64, Profile: profReleaseLTO, Status: statusTestFail, DurationSec: 100, FailedTests: []string{"t-r1"}},
+		{Package: "p-real-2", Platform: platDarwinARM, Profile: profDistroO2, Status: statusTestFail, DurationSec: 60, FailedTests: []string{"t-r2"}},
+	}
+	for i := range 8 {
+		mixed = append(mixed, pkgResult{
+			Package: fmt.Sprintf("p-never-%d", i), Platform: platLinuxX86, Profile: profDistroO2,
+			Status: statusTestFail, DurationSec: float64(i + 1), FailedTests: []string{"t-never"},
+		})
+	}
+	if err := writeResultFragment(filepath.Join(frags3, "mixed.json"), mixed); err != nil {
+		t.Fatal(err)
+	}
+	regOut3 := filepath.Join(t.TempDir(), "regs3.json")
+	if code := runCLI(context.Background(), []string{
+		"lmc", "aggregate", "-frags", frags3, "-store", store3, "-sha", badSHA, "-reg-out", regOut3,
+	}, &out, &errBuf); code != 0 {
+		t.Fatalf("aggregate3 failed (%d): %s", code, errBuf.String())
+	}
+	var regs3 []regressionTarget
+	if err := readJSON(regOut3, &regs3); err != nil {
+		t.Fatal(err)
+	}
+	type wantMixed struct{ pkg, plat, prof, test, good string }
+	want3 := []wantMixed{
+		{"p-shadow", platLinuxARM64, profDistroO2, "t-has-good", goodSHA},
+		{"p-real-2", platDarwinARM, profDistroO2, "t-r2", goodSHA},
+		{"p-real-1", platLinuxRISCV64, profReleaseLTO, "t-r1", goodSHA},
+		{"p-never-0", platLinuxX86, profDistroO2, "t-never", ""},
+		{"p-never-1", platLinuxX86, profDistroO2, "t-never", ""},
+		{"p-never-2", platLinuxX86, profDistroO2, "t-never", ""},
+		{"p-never-3", platLinuxX86, profDistroO2, "t-never", ""},
+		{"p-never-4", platLinuxX86, profDistroO2, "t-never", ""},
+	}
+	if len(regs3) != len(want3) {
+		t.Fatalf("len(regs3) = %d, want %d: %+v", len(regs3), len(want3), regs3)
+	}
+	for i, w := range want3 {
+		r := regs3[i]
+		gotTest := ""
+		if len(r.FailedTests) > 0 {
+			gotTest = r.FailedTests[0]
+		}
+		if r.Package != w.pkg || r.Platform != w.plat || r.Profile != w.prof || gotTest != w.test || r.GoodSHA != w.good {
+			t.Errorf("regs3[%d] = (%s, %s, %s, %s, %q), want (%s, %s, %s, %s, %q)", i, r.Package, r.Platform, r.Profile, gotTest, r.GoodSHA, w.pkg, w.plat, w.prof, w.test, w.good)
+		}
 	}
 }

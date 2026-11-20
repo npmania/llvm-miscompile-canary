@@ -28,8 +28,11 @@
 
     {{- if .CleanedIR}}
     <h2>Reduced IR</h2>
-    <p class="cmd"><code>{{.OptCmd}}</code></p>
+    <p class="cmd"><code>{{.ReproCmd}}</code></p>
     <pre><code>{{.CleanedIR}}</code></pre>
+    {{- else if .IRBundleURL}}
+    <h2>Reduced IR</h2>
+    <p>Reduced IR exceeds inline limit; see <code>reduced.ll</code> in <a href="{{.IRBundleURL}}">reproducer.tar.zst</a>.</p>
     {{- end}}
 
     {{- if .HighlightedDiff}}

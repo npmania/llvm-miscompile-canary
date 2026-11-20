@@ -2002,7 +2002,8 @@ func bisectCommit(ctx context.Context, o commitBisectOpts) (string, string, erro
 		}
 		defer os.RemoveAll(workRoot)
 	}
-	wtDir, buildDir, objDir := filepath.Join(workRoot, "llvm-wt"), filepath.Join(workRoot, "llvm-build"), filepath.Join(workRoot, "tu-objs")
+	workRoot = evalSymlinksExisting(workRoot)
+	wtDir, buildDir, objDir := filepath.Join(workRoot, "llvm-project"), filepath.Join(workRoot, "llvm-build"), filepath.Join(workRoot, "tu-objs")
 	if err := os.MkdirAll(objDir, 0o755); err != nil {
 		return "", "", err
 	}
@@ -2105,32 +2106,43 @@ func compileSingleTUWithClang(ctx context.Context, clangBin string, spec platfor
 	return nil
 }
 
+func bisectLLVMTargets(spec platformSpec, hostOS, hostArch string) string {
+	if spec.ID == platLinuxRISCV64 && hostOS == "linux" && hostArch == "amd64" {
+		return "X86;RISCV"
+	}
+	return firstNonEmpty(spec.LLVMTarget, "Native")
+}
+
 func buildClangInWorktree(ctx context.Context, wtDir, buildDir string, spec platformSpec, jobs int) (string, error) {
 	if jobs <= 0 {
 		jobs = runtime.NumCPU()
 	}
 	llvmDir := filepath.Join(wtDir, "llvm")
+	extraEnv := []string{"CCACHE_BASEDIR=" + evalSymlinksExisting(filepath.Dir(wtDir))}
 	configure := func() error {
 		if err := os.MkdirAll(buildDir, 0o755); err != nil {
 			return err
 		}
 		args := []string{
 			"-G", "Ninja", "-S", llvmDir, "-B", buildDir,
-			"-DCMAKE_BUILD_TYPE=Release", "-DLLVM_ENABLE_ASSERTIONS=OFF",
-			"-DLLVM_TARGETS_TO_BUILD=" + firstNonEmpty(spec.LLVMTarget, "Native"), "-DLLVM_ENABLE_PROJECTS=clang",
+			"-DCMAKE_BUILD_TYPE=Release", "-DLLVM_ENABLE_ASSERTIONS=ON",
+			"-DLLVM_TARGETS_TO_BUILD=" + bisectLLVMTargets(spec, runtime.GOOS, runtime.GOARCH), "-DLLVM_ENABLE_PROJECTS=clang",
 			"-DLLVM_APPEND_VC_REV=OFF", "-DCLANG_ENABLE_CIR=OFF", "-DCLANG_ENABLE_STATIC_ANALYZER=OFF",
 			"-DLLVM_INCLUDE_TESTS=OFF", "-DLLVM_INCLUDE_BENCHMARKS=OFF", "-DLLVM_INCLUDE_EXAMPLES=OFF",
 			"-DLLVM_INCLUDE_DOCS=OFF", "-DLLVM_ENABLE_BINDINGS=OFF", "-DLLVM_PARALLEL_LINK_JOBS=2",
 		}
 		if _, err := exec.LookPath("ccache"); err == nil {
-			args = append(args, "-DLLVM_CCACHE_BUILD=ON")
+			args = append(args,
+				"-DLLVM_CCACHE_BUILD=ON",
+				"-DLLVM_CCACHE_PARAMS=CCACHE_CPP2=yes CCACHE_NOHASHDIR=yes CCACHE_SLOPPINESS=pch_defines,time_macros",
+			)
 		}
 		if !spec.IsDarwin {
 			if _, err := exec.LookPath("ld.lld"); err == nil {
 				args = append(args, "-DLLVM_USE_LINKER=lld")
 			}
 		}
-		if out, err := runToolInDir(ctx, "cmake", args, ""); err != nil {
+		if out, err := runToolInDirEnv(ctx, "cmake", args, "", extraEnv); err != nil {
 			return fmt.Errorf("cmake configure clang: %w\n%s", err, tailText(out, 4096))
 		}
 		return nil
@@ -2148,13 +2160,13 @@ func buildClangInWorktree(ctx context.Context, wtDir, buildDir string, spec plat
 			return "", err
 		}
 	}
-	out, err := runToolInDir(ctx, "ninja", []string{"-C", buildDir, "-j", strconv.Itoa(jobs), "clang"}, "")
+	out, err := runToolInDirEnv(ctx, "ninja", []string{"-C", buildDir, "-j", strconv.Itoa(jobs), "clang"}, "", extraEnv)
 	if err != nil && !needCfg && isStaleNinjaError(out) {
 		_ = os.RemoveAll(buildDir)
 		if cfgErr := configure(); cfgErr != nil {
 			return "", cfgErr
 		}
-		out, err = runToolInDir(ctx, "ninja", []string{"-C", buildDir, "-j", strconv.Itoa(jobs), "clang"}, "")
+		out, err = runToolInDirEnv(ctx, "ninja", []string{"-C", buildDir, "-j", strconv.Itoa(jobs), "clang"}, "", extraEnv)
 	}
 	if err != nil {
 		return "", fmt.Errorf("ninja clang: %w\n%s", err, tailText(out, 4096))
@@ -2198,8 +2210,13 @@ func gitOut(ctx context.Context, repoDir string, args ...string) (string, error)
 }
 
 func runToolInDir(ctx context.Context, bin string, args []string, dir string) (string, error) {
+	return runToolInDirEnv(ctx, bin, args, dir, nil)
+}
+
+func runToolInDirEnv(ctx context.Context, bin string, args []string, dir string, extraEnv []string) (string, error) {
 	cmd := exec.CommandContext(ctx, bin, args...)
-	cmd.Dir, cmd.Env = dir, append(os.Environ(), "SOURCE_DATE_EPOCH=0")
+	cmd.Dir = dir
+	cmd.Env = mergeEnv(os.Environ(), append([]string{"SOURCE_DATE_EPOCH=0"}, extraEnv...))
 	out, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }

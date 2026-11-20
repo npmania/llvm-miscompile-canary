@@ -22,6 +22,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 )
@@ -789,11 +790,11 @@ func (r *runner) sweepPackage(ctx context.Context, cfg runConfig) pkgResult {
 		return res
 	}
 	if !bOut.Passed {
-		prefix := ""
+		excerpt := tailText(bOut.Output, 1500)
 		if detectICE(bOut.Output) {
-			prefix = "[compiler ICE] "
+			excerpt = "[compiler ICE] " + extractICEExcerpt(bOut.Output, 4000)
 		}
-		res.Status, res.DurationSec, res.ErrorExcerpt = statusBuildFail, time.Since(start).Seconds(), prefix+tailText(bOut.Output, 1500)
+		res.Status, res.DurationSec, res.ErrorExcerpt = statusBuildFail, time.Since(start).Seconds(), excerpt
 		return res
 	}
 	tOut, failIDs := r.testAll(ctx, cfg.Recipe, ws, cfg.ExtraEnv, cfg.Timeout)
@@ -1039,10 +1040,93 @@ func detectICE(output string) bool {
 		"clang frontend command failed with exit code",
 		"LLVM ERROR:",
 		"fatal error: error in backend:",
+		"UNREACHABLE executed at ",
 	} {
 		if strings.Contains(output, sig) {
 			return true
 		}
 	}
 	return false
+}
+
+func extractICEExcerpt(output string, maxBytes int) string {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	isAssert := func(l string) bool {
+		return (strings.Contains(l, "Assertion ") && strings.Contains(l, "failed")) ||
+			strings.Contains(l, "UNREACHABLE executed")
+	}
+	findLast := func(needles []string) int {
+		for i := len(lines) - 1; i >= 0; i-- {
+			if containsAny(lines[i], needles) {
+				return i
+			}
+		}
+		return -1
+	}
+	anchor := findLast([]string{
+		"PLEASE submit a bug report",
+		"LLVM ERROR:",
+		"fatal error: error in backend:",
+	})
+	if anchor < 0 {
+		anchor = findLast([]string{
+			"clang frontend command failed with exit code",
+			"unable to execute command:",
+		})
+	}
+	if anchor >= 0 {
+		lo := max(0, anchor-15)
+		for i := anchor - 1; i >= lo; i-- {
+			if isAssert(lines[i]) || strings.Contains(lines[i], "LLVM ERROR:") || strings.Contains(lines[i], "fatal error: error in backend:") {
+				anchor = i
+				break
+			}
+		}
+	} else {
+		for i, l := range lines {
+			if isAssert(l) {
+				anchor = i
+				break
+			}
+		}
+	}
+	if anchor < 0 {
+		return tailText(output, maxBytes)
+	}
+	s := strings.TrimSpace(strings.Join(lines[anchor:], "\n"))
+	if maxBytes <= 0 || len(s) <= maxBytes {
+		return s
+	}
+	const sep = "\n...\n"
+	budget := maxBytes - len(sep)
+	if budget < 2 {
+		return tailText(s, maxBytes)
+	}
+	headMax := budget * 3 / 4
+	tailMax := budget - headMax
+	if headMax < 1 || tailMax < 1 {
+		return tailText(s, maxBytes)
+	}
+	head := s[:headMax]
+	if nl := strings.LastIndexByte(head, '\n'); nl > 0 {
+		head = head[:nl]
+	} else {
+		for len(head) > 0 && !utf8.ValidString(head) {
+			head = head[:len(head)-1]
+		}
+	}
+	head = strings.TrimRight(head, "\r\n")
+	tail := s[len(s)-tailMax:]
+	if nl := strings.IndexByte(tail, '\n'); nl >= 0 && nl+1 < len(tail) {
+		tail = tail[nl+1:]
+	} else {
+		for len(tail) > 0 && !utf8.RuneStart(tail[0]) {
+			tail = tail[1:]
+		}
+	}
+	tail = strings.TrimLeft(tail, "\r\n")
+	if head == "" || tail == "" {
+		return firstNonEmpty(head, tail)
+	}
+	return head + sep + tail
 }

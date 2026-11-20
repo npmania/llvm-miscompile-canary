@@ -6,7 +6,7 @@ url: https://github.com/Z3Prover/z3/archive/refs/tags/z3-5.4.1.tar.gz
 sha256: 6a9196fb64e0460640beee08b8e823f0d51371bd3c4db78d161af275463846ef
 strip_components: 1
 lang: cxx
-timeout_min: 30
+timeout_min: 45
 smoke_test: bit_vector
 platforms:
   - linux-x86_64

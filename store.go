@@ -28,7 +28,10 @@ const (
 	incidentKindBuildFail  = "build_fail"
 
 	confConfirmed   = "confirmed"
+	confLikely      = "likely"
 	confNeedsReview = "needs-review"
+
+	maxInlineReducedIRBytes = 14000
 )
 
 type pkgResult struct {
@@ -76,6 +79,7 @@ type incident struct {
 	CulpritTU                   string     `json:"culprit_tu,omitempty"`
 	CulpritPass                 string     `json:"culprit_pass,omitempty"`
 	CulpritPassIndex            int        `json:"culprit_pass_index,omitempty"`
+	IsCodeGenPass               bool       `json:"is_codegen_pass,omitempty"`
 	CulpritFunc                 string     `json:"culprit_func,omitempty"`
 	DiagO0Status                string     `json:"diag_o0_status,omitempty"`
 	ASanUBSanClean              bool       `json:"asan_ubsan_clean"`
@@ -120,6 +124,17 @@ func formatSweepID(ts time.Time, sha string) string {
 		s = "unknown"
 	}
 	return ts.UTC().Format("20060102T150405Z") + "-" + s
+}
+
+func confRank(conf string) int {
+	switch conf {
+	case confConfirmed:
+		return 2
+	case confLikely:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func (i *incident) isBuildFail() bool {
@@ -465,8 +480,13 @@ func mergeIncident(dir string, inc *incident) (*incident, error) {
 				}
 			}
 		}
-		if ex.Confidence != confConfirmed && inc.Confidence == confConfirmed {
-			ex.Confidence = confConfirmed
+		if confRank(inc.Confidence) > confRank(ex.Confidence) {
+			ex.Confidence = inc.Confidence
+		}
+		if inc.DiagO0Status == "pass" {
+			ex.DiagO0Status = "pass"
+		} else {
+			setIfEmpty(&ex.DiagO0Status, inc.DiagO0Status)
 		}
 		if inc.ASanUBSanClean {
 			ex.ASanUBSanClean = true
@@ -478,11 +498,15 @@ func mergeIncident(dir string, inc *incident) (*incident, error) {
 			ex.CulpritSHA, ex.CulpritSubject = inc.CulpritSHA, inc.CulpritSubject
 		}
 		if ex.CulpritPass == "" && inc.CulpritPass != "" {
-			ex.CulpritPass, ex.CulpritPassIndex = inc.CulpritPass, inc.CulpritPassIndex
+			ex.CulpritPass, ex.CulpritPassIndex, ex.IsCodeGenPass = inc.CulpritPass, inc.CulpritPassIndex, inc.IsCodeGenPass
+		} else if !ex.IsCodeGenPass && inc.IsCodeGenPass && ex.CulpritPass == inc.CulpritPass {
+			ex.IsCodeGenPass = true
 		}
 		setIfEmpty(&ex.CulpritFunc, inc.CulpritFunc)
 		setIfEmpty(&ex.CulpritTU, inc.CulpritTU)
-		setIfEmpty(&ex.ReducedIR, inc.ReducedIR)
+		if inlineReducedIR(ex.ReducedIR) == "" && inlineReducedIR(inc.ReducedIR) != "" {
+			ex.ReducedIR = inc.ReducedIR
+		}
 		setIfEmpty(&ex.PassDiff, inc.PassDiff)
 		setIfEmpty(&ex.BundleURL, inc.BundleURL)
 		if shouldUpgradeFormal(ex.AliveTVStatus, inc.AliveTVStatus) {

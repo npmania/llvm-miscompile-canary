@@ -49,6 +49,7 @@ var (
 	reInlineMeta   = regexp.MustCompile(`,\s*![A-Za-z0-9_.]+\s+!\d+|\s+!(?:dbg|DIAssignID|prof|callees|heapallocsite|srcloc|tbaa(?:\.struct)?|range|noundef|nonnull|align)\s+!\d+`)
 	reAttrOutsideQ = regexp.MustCompile(`"(?:\\.|[^"])*"| #\d+\b`)
 	reLLUBIExits   = regexp.MustCompile(`before_exit=(-?\d+)\s+after_exit=(-?\d+)`)
+	reOptPassName  = regexp.MustCompile(`^[a-z][a-z0-9-]+$`)
 
 	prosePre   = []rxRepl{{regexp.MustCompile(`(?i)&#(?:0*64|x0*40);?`), "@"}, {regexp.MustCompile(`(?i)&#(?:0*35|x0*23);?`), "#"}}
 	prosePost  = []rxRepl{{reGHBlockURL, ""}, {reRepoNum, ""}, {regexp.MustCompile(`(?i)llvm/llvm-project`), "llvm-project"}, {rePRParen, ""}, {reGHNum, ""}, {regexp.MustCompile(`(^|[^\w&])#(\d+)`), "${1}${2}"}, {regexp.MustCompile(`([A-Za-z0-9])@+([A-Za-z0-9_-]+)`), "${1}[at]${2}"}, {reHandleAt, "${1}"}}
@@ -217,12 +218,41 @@ func stripIR(ir string, forDiff bool) string {
 	return strings.Join(out, "\n")
 }
 
-func optCommand(pass string) string {
-	p := sanitizeText(strings.TrimSpace(pass))
-	if p == "" {
-		return "opt -O2 -S"
+func isValidOptPassName(pass string) bool {
+	p := strings.TrimSpace(pass)
+	return p != "frontend-irgen" && p != "inliner-ml-advisor-release" && reOptPassName.MatchString(p)
+}
+
+func inlineReducedIR(raw string) string {
+	if strings.Contains(raw, "...[truncated]") || strings.Contains(raw, "; ... [truncated]") {
+		return ""
 	}
-	return fmt.Sprintf(pick(strings.ContainsAny(p, " \t<>;()"), "opt -passes='%s' -S", "opt -passes=%s -S"), p)
+	ir := sanitizeCode(cleanIR(raw))
+	if ir == "" || len(ir) > maxInlineReducedIRBytes {
+		return ""
+	}
+	return ir
+}
+
+func incidentOptLevel(inc *incident) string {
+	if inc != nil && len(inc.Affected) > 0 && inc.Affected[0].Profile == profReleaseLTO {
+		return "-O3"
+	}
+	return "-O2"
+}
+
+func reproCommand(inc *incident) string {
+	lvl := incidentOptLevel(inc)
+	if inc == nil {
+		return "opt " + lvl + " -S"
+	}
+	if inc.IsCodeGenPass {
+		return "llc " + lvl
+	}
+	if p := sanitizeText(strings.TrimSpace(inc.CulpritPass)); isValidOptPassName(p) {
+		return "opt -passes=" + p + " -S"
+	}
+	return "opt " + lvl + " -S"
 }
 
 func profileLabel(prof string) string {
@@ -378,6 +408,20 @@ func incidentMetaRows(incs []*incident, htmlMode bool, siteURL string) [][2]stri
 		add(pick(htmlMode, "Targets", "Target"), tgt)
 	}
 	if !isBuild {
+		var diagO0 string
+		for _, inc := range incs {
+			s := strings.TrimSpace(inc.DiagO0Status)
+			if s == "pass" {
+				diagO0 = "pass"
+				break
+			}
+			if diagO0 == "" && s != "" {
+				diagO0 = s
+			}
+		}
+		if s := txt(diagO0); s != "" {
+			add(code("-O0"), s)
+		}
 		sanVal := code("asan,ubsan") + " clean"
 		if hasASanFail {
 			sanVal = code("asan,ubsan") + " failed"
@@ -389,7 +433,7 @@ func incidentMetaRows(incs []*incident, htmlMode bool, siteURL string) [][2]stri
 		if !isOmittedFormalStatus(primary.AliveTVStatus) {
 			add(code("alive-tv"), txt(primary.AliveTVStatus))
 		}
-		if m := reLLUBIExits.FindStringSubmatch(primary.LLUBIOutput); len(m) >= 3 {
+		if m := reLLUBIExits.FindStringSubmatch(primary.LLUBIOutput); primary.LLUBIStatus != formalUnsupported && len(m) >= 3 {
 			add(code("llubi"), code(m[1])+" (before)"+pick(htmlMode, " -&gt; ", " -> ")+code(m[2])+" (after)")
 		} else if !isOmittedFormalStatus(primary.LLUBIStatus) {
 			add(code("llubi"), txt(primary.LLUBIStatus))
@@ -718,8 +762,8 @@ func groupLabels(incs []*incident) []string {
 	}
 	conf := confNeedsReview
 	for _, inc := range valid {
-		if inc.Confidence == confConfirmed {
-			conf = confConfirmed
+		if confRank(inc.Confidence) > confRank(conf) {
+			conf = inc.Confidence
 		}
 	}
 	return append([]string{conf}, plats...)
@@ -809,9 +853,11 @@ func formatGroupBody(incs []*incident, key, siteURL string) string {
 			fmt.Fprintf(&b, "%s\n%s\n%s\n\n", f, excerpt, f)
 		}
 	} else {
-		if ir := clipCode(sanitizeCode(cleanIR(primary.ReducedIR)), 14000); ir != "" {
+		if ir := inlineReducedIR(primary.ReducedIR); ir != "" {
 			f := fenceFor(ir)
-			fmt.Fprintf(&b, "`%s`:\n\n%sllvm\n%s\n%s\n\n", optCommand(primary.CulpritPass), f, ir, f)
+			fmt.Fprintf(&b, "`%s`:\n\n%sllvm\n%s\n%s\n\n", reproCommand(primary), f, ir, f)
+		} else if isSafeHTTPURL(primary.BundleURL) {
+			fmt.Fprintf(&b, "Reduced IR exceeds inline limit; see `reduced.ll` in [reproducer.tar.zst](%s).\n\n", strings.TrimSpace(primary.BundleURL))
 		}
 		if diff := clipCode(sanitizeCode(strings.TrimSpace(primary.PassDiff)), 18000); diff != "" {
 			f := fenceFor(diff)
@@ -882,14 +928,23 @@ func mergedAffected(incs []*incident) []affected {
 	})
 }
 
+func boolRank(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 func pickPrimary(incs []*incident) *incident {
 	best := incs[0]
 	for _, inc := range incs[1:] {
-		if (best.Confidence != confConfirmed && inc.Confidence == confConfirmed) ||
-			(best.ReducedIR == "" && inc.ReducedIR != "") ||
-			(best.PassDiff == "" && inc.PassDiff != "") ||
-			(best.ErrorExcerpt == "" && inc.ErrorExcerpt != "") ||
-			(!isICEExcerpt(best.ErrorExcerpt) && isICEExcerpt(inc.ErrorExcerpt)) {
+		if cmp.Or(
+			cmp.Compare(confRank(inc.Confidence), confRank(best.Confidence)),
+			cmp.Compare(boolRank(isICEExcerpt(inc.ErrorExcerpt)), boolRank(isICEExcerpt(best.ErrorExcerpt))),
+			cmp.Compare(boolRank(inlineReducedIR(inc.ReducedIR) != ""), boolRank(inlineReducedIR(best.ReducedIR) != "")),
+			cmp.Compare(boolRank(inc.PassDiff != ""), boolRank(best.PassDiff != "")),
+			cmp.Compare(boolRank(inc.ErrorExcerpt != ""), boolRank(best.ErrorExcerpt != "")),
+		) > 0 {
 			best = inc
 		}
 	}
@@ -911,7 +966,7 @@ func uniquePkgs(incs []*incident) []string {
 func isBotLabel(name string, botLabels []string) bool {
 	low := strings.ToLower(strings.TrimSpace(name))
 	switch low {
-	case confConfirmed, confNeedsReview, labelBuildFail, labelCompilerICE:
+	case confConfirmed, confLikely, confNeedsReview, labelBuildFail, labelCompilerICE:
 		return true
 	}
 	if _, ok := platformSpecs[low]; ok {
@@ -994,19 +1049,23 @@ func syncLocalIncidents(cfg issueSyncCfg, incs []*incident, num int, url string,
 	return diskChanged, nil
 }
 
+func isConfLabel(name string) bool {
+	s := strings.TrimSpace(name)
+	return strings.EqualFold(s, confConfirmed) || strings.EqualFold(s, confLikely) || strings.EqualFold(s, confNeedsReview)
+}
+
 func mergeLabels(iss *ghIssue, desired []string) []string {
 	out := sortedUnique(slices.Clone(desired))
 	if iss == nil {
 		return out
 	}
-	hasConf := slices.Contains(out, confConfirmed)
-	hasReview := slices.Contains(out, confNeedsReview)
+	hasConf := slices.ContainsFunc(out, isConfLabel)
 	for _, l := range iss.Labels {
 		name := strings.TrimSpace(l.Name)
 		if name == "" {
 			continue
 		}
-		if (strings.EqualFold(name, confNeedsReview) && hasConf) || (strings.EqualFold(name, confConfirmed) && hasReview) {
+		if hasConf && isConfLabel(name) {
 			continue
 		}
 		if !slices.ContainsFunc(out, func(s string) bool { return strings.EqualFold(s, name) }) {

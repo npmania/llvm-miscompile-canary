@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestMain(m *testing.M) {
@@ -102,14 +103,36 @@ func TestPlatformAndFlags(t *testing.T) {
 	repro := generateReproScript(&incident{ID: "rv-1", GoodSHA: "aaaa", BadSHA: "bbbb", CulpritPass: "instcombine", CulpritPassIndex: 5, Affected: []affected{{Package: "lua", Platform: platLinuxRISCV64}}})
 	if !strings.Contains(repro, `"$CLANG" --target=riscv64-linux-gnu -O2 -x ir`) ||
 		!strings.Contains(repro, `"$CLANG" --target=riscv64-linux-gnu -O0 -x ir`) ||
+		!strings.Contains(repro, "if [ -s reduced.ll ]; then") ||
+		!strings.Contains(repro, `OPT="${OPT:-opt}"`) ||
+		!strings.Contains(repro, `"$OPT" -passes=instcombine -S reduced.ll -o opt_after.ll`) ||
+		!strings.Contains(repro, "if [ -s reduced_before.ll ] && [ -s reduced_after.ll ]; then") ||
+		!strings.Contains(repro, "elif [ -s before.ll ] && [ -s after.ll ]; then") ||
+		strings.Index(repro, "reduced_before.ll") >= strings.Index(repro, "elif [ -s before.ll ]") ||
 		strings.Contains(repro, "-opt-bisect-limit=5") {
 		t.Fatalf("unexpected distro-O2 repro script:\n%s", repro)
 	}
 	reproLTO := generateReproScript(&incident{ID: "rv-2", GoodSHA: "aaaa", BadSHA: "bbbb", CulpritPass: "gvn", CulpritPassIndex: 9, Affected: []affected{{Package: "zstd", Platform: platLinuxRISCV64, Profile: profReleaseLTO}}})
 	if !strings.Contains(reproLTO, `"$CLANG" --target=riscv64-linux-gnu -O3 -march=rva23u64 -x ir`) ||
 		!strings.Contains(reproLTO, `"$CLANG" --target=riscv64-linux-gnu -O0 -march=rva23u64 -x ir`) ||
+		!strings.Contains(reproLTO, `"$OPT" -passes=gvn -S reduced.ll -o opt_after.ll`) ||
 		strings.Contains(reproLTO, "-opt-bisect-limit=") {
 		t.Fatalf("unexpected release-lto repro script:\n%s", reproLTO)
+	}
+	reproCG := generateReproScript(&incident{ID: "cg-1", GoodSHA: "aaaa", BadSHA: "bbbb", CulpritPass: "X86 Atom pad short functions", IsCodeGenPass: true, Affected: []affected{{Package: "lua", Platform: platLinuxX86, Profile: profDistroO2}}})
+	if !strings.Contains(reproCG, `LLC="${LLC:-llc}"`) ||
+		!strings.Contains(reproCG, `"$LLC" -O2 reduced.ll -o bad.s`) ||
+		strings.Contains(reproCG, `"$OPT"`) {
+		t.Fatalf("unexpected codegen repro script:\n%s", reproCG)
+	}
+	reproCGLTO := generateReproScript(&incident{ID: "cg-2", GoodSHA: "aaaa", BadSHA: "bbbb", CulpritPass: "x86-isel", IsCodeGenPass: true, Affected: []affected{{Package: "zstd", Platform: platLinuxX86, Profile: profReleaseLTO}}})
+	if !strings.Contains(reproCGLTO, `"$LLC" -O3 reduced.ll -o bad.s`) {
+		t.Fatalf("unexpected codegen LTO repro script:\n%s", reproCGLTO)
+	}
+	reproFallback := generateReproScript(&incident{ID: "fb-1", GoodSHA: "aaaa", BadSHA: "bbbb", CulpritPass: "InstCombinePass", Affected: []affected{{Package: "lua", Platform: platLinuxX86, Profile: profDistroO2}}})
+	if !strings.Contains(reproFallback, `"$OPT" -O2 -S reduced.ll -o opt_after.ll`) ||
+		strings.Contains(reproFallback, "-passes=InstCombinePass") {
+		t.Fatalf("unexpected fallback opt repro script:\n%s", reproFallback)
 	}
 	id1 := buildIncidentID("zstd", platLinuxX86, profDistroO2, "t1", "11111111", "aaaaaaaa")
 	id2 := buildIncidentID("zstd", platDarwinARM, profReleaseLTO, "t1", "11111111", "aaaaaaaa")
@@ -1097,6 +1120,78 @@ func TestSweepCancelAndIncrementalFlush(t *testing.T) {
 	}
 	if fileExists(fragPath2) {
 		t.Fatal("pre-canceled cmdSweep should not create fragment file")
+	}
+}
+
+func TestICEExcerptAndDetect(t *testing.T) {
+	if !detectICE("UNREACHABLE executed at /src/llvm/lib/CodeGen/SelectionDAG.cpp:42!") {
+		t.Fatal("detectICE missed UNREACHABLE executed at")
+	}
+	if detectICE("foo.c:10:5: error: use of undeclared identifier 'x'") {
+		t.Fatal("detectICE false-positived on normal compile error")
+	}
+
+	var b strings.Builder
+	for i := range 30 {
+		fmt.Fprintf(&b, "[%d/100] Building C object src/file_%02d.c.o\n", i+1, i)
+	}
+	b.WriteString("clang: /src/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp:912: Assertion 'X && \"expected non-null\"' failed.\n")
+	b.WriteString("PLEASE submit a bug report to https://example.invalid/bugs and include the crash backtrace.\n")
+	b.WriteString("Stack dump:\n")
+	b.WriteString("0.\tProgram arguments: clang -O2 -c foo.c\n")
+	b.WriteString("3.\tRunning pass \"instcombine<no-verify-fixpoint>\" on function \"bar\"\n")
+	for i := range 70 {
+		fmt.Fprintf(&b, " #%02d 0x000055555555%04x llvm::InstCombinerImpl::visitICmpInst(llvm::ICmpInst&) frame_%02d\n", i, i, i)
+	}
+	b.WriteString("clang: error: unable to execute command: Aborted\n")
+	b.WriteString("clang: error: clang frontend command failed with exit code 134\n")
+	b.WriteString("clang version 23.0.0git\n")
+	trace := b.String()
+
+	for _, limit := range []int{4000, 1500} {
+		got := extractICEExcerpt(trace, limit)
+		if len(got) > limit {
+			t.Fatalf("extractICEExcerpt(%d) len = %d > %d", limit, len(got), limit)
+		}
+		if !strings.Contains(got, "Assertion 'X && \"expected non-null\"' failed.") {
+			t.Fatalf("extractICEExcerpt(%d) lost Assertion line:\n%s", limit, got)
+		}
+		if !strings.Contains(got, "Running pass \"instcombine") {
+			t.Fatalf("extractICEExcerpt(%d) lost Running pass line:\n%s", limit, got)
+		}
+		if !strings.Contains(got, "\n...\n") {
+			t.Fatalf("extractICEExcerpt(%d) missing ellipsis separator:\n%s", limit, got)
+		}
+		if !strings.Contains(got, "clang frontend command failed with exit code 134") {
+			t.Fatalf("extractICEExcerpt(%d) lost tail summary:\n%s", limit, got)
+		}
+		if strings.Contains(got, "[1/100] Building C object") {
+			t.Fatalf("extractICEExcerpt(%d) kept pre-crash build noise:\n%s", limit, got)
+		}
+	}
+
+	unreach := "build noise\nUNREACHABLE executed at /src/llvm/lib/IR/Verifier.cpp:88!\nstack frame 0\n"
+	if got := extractICEExcerpt(unreach, 4000); !strings.HasPrefix(got, "UNREACHABLE executed at /src/llvm/lib/IR/Verifier.cpp:88!") {
+		t.Fatalf("extractICEExcerpt(UNREACHABLE) = %q", got)
+	}
+	plain := "line1\nline2\nnormal error\n"
+	if got := extractICEExcerpt(plain, 12); got != tailText(plain, 12) {
+		t.Fatalf("extractICEExcerpt(plain) = %q, want %q", got, tailText(plain, 12))
+	}
+
+	for lim := 8; lim <= 20; lim++ {
+		got := extractICEExcerpt(trace, lim)
+		if len(got) > lim || !utf8.ValidString(got) || strings.HasPrefix(got, "\n...\n") || strings.HasSuffix(got, "\n...\n") {
+			t.Fatalf("extractICEExcerpt(trace, %d) = %q (len=%d)", lim, got, len(got))
+		}
+	}
+
+	utf8Trace := "Assertion 'x' failed: " + strings.Repeat("α", 200)
+	for _, lim := range []int{9, 10, 15, 25, 40, 73, 100} {
+		got := extractICEExcerpt(utf8Trace, lim)
+		if len(got) > lim || !utf8.ValidString(got) || strings.HasPrefix(got, "\n...\n") || strings.HasSuffix(got, "\n...\n") {
+			t.Fatalf("extractICEExcerpt(utf8, %d) = %q (len=%d valid=%v)", lim, got, len(got), utf8.ValidString(got))
+		}
 	}
 }
 

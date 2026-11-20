@@ -458,6 +458,63 @@ type regressionTarget struct {
 	FailedTests []string `json:"failed_tests,omitempty"`
 }
 
+func cmpDuration(a, b float64) int {
+	aPos, bPos := a > 0, b > 0
+	if aPos != bPos {
+		if aPos {
+			return -1
+		}
+		return 1
+	}
+	if !aPos {
+		return 0
+	}
+	return cmp.Compare(a, b)
+}
+
+func regPlatRank(plat string) int {
+	switch plat {
+	case platLinuxX86:
+		return 0
+	case platLinuxARM64:
+		return 1
+	case platDarwinARM:
+		return 2
+	case platLinuxRISCV64:
+		return 3
+	default:
+		return 4
+	}
+}
+
+func regProfRank(prof string) int {
+	switch prof {
+	case profDistroO2:
+		return 0
+	case profReleaseLTO:
+		return 1
+	default:
+		return 2
+	}
+}
+
+type regCandidate struct {
+	res     pkgResult
+	goodSHA string
+}
+
+func cmpRegCandidate(a, b regCandidate) int {
+	return cmp.Or(
+		cmp.Compare(boolRank(b.goodSHA != ""), boolRank(a.goodSHA != "")),
+		cmpDuration(a.res.DurationSec, b.res.DurationSec),
+		cmp.Compare(regPlatRank(a.res.Platform), regPlatRank(b.res.Platform)),
+		cmp.Compare(regProfRank(a.res.Profile), regProfRank(b.res.Profile)),
+		cmp.Compare(a.res.Package, b.res.Package),
+		cmp.Compare(a.res.Platform, b.res.Platform),
+		cmp.Compare(a.res.Profile, b.res.Profile),
+	)
+}
+
 func capRegressions(regs []regressionTarget, maxCount, maxBytes int) []regressionTarget {
 	if maxCount > 0 && len(regs) > maxCount {
 		regs = regs[:maxCount]
@@ -534,7 +591,7 @@ func cmdAggregate(args []string, stdout, stderr io.Writer) error {
 	}
 
 	const (
-		maxRegressionTargets = 64
+		maxRegressionTargets = 8
 		maxRegressionsBytes  = 60000
 	)
 	openCovered := make(map[string]bool)
@@ -575,7 +632,7 @@ func cmdAggregate(args []string, stdout, stderr io.Writer) error {
 		return openCovered[k] || closedGoods[k][curGood]
 	}
 
-	regs := make([]regressionTarget, 0)
+	bestRegByPkg := make(map[string]regCandidate)
 	buildFailsByPkg := make(map[string][]pkgResult)
 	var buildFailPkgs []string
 	for _, r := range results {
@@ -585,14 +642,10 @@ func cmdAggregate(args []string, stdout, stderr io.Writer) error {
 			if isCovered(r.Package, r.Platform, r.Profile, goodSHA) {
 				continue
 			}
-			var failed []string
-			if len(r.FailedTests) > 0 {
-				failed = r.FailedTests[:1]
+			cand := regCandidate{res: r, goodSHA: goodSHA}
+			if prev, ok := bestRegByPkg[r.Package]; !ok || cmpRegCandidate(cand, prev) < 0 {
+				bestRegByPkg[r.Package] = cand
 			}
-			regs = append(regs, regressionTarget{
-				Package: r.Package, Platform: r.Platform, Profile: r.Profile,
-				GoodSHA: goodSHA, BadSHA: *sha, FailedTests: failed,
-			})
 		case statusBuildFail:
 			goodSHA := st.targetGoodSHA(r.Package, r.Platform, r.Profile)
 			if goodSHA == "" || isCovered(r.Package, r.Platform, r.Profile, goodSHA) {
@@ -603,6 +656,22 @@ func cmdAggregate(args []string, stdout, stderr io.Writer) error {
 			}
 			buildFailsByPkg[r.Package] = append(buildFailsByPkg[r.Package], r)
 		}
+	}
+	regCands := make([]regCandidate, 0, len(bestRegByPkg))
+	for _, c := range bestRegByPkg {
+		regCands = append(regCands, c)
+	}
+	slices.SortFunc(regCands, cmpRegCandidate)
+	regs := make([]regressionTarget, 0, len(regCands))
+	for _, c := range regCands {
+		var failed []string
+		if len(c.res.FailedTests) > 0 {
+			failed = c.res.FailedTests[:1]
+		}
+		regs = append(regs, regressionTarget{
+			Package: c.res.Package, Platform: c.res.Platform, Profile: c.res.Profile,
+			GoodSHA: c.goodSHA, BadSHA: *sha, FailedTests: failed,
+		})
 	}
 	regs = capRegressions(regs, maxRegressionTargets, maxRegressionsBytes)
 
