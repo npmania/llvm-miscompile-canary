@@ -238,6 +238,7 @@ func hostToolchainOrSkip(t *testing.T) (platformSpec, *toolchain) {
 }
 
 func TestObjectAndPassBisect(t *testing.T) {
+	t.Parallel()
 	spec, goodTC := hostToolchainOrSkip(t)
 	const triggerPass = 12
 	badTC := *goodTC
@@ -252,6 +253,7 @@ func TestObjectAndPassBisect(t *testing.T) {
 			name = "archive"
 		}
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			goodB, _, _ := buildMultiTU(t, spec, profDistroO2, goodTC, srcDir, t.TempDir(), useArchive)
 			badB, badM, app := buildMultiTU(t, spec, profDistroO2, &badTC, srcDir, t.TempDir(), useArchive)
@@ -285,6 +287,7 @@ func TestObjectAndPassBisect(t *testing.T) {
 }
 
 func TestThinLTOModuleBisect(t *testing.T) {
+	t.Parallel()
 	spec, goodTC := hostToolchainOrSkip(t)
 	badTC := *goodTC
 	badTC.Clang = makeBadClang(t, t.TempDir(), "bad-clang-lto", goodTC.Clang, 10)
@@ -298,6 +301,7 @@ func TestThinLTOModuleBisect(t *testing.T) {
 			name = "archive"
 		}
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			goodB, _, _ := buildMultiTU(t, spec, profReleaseLTO, goodTC, srcDir, t.TempDir(), useArchive)
 			badB, badM, app := buildMultiTU(t, spec, profReleaseLTO, &badTC, srcDir, t.TempDir(), useArchive)
@@ -333,6 +337,7 @@ func TestThinLTOModuleBisect(t *testing.T) {
 }
 
 func TestMultiBinarySetLinkUsesGoodTC(t *testing.T) {
+	t.Parallel()
 	spec, goodTC := hostToolchainOrSkip(t)
 	tmp := t.TempDir()
 	selfExe, err := os.Executable()
@@ -439,6 +444,7 @@ exec %s "$@"
 }
 
 func TestCommitBisect(t *testing.T) {
+	t.Parallel()
 	repo := filepath.Join(t.TempDir(), "llvm")
 	if err := os.MkdirAll(repo, 0o755); err != nil {
 		t.Fatal(err)
@@ -469,7 +475,7 @@ func TestCommitBisect(t *testing.T) {
 		runGit("add", "v.txt")
 		subj := fmt.Sprintf("[Transforms] Commit %d", i)
 		if i == 6 {
-			subj = "[GVN] Aggressive load coercion"
+			subj = "[GVN] Aggressive load coercion (#249999) by @maintainer fixes llvm/llvm-project#240001"
 		}
 		runGit("commit", "-m", subj)
 		shas = append(shas, runGit("rev-parse", "HEAD"))
@@ -492,11 +498,77 @@ func TestCommitBisect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bisectCommit: %v", err)
 	}
-	if sha != shas[6] || subj != "[GVN] Aggressive load coercion" {
-		t.Fatalf("got (%s, %q), want (%s, [GVN] Aggressive load coercion)", sha, subj, shas[6])
+	if sha != shas[6] || subj != "[GVN] Aggressive load coercion (#249999) by @maintainer fixes llvm/llvm-project#240001" {
+		t.Fatalf("got (%s, %q), want shas[6]", sha, subj)
 	}
 	if out := runGit("worktree", "list"); strings.Contains(out, "llvm-project") {
 		t.Fatalf("worktree leaked:\n%s", out)
+	}
+
+	objRes := &objectBisectResult{Culprit: &compiledObj{BadObj: "culprit.o"}}
+	baseOpts := triageOpts{
+		LLVMSrcDir: repo, GoodSHA: shas[0], BadSHA: shas[9],
+		buildClang: func(_ context.Context, wt, _, _ string) (string, error) {
+			raw, err := os.ReadFile(filepath.Join(wt, "v.txt"))
+			if err != nil || strings.HasPrefix(string(raw), "BROKEN_BUILD") {
+				return "", errors.New("broken build")
+			}
+			return filepath.Join(wt, "v.txt"), nil
+		},
+		testClang: func(_ context.Context, marker, _ string) (bool, string, error) {
+			raw, err := os.ReadFile(marker)
+			return strings.HasPrefix(string(raw), "GOOD"), "", err
+		},
+	}
+
+	gotSHA, gotSubj, gotCommitErr, gotErr := runTriageCommitBisect(context.Background(), baseOpts, t.TempDir(), objRes)
+	if gotErr != nil || gotCommitErr != "" || gotSHA != shas[6] || checkNoCrossRefs(gotSubj) != nil || !strings.Contains(gotSubj, "Aggressive load coercion") {
+		t.Fatalf("runTriageCommitBisect ok: sha=%s subj=%q commitErr=%q err=%v", gotSHA, gotSubj, gotCommitErr, gotErr)
+	}
+
+	errOpts := baseOpts
+	errOpts.buildClang = func(context.Context, string, string, string) (string, error) {
+		return "", errors.New("boom")
+	}
+	gotSHA, _, gotCommitErr, gotErr = runTriageCommitBisect(context.Background(), errOpts, t.TempDir(), objRes)
+	if gotErr != nil || gotSHA != "" || gotCommitErr == "" {
+		t.Fatalf("runTriageCommitBisect error: sha=%q commitErr=%q err=%v", gotSHA, gotCommitErr, gotErr)
+	}
+
+	toOpts := baseOpts
+	toOpts.CommitTimeout = 150 * time.Millisecond
+	toOpts.buildClang = func(ctx context.Context, _, _, _ string) (string, error) {
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	gotSHA, _, gotCommitErr, gotErr = runTriageCommitBisect(context.Background(), toOpts, t.TempDir(), objRes)
+	if gotErr != nil || gotSHA != "" || !strings.Contains(gotCommitErr, "deadline exceeded") {
+		t.Fatalf("runTriageCommitBisect timeout: sha=%q commitErr=%q err=%v", gotSHA, gotCommitErr, gotErr)
+	}
+
+	tightCtx, cancelTight := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancelTight()
+	called := false
+	skipOpts := baseOpts
+	skipOpts.buildClang = func(context.Context, string, string, string) (string, error) {
+		called = true
+		return "", nil
+	}
+	gotSHA, _, gotCommitErr, gotErr = runTriageCommitBisect(tightCtx, skipOpts, t.TempDir(), objRes)
+	if gotErr != nil || called || gotSHA != "" || !strings.Contains(gotCommitErr, "skipped:") {
+		t.Fatalf("runTriageCommitBisect tight deadline: called=%v sha=%q commitErr=%q err=%v", called, gotSHA, gotCommitErr, gotErr)
+	}
+
+	parentCtx, cancelParent := context.WithCancel(context.Background())
+	defer cancelParent()
+	cancelOpts := baseOpts
+	cancelOpts.buildClang = func(context.Context, string, string, string) (string, error) {
+		cancelParent()
+		return "", context.Canceled
+	}
+	_, _, _, gotErr = runTriageCommitBisect(parentCtx, cancelOpts, t.TempDir(), objRes)
+	if !errors.Is(gotErr, context.Canceled) {
+		t.Fatalf("runTriageCommitBisect parent cancel: err=%v, want context.Canceled", gotErr)
 	}
 
 	ctxCancelBuild, cancelBuild := context.WithCancel(context.Background())
@@ -814,6 +886,7 @@ exit 0`)
 }
 
 func TestReduceCheck(t *testing.T) {
+	t.Parallel()
 	spec, tc := hostToolchainOrSkip(t)
 	tmp := t.TempDir()
 	goodIR := filepath.Join(tmp, "cand.ll")
@@ -1564,6 +1637,7 @@ func makeTestRecipe(t *testing.T, root, name, tarPath, sha string) *recipe {
 }
 
 func TestTriageDrops(t *testing.T) {
+	t.Parallel()
 	spec, goodTC := hostToolchainOrSkip(t)
 	selfExe, err := os.Executable()
 	if err != nil {
@@ -1571,6 +1645,7 @@ func TestTriageDrops(t *testing.T) {
 	}
 
 	t.Run("flaky", func(t *testing.T) {
+		t.Parallel()
 		tmp := t.TempDir()
 		tarPath := filepath.Join(tmp, "flaky.tar.gz")
 		counter := filepath.Join(tmp, "counter")
@@ -1596,6 +1671,7 @@ func TestTriageDrops(t *testing.T) {
 	}
 
 	t.Run("upstream-ub-and-clang-rt-fallback", func(t *testing.T) {
+		t.Parallel()
 		tmp := t.TempDir()
 		tarPath := filepath.Join(tmp, "ub.tar.gz")
 		rec := makeTestRecipe(t, filepath.Join(tmp, "corpus"), "ubpkg", tarPath, makeTarGz(t, tarPath, ubFiles))
@@ -1669,6 +1745,7 @@ func TestTriageDrops(t *testing.T) {
 	}
 
 	t.Run("bad-tc-asan-segv-not-dropped", func(t *testing.T) {
+		t.Parallel()
 		tmp := t.TempDir()
 		tarPath := filepath.Join(tmp, "clean.tar.gz")
 		rec := makeTestRecipe(t, filepath.Join(tmp, "corpus"), "cleansegv", tarPath, makeTarGz(t, tarPath, cleanFiles))
@@ -1697,6 +1774,7 @@ func TestTriageDrops(t *testing.T) {
 	})
 
 	t.Run("san-test-non-sanitizer-fail", func(t *testing.T) {
+		t.Parallel()
 		tmp := t.TempDir()
 		tarPath := filepath.Join(tmp, "clean.tar.gz")
 		rec := makeTestRecipe(t, filepath.Join(tmp, "corpus"), "sanfail", tarPath, makeTarGz(t, tarPath, cleanFiles))
@@ -1735,6 +1813,7 @@ func TestTriageDrops(t *testing.T) {
 }
 
 func TestTriagePipeline(t *testing.T) {
+	t.Parallel()
 	spec, goodTC := hostToolchainOrSkip(t)
 	if _, err := exec.LookPath("zstd"); err != nil {
 		t.Skip("zstd unavailable")
@@ -1873,254 +1952,82 @@ exec %s "$@"
 		commits = append(commits, runGit("rev-parse", "HEAD"))
 	}
 
-	res, err := triage(context.Background(), triageOpts{
-		Runner:        &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2},
-		Recipe:        rec,
-		Spec:          spec,
-		Profile:       profDistroO2,
-		GoodTC:        goodTC,
-		BadTC:         &badTC,
-		GoodSHA:       commits[0],
-		BadSHA:        commits[4],
-		WorkDir:       filepath.Join(tmp, "work"),
-		BundleDir:     filepath.Join(tmp, "bundles"),
-		BundleBaseURL: "https://github.com/npmania/llvm-miscompile-canary/releases/download/incidents",
-		LLVMSrcDir:    llvmRepo,
-		ReduceMaxIter: 1,
-		ReduceTimeout: 20 * time.Second,
-		buildClang: func(_ context.Context, wt, _, _ string) (string, error) {
-			raw, _ := os.ReadFile(filepath.Join(wt, "rev.txt"))
-			if strings.HasPrefix(string(raw), "BAD") {
-				return badClang, nil
-			}
-			return goodTC.Clang, nil
-		},
-	})
-	if err != nil || res.Dropped || res.Incident == nil {
-		t.Fatalf("triage: res=%+v err=%v", res, err)
-	}
-	inc := res.Incident
-	wantConf := confLikely
-	if inc.AliveTVStatus == aliveMiscompile {
-		wantConf = confConfirmed
-	} else if inc.AliveTVStatus == aliveVerified {
-		wantConf = confNeedsReview
-	}
-	if inc.Confidence != wantConf || !inc.ASanUBSanClean || !inc.ConservativeFlagIndependent || inc.DiagO0Status != "pass" {
-		t.Fatalf("unexpected confidence/ub flags: %+v (want conf=%q)", inc, wantConf)
-	}
-	if inc.CulpritTU != "culprit.c" || inc.CulpritPassIndex != bugPass || inc.CulpritSHA != commits[3] {
-		t.Fatalf("culprit mismatch: tu=%q pass=%d sha=%s", inc.CulpritTU, inc.CulpritPassIndex, inc.CulpritSHA)
-	}
-	if err := checkNoCrossRefs(inc.CulpritSubject); err != nil {
-		t.Fatalf("CulpritSubject cross-ref: %v", err)
-	}
-	if err := checkNoCrossRefs(inc.Title); err != nil {
-		t.Fatalf("Title cross-ref: %v", err)
-	}
-	if !strings.Contains(inc.ReducedIR, "@compute_kernel") {
-		t.Fatalf("unexpected ReducedIR:\n%s", inc.ReducedIR)
-	}
-
-	dec, err := exec.Command("zstd", "-d", "-c", res.BundlePath).Output()
-	if err != nil {
-		t.Fatalf("zstd -d: %v", err)
-	}
-	tr := tar.NewReader(bytes.NewReader(dec))
-	seen := make(map[string]int64)
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			break
+	t.Run("full-pipeline", func(t *testing.T) {
+		t.Parallel()
+		res, err := triage(context.Background(), triageOpts{
+			Runner:        &runner{CacheDir: filepath.Join(tmp, "cache-main"), LMCBin: selfExe, Jobs: 2},
+			Recipe:        rec,
+			Spec:          spec,
+			Profile:       profDistroO2,
+			GoodTC:        goodTC,
+			BadTC:         &badTC,
+			GoodSHA:       commits[0],
+			BadSHA:        commits[4],
+			WorkDir:       filepath.Join(tmp, "work-main"),
+			BundleDir:     filepath.Join(tmp, "bundles-main"),
+			BundleBaseURL: "https://github.com/npmania/llvm-miscompile-canary/releases/download/incidents",
+			LLVMSrcDir:    llvmRepo,
+			ReduceMaxIter: 1,
+			ReduceTimeout: 20 * time.Second,
+			buildClang: func(_ context.Context, wt, _, _ string) (string, error) {
+				raw, _ := os.ReadFile(filepath.Join(wt, "rev.txt"))
+				if strings.HasPrefix(string(raw), "BAD") {
+					return badClang, nil
+				}
+				return goodTC.Clang, nil
+			},
+		})
+		if err != nil || res.Dropped || res.Incident == nil {
+			t.Fatalf("triage: res=%+v err=%v", res, err)
 		}
+		inc := res.Incident
+		wantConf := confLikely
+		if inc.AliveTVStatus == aliveMiscompile {
+			wantConf = confConfirmed
+		} else if inc.AliveTVStatus == aliveVerified {
+			wantConf = confNeedsReview
+		}
+		if inc.Confidence != wantConf || !inc.ASanUBSanClean || !inc.ConservativeFlagIndependent || inc.DiagO0Status != "pass" {
+			t.Fatalf("unexpected confidence/ub flags: %+v (want conf=%q)", inc, wantConf)
+		}
+		if inc.CulpritTU != "culprit.c" || inc.CulpritPassIndex != bugPass || inc.CulpritSHA != commits[3] {
+			t.Fatalf("culprit mismatch: tu=%q pass=%d sha=%s", inc.CulpritTU, inc.CulpritPassIndex, inc.CulpritSHA)
+		}
+		if err := checkNoCrossRefs(inc.CulpritSubject); err != nil {
+			t.Fatalf("CulpritSubject cross-ref: %v", err)
+		}
+		if err := checkNoCrossRefs(inc.Title); err != nil {
+			t.Fatalf("Title cross-ref: %v", err)
+		}
+		if !strings.Contains(inc.ReducedIR, "@compute_kernel") {
+			t.Fatalf("unexpected ReducedIR:\n%s", inc.ReducedIR)
+		}
+
+		dec, err := exec.Command("zstd", "-d", "-c", res.BundlePath).Output()
 		if err != nil {
-			t.Fatalf("tar: %v", err)
+			t.Fatalf("zstd -d: %v", err)
 		}
-		seen[filepath.Base(hdr.Name)] = hdr.Size
-	}
-	for _, f := range []string{"repro.sh", "standalone_tu.c", "before.ll", "after.ll", "reduced.ll", "summary.json"} {
-		if seen[f] == 0 {
-			t.Errorf("bundle missing or empty %q (seen=%v)", f, seen)
+		tr := tar.NewReader(bytes.NewReader(dec))
+		seen := make(map[string]int64)
+		for {
+			hdr, err := tr.Next()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatalf("tar: %v", err)
+			}
+			seen[filepath.Base(hdr.Name)] = hdr.Size
 		}
-	}
-
-	noRedBadTC := badTC
-	noRedBadTC.LLVMReduce, noRedBadTC.AliveTV, noRedBadTC.LLUBI = "", "", ""
-
-	t.Run("llubi-mismatch-not-confirmed", func(t *testing.T) {
-		mockLLUBI := filepath.Join(tmp, "mock-llubi")
-		if err := os.WriteFile(mockLLUBI, []byte("#!/bin/sh\nlast=\"\"\nfor a in \"$@\"; do last=\"$a\"; done\nif grep -q '999' \"$last\"; then exit 1; fi\nexit 0\n"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		tc := noRedBadTC
-		tc.LLUBI = mockLLUBI
-		r, err := triage(context.Background(), triageOpts{
-			Runner:        &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2},
-			Recipe:        rec,
-			Spec:          spec,
-			Profile:       profDistroO2,
-			GoodTC:        goodTC,
-			BadTC:         &tc,
-			GoodSHA:       commits[0],
-			BadSHA:        commits[4],
-			WorkDir:       filepath.Join(tmp, "work-llubi-likely"),
-			BundleDir:     filepath.Join(tmp, "bundles-llubi-likely"),
-			ReduceMaxIter: 1,
-			ReduceTimeout: 20 * time.Second,
-		})
-		if err != nil || r == nil || r.Dropped || r.Incident == nil {
-			t.Fatalf("got r=%+v err=%v", r, err)
-		}
-		if r.Incident.LLUBIStatus != llubiMismatch || r.Incident.Confidence != confLikely {
-			t.Fatalf("expected llubi mismatch -> confLikely, got status=%q conf=%q", r.Incident.LLUBIStatus, r.Incident.Confidence)
-		}
-	})
-
-	t.Run("alive-verified-downgrades-likely", func(t *testing.T) {
-		mockAlive := filepath.Join(tmp, "mock-alive-verified")
-		if err := os.WriteFile(mockAlive, []byte("#!/bin/sh\necho \"Transformation seems to be correct!\"\nexit 0\n"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		tc := noRedBadTC
-		tc.AliveTV = mockAlive
-		r, err := triage(context.Background(), triageOpts{
-			Runner:        &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2},
-			Recipe:        rec,
-			Spec:          spec,
-			Profile:       profDistroO2,
-			GoodTC:        goodTC,
-			BadTC:         &tc,
-			GoodSHA:       commits[0],
-			BadSHA:        commits[4],
-			WorkDir:       filepath.Join(tmp, "work-alive-ver"),
-			BundleDir:     filepath.Join(tmp, "bundles-alive-ver"),
-			ReduceMaxIter: 1,
-			ReduceTimeout: 20 * time.Second,
-		})
-		if err != nil || r == nil || r.Dropped || r.Incident == nil {
-			t.Fatalf("got r=%+v err=%v", r, err)
-		}
-		if r.Incident.AliveTVStatus != aliveVerified || r.Incident.Confidence != confNeedsReview ||
-			!r.Incident.ASanUBSanClean || !r.Incident.ConservativeFlagIndependent || r.Incident.DiagO0Status != "pass" {
-			t.Fatalf("expected alive-tv verified -> confNeedsReview, got %+v", r.Incident)
-		}
-	})
-
-	t.Run("commit-bisect-error-best-effort", func(t *testing.T) {
-		r, err := triage(context.Background(), triageOpts{
-			Runner:        &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2},
-			Recipe:        rec,
-			Spec:          spec,
-			Profile:       profDistroO2,
-			GoodTC:        goodTC,
-			BadTC:         &noRedBadTC,
-			GoodSHA:       commits[0],
-			BadSHA:        commits[4],
-			WorkDir:       filepath.Join(tmp, "work-cb-err"),
-			BundleDir:     filepath.Join(tmp, "bundles-cb-err"),
-			LLVMSrcDir:    llvmRepo,
-			ReduceMaxIter: 1,
-			ReduceTimeout: 20 * time.Second,
-			buildClang: func(context.Context, string, string, string) (string, error) {
-				return "", errors.New("boom")
-			},
-		})
-		if err != nil || r == nil || r.Dropped || r.Incident == nil {
-			t.Fatalf("got r=%+v err=%v", r, err)
-		}
-		if r.CommitBisectErr == "" || r.Incident.CulpritSHA != "" || !strings.Contains(r.Incident.ReducedIR, "@compute_kernel") || !fileNonEmpty(r.BundlePath) {
-			t.Fatalf("unexpected best-effort result: err=%q sha=%q bundle=%q ir=%q", r.CommitBisectErr, r.Incident.CulpritSHA, r.BundlePath, r.Incident.ReducedIR)
-		}
-	})
-
-	t.Run("commit-bisect-timeout-best-effort", func(t *testing.T) {
-		r, err := triage(context.Background(), triageOpts{
-			Runner:        &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2},
-			Recipe:        rec,
-			Spec:          spec,
-			Profile:       profDistroO2,
-			GoodTC:        goodTC,
-			BadTC:         &noRedBadTC,
-			GoodSHA:       commits[0],
-			BadSHA:        commits[4],
-			WorkDir:       filepath.Join(tmp, "work-cb-timeout"),
-			BundleDir:     filepath.Join(tmp, "bundles-cb-timeout"),
-			LLVMSrcDir:    llvmRepo,
-			ReduceMaxIter: 1,
-			ReduceTimeout: 20 * time.Second,
-			CommitTimeout: 150 * time.Millisecond,
-			buildClang: func(ctx context.Context, _, _, _ string) (string, error) {
-				<-ctx.Done()
-				return "", ctx.Err()
-			},
-		})
-		if err != nil || r == nil || r.Dropped || r.Incident == nil {
-			t.Fatalf("got r=%+v err=%v", r, err)
-		}
-		if !strings.Contains(r.CommitBisectErr, "deadline exceeded") || r.Incident.CulpritSHA != "" || !strings.Contains(r.Incident.ReducedIR, "@compute_kernel") || !fileNonEmpty(r.BundlePath) {
-			t.Fatalf("unexpected timeout result: err=%q sha=%q bundle=%q", r.CommitBisectErr, r.Incident.CulpritSHA, r.BundlePath)
-		}
-	})
-
-	t.Run("commit-bisect-skip-on-tight-deadline", func(t *testing.T) {
-		tightCtx, cancelTight := context.WithTimeout(context.Background(), 4*time.Minute)
-		defer cancelTight()
-		called := false
-		r, err := triage(tightCtx, triageOpts{
-			Runner:        &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2},
-			Recipe:        rec,
-			Spec:          spec,
-			Profile:       profDistroO2,
-			GoodTC:        goodTC,
-			BadTC:         &noRedBadTC,
-			GoodSHA:       commits[0],
-			BadSHA:        commits[4],
-			WorkDir:       filepath.Join(tmp, "work-cb-skip"),
-			BundleDir:     filepath.Join(tmp, "bundles-cb-skip"),
-			LLVMSrcDir:    llvmRepo,
-			ReduceMaxIter: 1,
-			ReduceTimeout: 20 * time.Second,
-			buildClang: func(context.Context, string, string, string) (string, error) {
-				called = true
-				return badClang, nil
-			},
-		})
-		if err != nil || r == nil || r.Dropped || r.Incident == nil {
-			t.Fatalf("got r=%+v err=%v", r, err)
-		}
-		if called || r.CommitBisectErr == "" || r.Incident.CulpritSHA != "" || !fileNonEmpty(r.BundlePath) {
-			t.Fatalf("unexpected skip result: called=%v err=%q sha=%q bundle=%q", called, r.CommitBisectErr, r.Incident.CulpritSHA, r.BundlePath)
-		}
-	})
-
-	t.Run("parent-cancel-propagates", func(t *testing.T) {
-		parentCtx, cancelParent := context.WithCancel(context.Background())
-		defer cancelParent()
-		_, err := triage(parentCtx, triageOpts{
-			Runner:        &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2},
-			Recipe:        rec,
-			Spec:          spec,
-			Profile:       profDistroO2,
-			GoodTC:        goodTC,
-			BadTC:         &noRedBadTC,
-			GoodSHA:       commits[0],
-			BadSHA:        commits[4],
-			WorkDir:       filepath.Join(tmp, "work-cb-cancel"),
-			BundleDir:     filepath.Join(tmp, "bundles-cb-cancel"),
-			LLVMSrcDir:    llvmRepo,
-			ReduceMaxIter: 1,
-			ReduceTimeout: 20 * time.Second,
-			buildClang: func(context.Context, string, string, string) (string, error) {
-				cancelParent()
-				return "", context.Canceled
-			},
-		})
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("got err=%v, want context.Canceled", err)
+		for _, f := range []string{"repro.sh", "standalone_tu.c", "before.ll", "after.ll", "reduced.ll", "summary.json"} {
+			if seen[f] == 0 {
+				t.Errorf("bundle missing or empty %q (seen=%v)", f, seen)
+			}
 		}
 	})
 
 	t.Run("cmd-triage-timeout-flags", func(t *testing.T) {
+		t.Parallel()
 		writeExec := func(dir, name, target string) {
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				t.Fatal(err)
@@ -2153,7 +2060,7 @@ exec %s "$@"
 			"-bad", commits[4],
 			"-llvm", llvmRepo,
 			"-dir", filepath.Join(tmp, "work-cli"),
-			"-cache", filepath.Join(tmp, "cache"),
+			"-cache", filepath.Join(tmp, "cache-cli"),
 			"-bundle", filepath.Join(tmp, "bundles-cli"),
 			"-out", outJSON,
 			"-timeout", "4m",
@@ -2177,6 +2084,7 @@ exec %s "$@"
 }
 
 func TestTriageContextCancel(t *testing.T) {
+	t.Parallel()
 	spec, tc := hostToolchainOrSkip(t)
 	selfExe, err := os.Executable()
 	if err != nil {
@@ -2205,6 +2113,7 @@ func TestTriageContextCancel(t *testing.T) {
 	}
 
 	t.Run("bad-build-deadline", func(t *testing.T) {
+		t.Parallel()
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		defer cancel()
 		rec := makeRec("bad-hang", "sleep 10", "exit 1")
@@ -2218,6 +2127,7 @@ func TestTriageContextCancel(t *testing.T) {
 	})
 
 	t.Run("good-test-cancel", func(t *testing.T) {
+		t.Parallel()
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		marker := filepath.Join(tmp, "in-good-test")

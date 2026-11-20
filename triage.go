@@ -340,50 +340,9 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 
 	asanUBSanClean, conf := classifyConfidence(o.Spec, sanPassed, consIndep, diagO0, aliveRes)
 
-	var culpritSHA, culpritSubj, commitErr string
-	if strings.TrimSpace(o.LLVMSrcDir) != "" && o.GoodSHA != "" && o.BadSHA != "" {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if commitDur, ok := commitBisectBudget(ctx, o.CommitTimeout); !ok {
-			dl, _ := ctx.Deadline()
-			commitErr = fmt.Sprintf("skipped: insufficient remaining time (%s) before triage deadline", max(0, time.Until(dl)).Round(time.Second))
-		} else {
-			commitCtx, cancel := context.WithTimeout(ctx, commitDur)
-			cObj := *objRes.Culprit
-			if len(cObj.Args) > 0 && cObj.GoodImportBC != "" && o.testClang == nil {
-				probeObj := filepath.Join(absWork, "commit-probe-src.o")
-				repro := false
-				if compileSingleTUWithClang(commitCtx, o.BadTC.Clang, o.Spec, o.BadTC.SDKRoot, &cObj, probeObj) == nil {
-					if pass, _, err := objRes.relinkSingle(commitCtx, probeObj); err == nil && !pass {
-						repro = true
-					}
-				}
-				if !repro {
-					// source compile cannot relink or reproduce against ThinLTO peers, bisect from GoodImportBC
-					cObj.Args = nil
-				}
-			}
-			var sha, subj string
-			err := commitCtx.Err()
-			if err == nil {
-				sha, subj, err = bisectCommit(commitCtx, commitBisectOpts{
-					LLVMSrcDir: o.LLVMSrcDir, GoodSHA: o.GoodSHA, BadSHA: o.BadSHA,
-					WorkDir: filepath.Join(absWork, "commit-bisect"), Spec: o.Spec, Jobs: o.Jobs,
-					Culprit: &cObj, SDKRoot: o.BadTC.SDKRoot, RelinkAndTest: objRes.relinkSingle,
-					buildClang: o.buildClang, testClang: o.testClang,
-				})
-			}
-			cancel()
-			if err != nil {
-				if ctx.Err() != nil {
-					return nil, ctx.Err()
-				}
-				commitErr = err.Error()
-			} else {
-				culpritSHA, culpritSubj = sha, sanitizeText(subj)
-			}
-		}
+	culpritSHA, culpritSubj, commitErr, err := runTriageCommitBisect(ctx, o, absWork, objRes)
+	if err != nil {
+		return nil, err
 	}
 
 	now := time.Now().UTC()
@@ -431,6 +390,59 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 		}
 	}
 	return &triageResult{Incident: inc, BundlePath: bundlePath, CommitBisectErr: commitErr}, nil
+}
+
+func runTriageCommitBisect(ctx context.Context, o triageOpts, absWork string, objRes *objectBisectResult) (culpritSHA, culpritSubj, commitErr string, err error) {
+	if strings.TrimSpace(o.LLVMSrcDir) == "" || o.GoodSHA == "" || o.BadSHA == "" || objRes == nil || objRes.Culprit == nil {
+		return "", "", "", nil
+	}
+	if err := ctx.Err(); err != nil {
+		return "", "", "", err
+	}
+	commitDur, ok := commitBisectBudget(ctx, o.CommitTimeout)
+	if !ok {
+		dl, _ := ctx.Deadline()
+		return "", "", fmt.Sprintf("skipped: insufficient remaining time (%s) before triage deadline", max(0, time.Until(dl)).Round(time.Second)), nil
+	}
+	commitCtx, cancel := context.WithTimeout(ctx, commitDur)
+	defer cancel()
+	cObj := *objRes.Culprit
+	if len(cObj.Args) > 0 && cObj.GoodImportBC != "" && o.testClang == nil && o.BadTC != nil {
+		probeObj := filepath.Join(absWork, "commit-probe-src.o")
+		repro := false
+		if compileSingleTUWithClang(commitCtx, o.BadTC.Clang, o.Spec, o.BadTC.SDKRoot, &cObj, probeObj) == nil {
+			if pass, _, err := objRes.relinkSingle(commitCtx, probeObj); err == nil && !pass {
+				repro = true
+			}
+		}
+		if !repro {
+			// source compile cannot relink or reproduce against ThinLTO peers, bisect from GoodImportBC
+			cObj.Args = nil
+		}
+	}
+	if err := commitCtx.Err(); err != nil {
+		if ctx.Err() != nil {
+			return "", "", "", ctx.Err()
+		}
+		return "", "", err.Error(), nil
+	}
+	var sdkRoot string
+	if o.BadTC != nil {
+		sdkRoot = o.BadTC.SDKRoot
+	}
+	sha, subj, err := bisectCommit(commitCtx, commitBisectOpts{
+		LLVMSrcDir: o.LLVMSrcDir, GoodSHA: o.GoodSHA, BadSHA: o.BadSHA,
+		WorkDir: filepath.Join(absWork, "commit-bisect"), Spec: o.Spec, Jobs: o.Jobs,
+		Culprit: &cObj, SDKRoot: sdkRoot, RelinkAndTest: objRes.relinkSingle,
+		buildClang: o.buildClang, testClang: o.testClang,
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", "", "", ctx.Err()
+		}
+		return "", "", err.Error(), nil
+	}
+	return sha, sanitizeText(subj), "", nil
 }
 
 func classifyConfidence(spec platformSpec, sanPassed, consIndep bool, diagO0 string, aliveRes formalResult) (bool, string) {
