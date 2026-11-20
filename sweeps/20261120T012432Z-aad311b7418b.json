@@ -1,0 +1,2692 @@
+{
+  "id": "20261120T012432Z-aad311b7418b",
+  "llvm_commit": "aad311b7418b94e85d06f288d16d466f0b762c80",
+  "llvm_subject": "[libc][regex] Harden ExprPool, nullable, and pmatch",
+  "previous_sha": "704660a68dae1f1e91c3e79fe11535b432ae6b6c",
+  "started_at": "2026-11-20T01:24:32.120849332Z",
+  "completed_at": "2026-11-20T01:24:32.120849332Z",
+  "results": [
+    {
+      "package": "abseil-cpp",
+      "version": "20260817.0",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 42.124239208
+    },
+    {
+      "package": "abseil-cpp",
+      "version": "20260817.0",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 38.238955541
+    },
+    {
+      "package": "abseil-cpp",
+      "version": "20260817.0",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 36.287159251
+    },
+    {
+      "package": "abseil-cpp",
+      "version": "20260817.0",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 33.016765773
+    },
+    {
+      "package": "abseil-cpp",
+      "version": "20260817.0",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 30.557711607
+    },
+    {
+      "package": "abseil-cpp",
+      "version": "20260817.0",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 27.387483136
+    },
+    {
+      "package": "abseil-cpp",
+      "version": "20260817.0",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 32.294200189
+    },
+    {
+      "package": "abseil-cpp",
+      "version": "20260817.0",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 28.616520658
+    },
+    {
+      "package": "aws-lc",
+      "version": "v5.15.0",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 190.630210917
+    },
+    {
+      "package": "aws-lc",
+      "version": "v5.15.0",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 219.964949583
+    },
+    {
+      "package": "aws-lc",
+      "version": "v5.15.0",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 169.406854288
+    },
+    {
+      "package": "aws-lc",
+      "version": "v5.15.0",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 193.704283957
+    },
+    {
+      "package": "aws-lc",
+      "version": "v5.15.0",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 154.476780486
+    },
+    {
+      "package": "aws-lc",
+      "version": "v5.15.0",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 173.864943937
+    },
+    {
+      "package": "binaryen",
+      "version": "version_133",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "build_fail",
+      "duration_sec": 367.658274,
+      "error_excerpt": "...\nk/_temp/lmc-work/binaryen-darwin-arm64-distro-O2/wrapper/clang++ -fno-omit-frame-pointer -fno-rtti -fPIC -fcolor-diagnostics -DBUILD_LLVM_DWARF -Wall -Wextra -Wno-unused-parameter -Wno-dangling-pointer -Wno-implicit-int-float-conversion -Wno-unknown-warning-option -Wswitch -Wimplicit-fallthrough -Wnon-virtual-dtor -Wsuggest-override -Wctad-maybe-unsupported -Wno-deprecated-declarations -O3 -DNDEBUG -UNDEBUG -arch arm64 -mmacosx-version-min=10.15 -Wl,-search_paths_first -Wl,-headerpad_max_install_names src/tools/CMakeFiles/wasm-opt.dir/fuzzing/fuzz-stats.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/fuzzing.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/heap-types.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/parameters.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/random.cpp.o src/tools/CMakeFiles/wasm-opt.dir/wasm-opt.cpp.o -o bin/wasm-opt  -Wl,-rpath,@loader_path/../lib  lib/libbinaryen.a \u0026\u0026 :\nld64.lld: error: undefined symbol: void wasm::ModuleUtils::renameFunctions\u003cstd::__1::map\u003cwasm::Name, wasm::Name, std::__1::less\u003cwasm::Name\u003e, std::__1::allocator\u003cstd::__1::pair\u003cwasm::Name const, wasm::Name\u003e\u003e\u003e\u003e(wasm::Module\u0026, std::__1::map\u003cwasm::Name, wasm::Name, std::__1::less\u003cwasm::Name\u003e, std::__1::allocator\u003cstd::__1::pair\u003cwasm::Name const, wasm::Name\u003e\u003e\u003e\u0026)\n\u003e\u003e\u003e referenced by lib/libbinaryen.a(Asyncify.cpp.o):(symbol wasm::Asyncify::run(wasm::Module*)+0x1758)\nclang++: error: linker command failed with exit code 1 (use -v to see invocation)\nninja: build stopped: subcommand failed."
+    },
+    {
+      "package": "binaryen",
+      "version": "version_133",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "build_fail",
+      "duration_sec": 345.916220042,
+      "error_excerpt": "...\nrameter -Wno-dangling-pointer -Wno-implicit-int-float-conversion -Wno-unknown-warning-option -Wswitch -Wimplicit-fallthrough -Wnon-virtual-dtor -Wsuggest-override -Wctad-maybe-unsupported -Wno-deprecated-declarations -O3 -DNDEBUG -UNDEBUG -arch arm64 -mmacosx-version-min=10.15 -Wl,-search_paths_first -Wl,-headerpad_max_install_names src/tools/CMakeFiles/wasm-opt.dir/fuzzing/fuzz-stats.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/fuzzing.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/heap-types.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/parameters.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/random.cpp.o src/tools/CMakeFiles/wasm-opt.dir/wasm-opt.cpp.o -o bin/wasm-opt  -Wl,-rpath,@loader_path/../lib  lib/libbinaryen.a \u0026\u0026 :\nld64.lld: error: undefined symbol: void wasm::ModuleUtils::renameFunctions\u003cstd::__1::map\u003cwasm::Name, wasm::Name, std::__1::less\u003cwasm::Name\u003e, std::__1::allocator\u003cstd::__1::pair\u003cwasm::Name const, wasm::Name\u003e\u003e\u003e\u003e(wasm::Module\u0026, std::__1::map\u003cwasm::Name, wasm::Name, std::__1::less\u003cwasm::Name\u003e, std::__1::allocator\u003cstd::__1::pair\u003cwasm::Name const, wasm::Name\u003e\u003e\u003e\u0026)\n\u003e\u003e\u003e referenced by /tmp/lto.tmp:(symbol wasm::(anonymous namespace)::ModuleAnalyzer::ModuleAnalyzer(wasm::Module\u0026, std::__1::function\u003cbool (wasm::Name, wasm::Name)\u003e, bool, wasm::String::Split const\u0026, wasm::String::Split const\u0026, bool, wasm::String::Split const\u0026, bool)+0x1078)\nclang++: error: linker command failed with exit code 1 (use -v to see invocation)\nninja: build stopped: subcommand failed."
+    },
+    {
+      "package": "binaryen",
+      "version": "version_133",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "build_fail",
+      "duration_sec": 259.773066504,
+      "error_excerpt": "...\nm-opt \n: \u0026\u0026 /home/runner/work/_temp/lmc-work/binaryen-linux-aarch64-distro-O2/wrapper/clang++ -fno-omit-frame-pointer -fno-rtti -fPIC -fcolor-diagnostics -DBUILD_LLVM_DWARF -Wall -Wextra -Wno-unused-parameter -Wno-dangling-pointer -Wno-implicit-int-float-conversion -Wno-unknown-warning-option -Wswitch -Wimplicit-fallthrough -Wnon-virtual-dtor -Wsuggest-override -Wctad-maybe-unsupported -Wno-deprecated-declarations -O3 -DNDEBUG -UNDEBUG -fuse-ld=lld    -Xlinker --dependency-file=src/tools/CMakeFiles/wasm-opt.dir/link.d src/tools/CMakeFiles/wasm-opt.dir/fuzzing/fuzz-stats.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/fuzzing.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/heap-types.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/parameters.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/random.cpp.o src/tools/CMakeFiles/wasm-opt.dir/wasm-opt.cpp.o -o bin/wasm-opt  -Wl,-rpath,\"\\$ORIGIN/../lib\"  lib/libbinaryen.a \u0026\u0026 :\nld.lld: error: undefined symbol: void wasm::ModuleUtils::renameFunctions\u003cstd::map\u003cwasm::Name, wasm::Name, std::less\u003cwasm::Name\u003e, std::allocator\u003cstd::pair\u003cwasm::Name const, wasm::Name\u003e\u003e\u003e\u003e(wasm::Module\u0026, std::map\u003cwasm::Name, wasm::Name, std::less\u003cwasm::Name\u003e, std::allocator\u003cstd::pair\u003cwasm::Name const, wasm::Name\u003e\u003e\u003e\u0026)\n\u003e\u003e\u003e referenced by Asyncify.cpp\n\u003e\u003e\u003e               Asyncify.cpp.o:(wasm::Asyncify::run(wasm::Module*)) in archive lib/libbinaryen.a\nclang++: error: linker command failed with exit code 1 (use -v to see invocation)\nninja: build stopped: subcommand failed."
+    },
+    {
+      "package": "binaryen",
+      "version": "version_133",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "build_fail",
+      "duration_sec": 276.312391874,
+      "error_excerpt": "...\nter -Wno-dangling-pointer -Wno-implicit-int-float-conversion -Wno-unknown-warning-option -Wswitch -Wimplicit-fallthrough -Wnon-virtual-dtor -Wsuggest-override -Wctad-maybe-unsupported -Wno-deprecated-declarations -O3 -DNDEBUG -UNDEBUG -fuse-ld=lld    -Xlinker --dependency-file=src/tools/CMakeFiles/wasm-opt.dir/link.d src/tools/CMakeFiles/wasm-opt.dir/fuzzing/fuzz-stats.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/fuzzing.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/heap-types.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/parameters.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/random.cpp.o src/tools/CMakeFiles/wasm-opt.dir/wasm-opt.cpp.o -o bin/wasm-opt  -Wl,-rpath,\"\\$ORIGIN/../lib\"  lib/libbinaryen.a \u0026\u0026 :\nld.lld: error: undefined symbol: void wasm::ModuleUtils::renameFunctions\u003cstd::map\u003cwasm::Name, wasm::Name, std::less\u003cwasm::Name\u003e, std::allocator\u003cstd::pair\u003cwasm::Name const, wasm::Name\u003e\u003e\u003e\u003e(wasm::Module\u0026, std::map\u003cwasm::Name, wasm::Name, std::less\u003cwasm::Name\u003e, std::allocator\u003cstd::pair\u003cwasm::Name const, wasm::Name\u003e\u003e\u003e\u0026)\n\u003e\u003e\u003e referenced by Asyncify.cpp\n\u003e\u003e\u003e               lib/wasm-opt.lto.libbinaryen.a(Asyncify.cpp.o at 16050896).o:(wasm::(anonymous namespace)::ModuleAnalyzer::ModuleAnalyzer(wasm::Module\u0026, std::function\u003cbool (wasm::Name, wasm::Name)\u003e, bool, wasm::String::Split const\u0026, wasm::String::Split const\u0026, bool, wasm::String::Split const\u0026, bool))\nclang++: error: linker command failed with exit code 1 (use -v to see invocation)\nninja: build stopped: subcommand failed."
+    },
+    {
+      "package": "binaryen",
+      "version": "version_133",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "build_fail",
+      "duration_sec": 231.59648545,
+      "error_excerpt": "...\nrk/_temp/lmc-work/binaryen-linux-riscv64-distro-O2/wrapper/clang++ --target=riscv64-linux-gnu -fno-omit-frame-pointer -fno-rtti -fPIC -fcolor-diagnostics -DBUILD_LLVM_DWARF -Wall -Wextra -Wno-unused-parameter -Wno-dangling-pointer -Wno-implicit-int-float-conversion -Wno-unknown-warning-option -Wswitch -Wimplicit-fallthrough -Wnon-virtual-dtor -Wsuggest-override -Wctad-maybe-unsupported -Wno-deprecated-declarations -O3 -DNDEBUG -UNDEBUG -fuse-ld=lld    -Xlinker --dependency-file=src/tools/CMakeFiles/wasm-opt.dir/link.d src/tools/CMakeFiles/wasm-opt.dir/fuzzing/fuzz-stats.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/fuzzing.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/heap-types.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/parameters.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/random.cpp.o src/tools/CMakeFiles/wasm-opt.dir/wasm-opt.cpp.o -o bin/wasm-opt  -Wl,-rpath,\"\\$ORIGIN/../lib\"  lib/libbinaryen.a \u0026\u0026 :\nld.lld: error: undefined symbol: void wasm::ModuleUtils::renameFunctions\u003cstd::map\u003cwasm::Name, wasm::Name, std::less\u003cwasm::Name\u003e, std::allocator\u003cstd::pair\u003cwasm::Name const, wasm::Name\u003e\u003e\u003e\u003e(wasm::Module\u0026, std::map\u003cwasm::Name, wasm::Name, std::less\u003cwasm::Name\u003e, std::allocator\u003cstd::pair\u003cwasm::Name const, wasm::Name\u003e\u003e\u003e\u0026)\n\u003e\u003e\u003e referenced by Asyncify.cpp\n\u003e\u003e\u003e               Asyncify.cpp.o:(wasm::Asyncify::run(wasm::Module*)) in archive lib/libbinaryen.a\nclang++: error: linker command failed with exit code 1 (use -v to see invocation)\nninja: build stopped: subcommand failed."
+    },
+    {
+      "package": "binaryen",
+      "version": "version_133",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "build_fail",
+      "duration_sec": 242.589849937,
+      "error_excerpt": "...\nter -Wno-dangling-pointer -Wno-implicit-int-float-conversion -Wno-unknown-warning-option -Wswitch -Wimplicit-fallthrough -Wnon-virtual-dtor -Wsuggest-override -Wctad-maybe-unsupported -Wno-deprecated-declarations -O3 -DNDEBUG -UNDEBUG -fuse-ld=lld    -Xlinker --dependency-file=src/tools/CMakeFiles/wasm-opt.dir/link.d src/tools/CMakeFiles/wasm-opt.dir/fuzzing/fuzz-stats.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/fuzzing.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/heap-types.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/parameters.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/random.cpp.o src/tools/CMakeFiles/wasm-opt.dir/wasm-opt.cpp.o -o bin/wasm-opt  -Wl,-rpath,\"\\$ORIGIN/../lib\"  lib/libbinaryen.a \u0026\u0026 :\nld.lld: error: undefined symbol: void wasm::ModuleUtils::renameFunctions\u003cstd::map\u003cwasm::Name, wasm::Name, std::less\u003cwasm::Name\u003e, std::allocator\u003cstd::pair\u003cwasm::Name const, wasm::Name\u003e\u003e\u003e\u003e(wasm::Module\u0026, std::map\u003cwasm::Name, wasm::Name, std::less\u003cwasm::Name\u003e, std::allocator\u003cstd::pair\u003cwasm::Name const, wasm::Name\u003e\u003e\u003e\u0026)\n\u003e\u003e\u003e referenced by Asyncify.cpp\n\u003e\u003e\u003e               lib/wasm-opt.lto.libbinaryen.a(Asyncify.cpp.o at 21795184).o:(wasm::(anonymous namespace)::ModuleAnalyzer::ModuleAnalyzer(wasm::Module\u0026, std::function\u003cbool (wasm::Name, wasm::Name)\u003e, bool, wasm::String::Split const\u0026, wasm::String::Split const\u0026, bool, wasm::String::Split const\u0026, bool))\nclang++: error: linker command failed with exit code 1 (use -v to see invocation)\nninja: build stopped: subcommand failed."
+    },
+    {
+      "package": "binaryen",
+      "version": "version_133",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "build_fail",
+      "duration_sec": 310.816715988,
+      "error_excerpt": "...\nsm-opt \n: \u0026\u0026 /home/runner/work/_temp/lmc-work/binaryen-linux-x86_64-distro-O2/wrapper/clang++ -fno-omit-frame-pointer -fno-rtti -fPIC -fcolor-diagnostics -DBUILD_LLVM_DWARF -Wall -Wextra -Wno-unused-parameter -Wno-dangling-pointer -Wno-implicit-int-float-conversion -Wno-unknown-warning-option -Wswitch -Wimplicit-fallthrough -Wnon-virtual-dtor -Wsuggest-override -Wctad-maybe-unsupported -Wno-deprecated-declarations -O3 -DNDEBUG -UNDEBUG -fuse-ld=lld    -Xlinker --dependency-file=src/tools/CMakeFiles/wasm-opt.dir/link.d src/tools/CMakeFiles/wasm-opt.dir/fuzzing/fuzz-stats.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/fuzzing.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/heap-types.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/parameters.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/random.cpp.o src/tools/CMakeFiles/wasm-opt.dir/wasm-opt.cpp.o -o bin/wasm-opt  -Wl,-rpath,\"\\$ORIGIN/../lib\"  lib/libbinaryen.a \u0026\u0026 :\nld.lld: error: undefined symbol: void wasm::ModuleUtils::renameFunctions\u003cstd::map\u003cwasm::Name, wasm::Name, std::less\u003cwasm::Name\u003e, std::allocator\u003cstd::pair\u003cwasm::Name const, wasm::Name\u003e\u003e\u003e\u003e(wasm::Module\u0026, std::map\u003cwasm::Name, wasm::Name, std::less\u003cwasm::Name\u003e, std::allocator\u003cstd::pair\u003cwasm::Name const, wasm::Name\u003e\u003e\u003e\u0026)\n\u003e\u003e\u003e referenced by Asyncify.cpp\n\u003e\u003e\u003e               Asyncify.cpp.o:(wasm::Asyncify::run(wasm::Module*)) in archive lib/libbinaryen.a\nclang++: error: linker command failed with exit code 1 (use -v to see invocation)\nninja: build stopped: subcommand failed."
+    },
+    {
+      "package": "binaryen",
+      "version": "version_133",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "build_fail",
+      "duration_sec": 316.370428949,
+      "error_excerpt": "...\nter -Wno-dangling-pointer -Wno-implicit-int-float-conversion -Wno-unknown-warning-option -Wswitch -Wimplicit-fallthrough -Wnon-virtual-dtor -Wsuggest-override -Wctad-maybe-unsupported -Wno-deprecated-declarations -O3 -DNDEBUG -UNDEBUG -fuse-ld=lld    -Xlinker --dependency-file=src/tools/CMakeFiles/wasm-opt.dir/link.d src/tools/CMakeFiles/wasm-opt.dir/fuzzing/fuzz-stats.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/fuzzing.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/heap-types.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/parameters.cpp.o src/tools/CMakeFiles/wasm-opt.dir/fuzzing/random.cpp.o src/tools/CMakeFiles/wasm-opt.dir/wasm-opt.cpp.o -o bin/wasm-opt  -Wl,-rpath,\"\\$ORIGIN/../lib\"  lib/libbinaryen.a \u0026\u0026 :\nld.lld: error: undefined symbol: void wasm::ModuleUtils::renameFunctions\u003cstd::map\u003cwasm::Name, wasm::Name, std::less\u003cwasm::Name\u003e, std::allocator\u003cstd::pair\u003cwasm::Name const, wasm::Name\u003e\u003e\u003e\u003e(wasm::Module\u0026, std::map\u003cwasm::Name, wasm::Name, std::less\u003cwasm::Name\u003e, std::allocator\u003cstd::pair\u003cwasm::Name const, wasm::Name\u003e\u003e\u003e\u0026)\n\u003e\u003e\u003e referenced by Asyncify.cpp\n\u003e\u003e\u003e               lib/wasm-opt.lto.libbinaryen.a(Asyncify.cpp.o at 15803426).o:(wasm::(anonymous namespace)::ModuleAnalyzer::ModuleAnalyzer(wasm::Module\u0026, std::function\u003cbool (wasm::Name, wasm::Name)\u003e, bool, wasm::String::Split const\u0026, wasm::String::Split const\u0026, bool, wasm::String::Split const\u0026, bool))\nclang++: error: linker command failed with exit code 1 (use -v to see invocation)\nninja: build stopped: subcommand failed."
+    },
+    {
+      "package": "box2d",
+      "version": "v3.2.0",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 20.076034708
+    },
+    {
+      "package": "box2d",
+      "version": "v3.2.0",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 17.096502083
+    },
+    {
+      "package": "box2d",
+      "version": "v3.2.0",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 11.883480106
+    },
+    {
+      "package": "box2d",
+      "version": "v3.2.0",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 12.389337683
+    },
+    {
+      "package": "box2d",
+      "version": "v3.2.0",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 109.340020035
+    },
+    {
+      "package": "box2d",
+      "version": "v3.2.0",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 224.737716398
+    },
+    {
+      "package": "box2d",
+      "version": "v3.2.0",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 14.268581593
+    },
+    {
+      "package": "box2d",
+      "version": "v3.2.0",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 13.133534712
+    },
+    {
+      "package": "brotli",
+      "version": "v1.2.1",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 7.983427667
+    },
+    {
+      "package": "brotli",
+      "version": "v1.2.1",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 5.988603875
+    },
+    {
+      "package": "brotli",
+      "version": "v1.2.1",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 6.074386903
+    },
+    {
+      "package": "brotli",
+      "version": "v1.2.1",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 5.547659775
+    },
+    {
+      "package": "brotli",
+      "version": "v1.2.1",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 6.26222697
+    },
+    {
+      "package": "brotli",
+      "version": "v1.2.1",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 6.543503057
+    },
+    {
+      "package": "brotli",
+      "version": "v1.2.1",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 5.718150975
+    },
+    {
+      "package": "brotli",
+      "version": "v1.2.1",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 6.364807068
+    },
+    {
+      "package": "cpython",
+      "version": "v3.14.3",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 133.785981541
+    },
+    {
+      "package": "cpython",
+      "version": "v3.14.3",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 289.993632375
+    },
+    {
+      "package": "cpython",
+      "version": "v3.14.3",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 75.213190998
+    },
+    {
+      "package": "cpython",
+      "version": "v3.14.3",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 172.663326295
+    },
+    {
+      "package": "cpython",
+      "version": "v3.14.3",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "build_fail",
+      "duration_sec": 84.721032086,
+      "error_excerpt": "...\neter -Wno-missing-field-initializers -Wstrict-prototypes -Werror=implicit-function-declaration -fvisibility=hidden  -I/home/runner/work/_temp/lmc-work/cpython-linux-riscv64-distro-O2/src/Include/internal -I/home/runner/work/_temp/lmc-work/cpython-linux-riscv64-distro-O2/src/Include/internal/mimalloc -IObjects -IInclude -IPython -I. -I/home/runner/work/_temp/lmc-work/cpython-linux-riscv64-distro-O2/src/Include    -fPIC -c /home/runner/work/_temp/lmc-work/cpython-linux-riscv64-distro-O2/src/Modules/_ctypes/callproc.c -o Modules/_ctypes/callproc.o\n/home/runner/work/_temp/lmc-work/cpython-linux-riscv64-distro-O2/src/Modules/_ctypes/_ctypes.c:119:10: fatal error: 'ffi.h' file not found\n  119 | #include \u003cffi.h\u003e\n      |          ^~~~~~~\n1 error generated.\nmake: *** [Makefile:3663: Modules/_ctypes/_ctypes.o] Error 1\nmake: *** Waiting for unfinished jobs....\n/home/runner/work/_temp/lmc-work/cpython-linux-riscv64-distro-O2/src/Modules/_ctypes/callproc.c:84:10: fatal error: 'ffi.h' file not found\n   84 | #include \u003cffi.h\u003e\n      |          ^~~~~~~\n/home/runner/work/_temp/lmc-work/cpython-linux-riscv64-distro-O2/src/Modules/_ctypes/callbacks.c:18:10: fatal error: 'ffi.h' file not found\n   18 | #include \u003cffi.h\u003e\n      |          ^~~~~~~\n1 error generated.\nmake: *** [Makefile:3664: Modules/_ctypes/callbacks.o] Error 1\n1 error generated.\nmake: *** [Makefile:3665: Modules/_ctypes/callproc.o] Error 1\nmake: Leaving directory '/home/runner/work/_temp/lmc-work/cpython-linux-riscv64-distro-O2/build'"
+    },
+    {
+      "package": "cpython",
+      "version": "v3.14.3",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "build_fail",
+      "duration_sec": 69.005944748,
+      "error_excerpt": "...\nde/internal/mimalloc -IObjects -IInclude -IPython -I. -I/home/runner/work/_temp/lmc-work/cpython-linux-riscv64-release-lto/src/Include    -fPIC -c /home/runner/work/_temp/lmc-work/cpython-linux-riscv64-release-lto/src/Modules/_ctypes/stgdict.c -o Modules/_ctypes/stgdict.o\n/home/runner/work/_temp/lmc-work/cpython-linux-riscv64-release-lto/src/Modules/_ctypes/callproc.c:84:10: fatal error: 'ffi.h' file not found\n   84 | #include \u003cffi.h\u003e\n      |          ^~~~~~~\n/home/runner/work/_temp/lmc-work/cpython-linux-riscv64-release-lto/src/Modules/_ctypes/_ctypes.c:119:10: fatal error: 'ffi.h' file not found\n  119 | #include \u003cffi.h\u003e\n      |          ^~~~~~~\n/home/runner/work/_temp/lmc-work/cpython-linux-riscv64-release-lto/src/Modules/_ctypes/callbacks.c:18:10: fatal error: 'ffi.h' file not found\n   18 | #include \u003cffi.h\u003e\n      |          ^~~~~~~\n1 error generated.\n1 error generated.\nmake: *** [Makefile:3664: Modules/_ctypes/callbacks.o] Error 1\nmake: *** Waiting for unfinished jobs....\nmake: *** [Makefile:3665: Modules/_ctypes/callproc.o] Error 1\n1 error generated.\nmake: *** [Makefile:3663: Modules/_ctypes/_ctypes.o] Error 1\n/home/runner/work/_temp/lmc-work/cpython-linux-riscv64-release-lto/src/Modules/_ctypes/stgdict.c:13:10: fatal error: 'ffi.h' file not found\n   13 | #include \u003cffi.h\u003e\n      |          ^~~~~~~\n1 error generated.\nmake: *** [Makefile:3666: Modules/_ctypes/stgdict.o] Error 1\nmake: Leaving directory '/home/runner/work/_temp/lmc-work/cpython-linux-riscv64-release-lto/build'"
+    },
+    {
+      "package": "cpython",
+      "version": "v3.14.3",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 64.420050237
+    },
+    {
+      "package": "cpython",
+      "version": "v3.14.3",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 170.392240197
+    },
+    {
+      "package": "dav1d",
+      "version": "1.5.5",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 22.241844583
+    },
+    {
+      "package": "dav1d",
+      "version": "1.5.5",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 22.306433958
+    },
+    {
+      "package": "dav1d",
+      "version": "1.5.5",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 9.298155886
+    },
+    {
+      "package": "dav1d",
+      "version": "1.5.5",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 13.543176862
+    },
+    {
+      "package": "dav1d",
+      "version": "1.5.5",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 8.4462223
+    },
+    {
+      "package": "dav1d",
+      "version": "1.5.5",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 13.588814401
+    },
+    {
+      "package": "dav1d",
+      "version": "1.5.5",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 8.241644504
+    },
+    {
+      "package": "dav1d",
+      "version": "1.5.5",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 15.360183825
+    },
+    {
+      "package": "duckdb",
+      "version": "v1.5.6",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 545.863041917
+    },
+    {
+      "package": "duckdb",
+      "version": "v1.5.6",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 642.173168667
+    },
+    {
+      "package": "duckdb",
+      "version": "v1.5.6",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 489.965804436
+    },
+    {
+      "package": "duckdb",
+      "version": "v1.5.6",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 568.327544498
+    },
+    {
+      "package": "duckdb",
+      "version": "v1.5.6",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 593.44341755
+    },
+    {
+      "package": "duckdb",
+      "version": "v1.5.6",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 705.103596544
+    },
+    {
+      "package": "duckdb",
+      "version": "v1.5.6",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 470.44939996
+    },
+    {
+      "package": "duckdb",
+      "version": "v1.5.6",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 582.862532527
+    },
+    {
+      "package": "eigen",
+      "version": "5.0.1",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 118.418614958
+    },
+    {
+      "package": "eigen",
+      "version": "5.0.1",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 114.227090667
+    },
+    {
+      "package": "eigen",
+      "version": "5.0.1",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 82.763275218
+    },
+    {
+      "package": "eigen",
+      "version": "5.0.1",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 76.694155389
+    },
+    {
+      "package": "eigen",
+      "version": "5.0.1",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 85.985840255
+    },
+    {
+      "package": "eigen",
+      "version": "5.0.1",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 110.699788479
+    },
+    {
+      "package": "eigen",
+      "version": "5.0.1",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 71.596242798
+    },
+    {
+      "package": "eigen",
+      "version": "5.0.1",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 68.614408307
+    },
+    {
+      "package": "ffmpeg",
+      "version": "n8.1.3",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 298.575100042
+    },
+    {
+      "package": "ffmpeg",
+      "version": "n8.1.3",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 827.625642
+    },
+    {
+      "package": "ffmpeg",
+      "version": "n8.1.3",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 222.183399172
+    },
+    {
+      "package": "ffmpeg",
+      "version": "n8.1.3",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 875.724550922
+    },
+    {
+      "package": "ffmpeg",
+      "version": "n8.1.3",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 773.381284175
+    },
+    {
+      "package": "ffmpeg",
+      "version": "n8.1.3",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 4401.711316209
+    },
+    {
+      "package": "ffmpeg",
+      "version": "n8.1.3",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 230.698296724
+    },
+    {
+      "package": "ffmpeg",
+      "version": "n8.1.3",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 891.222943601
+    },
+    {
+      "package": "flac",
+      "version": "1.5.0",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 18.512938625
+    },
+    {
+      "package": "flac",
+      "version": "1.5.0",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 15.154428792
+    },
+    {
+      "package": "flac",
+      "version": "1.5.0",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 8.321255485
+    },
+    {
+      "package": "flac",
+      "version": "1.5.0",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 8.560172927
+    },
+    {
+      "package": "flac",
+      "version": "1.5.0",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 15.214691854
+    },
+    {
+      "package": "flac",
+      "version": "1.5.0",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 17.353579523
+    },
+    {
+      "package": "flac",
+      "version": "1.5.0",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 9.715524135999999
+    },
+    {
+      "package": "flac",
+      "version": "1.5.0",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 7.789417498
+    },
+    {
+      "package": "flatbuffers",
+      "version": "v25.12.19",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 50.669015334
+    },
+    {
+      "package": "flatbuffers",
+      "version": "v25.12.19",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 51.365102833
+    },
+    {
+      "package": "flatbuffers",
+      "version": "v25.12.19",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 55.28714227
+    },
+    {
+      "package": "flatbuffers",
+      "version": "v25.12.19",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 58.398299394
+    },
+    {
+      "package": "flatbuffers",
+      "version": "v25.12.19",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 66.534387912
+    },
+    {
+      "package": "flatbuffers",
+      "version": "v25.12.19",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 71.852883197
+    },
+    {
+      "package": "flatbuffers",
+      "version": "v25.12.19",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 57.500499023
+    },
+    {
+      "package": "flatbuffers",
+      "version": "v25.12.19",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 59.010430842
+    },
+    {
+      "package": "fmt",
+      "version": "12.2.1",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 52.869727667
+    },
+    {
+      "package": "fmt",
+      "version": "12.2.1",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 65.827742291
+    },
+    {
+      "package": "fmt",
+      "version": "12.2.1",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 49.955975545
+    },
+    {
+      "package": "fmt",
+      "version": "12.2.1",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 66.074227139
+    },
+    {
+      "package": "fmt",
+      "version": "12.2.1",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 79.298714594
+    },
+    {
+      "package": "fmt",
+      "version": "12.2.1",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 116.866703727
+    },
+    {
+      "package": "fmt",
+      "version": "12.2.1",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 80.497014655
+    },
+    {
+      "package": "fmt",
+      "version": "12.2.1",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 119.897924033
+    },
+    {
+      "package": "glslang",
+      "version": "16.6.0",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 45.526377625
+    },
+    {
+      "package": "glslang",
+      "version": "16.6.0",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 41.426042709
+    },
+    {
+      "package": "glslang",
+      "version": "16.6.0",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 35.053789916
+    },
+    {
+      "package": "glslang",
+      "version": "16.6.0",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 35.339231979
+    },
+    {
+      "package": "glslang",
+      "version": "16.6.0",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 40.724329411
+    },
+    {
+      "package": "glslang",
+      "version": "16.6.0",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 44.767676544
+    },
+    {
+      "package": "glslang",
+      "version": "16.6.0",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 33.443257009
+    },
+    {
+      "package": "glslang",
+      "version": "16.6.0",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 32.874621932
+    },
+    {
+      "package": "h3",
+      "version": "v4.6.0",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 49.374009667
+    },
+    {
+      "package": "h3",
+      "version": "v4.6.0",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 51.319128375
+    },
+    {
+      "package": "h3",
+      "version": "v4.6.0",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 54.443329516
+    },
+    {
+      "package": "h3",
+      "version": "v4.6.0",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 46.331967754
+    },
+    {
+      "package": "h3",
+      "version": "v4.6.0",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 537.851411369
+    },
+    {
+      "package": "h3",
+      "version": "v4.6.0",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 552.490599894
+    },
+    {
+      "package": "h3",
+      "version": "v4.6.0",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 57.342378111
+    },
+    {
+      "package": "h3",
+      "version": "v4.6.0",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 45.719651876
+    },
+    {
+      "package": "harfbuzz",
+      "version": "15.1.0",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 101.874413583
+    },
+    {
+      "package": "harfbuzz",
+      "version": "15.1.0",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 104.675907042
+    },
+    {
+      "package": "harfbuzz",
+      "version": "15.1.0",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 121.443480811
+    },
+    {
+      "package": "harfbuzz",
+      "version": "15.1.0",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 121.735012843
+    },
+    {
+      "package": "harfbuzz",
+      "version": "15.1.0",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 172.041756093
+    },
+    {
+      "package": "harfbuzz",
+      "version": "15.1.0",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 179.813690524
+    },
+    {
+      "package": "harfbuzz",
+      "version": "15.1.0",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 114.47425205
+    },
+    {
+      "package": "harfbuzz",
+      "version": "15.1.0",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 113.99491306
+    },
+    {
+      "package": "highway",
+      "version": "1.4.0-786-g1b6d3f7",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 27.755491708
+    },
+    {
+      "package": "highway",
+      "version": "1.4.0-786-g1b6d3f7",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 21.376856084
+    },
+    {
+      "package": "highway",
+      "version": "1.4.0-786-g1b6d3f7",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 18.981084606
+    },
+    {
+      "package": "highway",
+      "version": "1.4.0-786-g1b6d3f7",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 35.527707215
+    },
+    {
+      "package": "highway",
+      "version": "1.4.0-786-g1b6d3f7",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 108.780374053
+    },
+    {
+      "package": "highway",
+      "version": "1.4.0-786-g1b6d3f7",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 134.128540219
+    },
+    {
+      "package": "highway",
+      "version": "1.4.0-786-g1b6d3f7",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 15.783089425
+    },
+    {
+      "package": "highway",
+      "version": "1.4.0-786-g1b6d3f7",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 13.639442874
+    },
+    {
+      "package": "joltphysics",
+      "version": "v5.7.0",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 114.900415417
+    },
+    {
+      "package": "joltphysics",
+      "version": "v5.7.0",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 110.246218875
+    },
+    {
+      "package": "joltphysics",
+      "version": "v5.7.0",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 90.518431116
+    },
+    {
+      "package": "joltphysics",
+      "version": "v5.7.0",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 93.772530266
+    },
+    {
+      "package": "joltphysics",
+      "version": "v5.7.0",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 85.589400789
+    },
+    {
+      "package": "joltphysics",
+      "version": "v5.7.0",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 144.745696296
+    },
+    {
+      "package": "joltphysics",
+      "version": "v5.7.0",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 74.979269491
+    },
+    {
+      "package": "joltphysics",
+      "version": "v5.7.0",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 78.915822041
+    },
+    {
+      "package": "kissat",
+      "version": "rel-4.0.4",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 11.177573833
+    },
+    {
+      "package": "kissat",
+      "version": "rel-4.0.4",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 10.890849458
+    },
+    {
+      "package": "kissat",
+      "version": "rel-4.0.4",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 6.921093026
+    },
+    {
+      "package": "kissat",
+      "version": "rel-4.0.4",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 9.315363733
+    },
+    {
+      "package": "kissat",
+      "version": "rel-4.0.4",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 21.189302533
+    },
+    {
+      "package": "kissat",
+      "version": "rel-4.0.4",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 30.008881479
+    },
+    {
+      "package": "kissat",
+      "version": "rel-4.0.4",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 12.138229093
+    },
+    {
+      "package": "kissat",
+      "version": "rel-4.0.4",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 17.217057688
+    },
+    {
+      "package": "libjpeg-turbo",
+      "version": "3.2.1",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 28.815417208
+    },
+    {
+      "package": "libjpeg-turbo",
+      "version": "3.2.1",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 29.089946833
+    },
+    {
+      "package": "libjpeg-turbo",
+      "version": "3.2.1",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 37.25470698
+    },
+    {
+      "package": "libjpeg-turbo",
+      "version": "3.2.1",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 46.14491995
+    },
+    {
+      "package": "libjpeg-turbo",
+      "version": "3.2.1",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 370.086585532
+    },
+    {
+      "package": "libjpeg-turbo",
+      "version": "3.2.1",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 852.071144867
+    },
+    {
+      "package": "libjpeg-turbo",
+      "version": "3.2.1",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 61.321430852
+    },
+    {
+      "package": "libjpeg-turbo",
+      "version": "3.2.1",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 75.651427919
+    },
+    {
+      "package": "libressl",
+      "version": "v4.4.1",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 64.861926875
+    },
+    {
+      "package": "libressl",
+      "version": "v4.4.1",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 446.101408792
+    },
+    {
+      "package": "libressl",
+      "version": "v4.4.1",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 39.732723735
+    },
+    {
+      "package": "libressl",
+      "version": "v4.4.1",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 348.639323024
+    },
+    {
+      "package": "libressl",
+      "version": "v4.4.1",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 175.435894358
+    },
+    {
+      "package": "libressl",
+      "version": "v4.4.1",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 599.157827396
+    },
+    {
+      "package": "libressl",
+      "version": "v4.4.1",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 43.312622264
+    },
+    {
+      "package": "libressl",
+      "version": "v4.4.1",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 402.741446634
+    },
+    {
+      "package": "libsodium",
+      "version": "1.0.22-RELEASE",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 83.591475041
+    },
+    {
+      "package": "libsodium",
+      "version": "1.0.22-RELEASE",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 102.39746325
+    },
+    {
+      "package": "libsodium",
+      "version": "1.0.22-RELEASE",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 27.503918693
+    },
+    {
+      "package": "libsodium",
+      "version": "1.0.22-RELEASE",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 41.997768591
+    },
+    {
+      "package": "libsodium",
+      "version": "1.0.22-RELEASE",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 31.779421688
+    },
+    {
+      "package": "libsodium",
+      "version": "1.0.22-RELEASE",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 105.842364092
+    },
+    {
+      "package": "libsodium",
+      "version": "1.0.22-RELEASE",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 22.36945681
+    },
+    {
+      "package": "libsodium",
+      "version": "1.0.22-RELEASE",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 80.613301905
+    },
+    {
+      "package": "libwebp",
+      "version": "v1.6.0",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 17.073089958
+    },
+    {
+      "package": "libwebp",
+      "version": "v1.6.0",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 19.559264375
+    },
+    {
+      "package": "libwebp",
+      "version": "v1.6.0",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 8.59061978
+    },
+    {
+      "package": "libwebp",
+      "version": "v1.6.0",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 7.650169072
+    },
+    {
+      "package": "libwebp",
+      "version": "v1.6.0",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 6.34916865
+    },
+    {
+      "package": "libwebp",
+      "version": "v1.6.0",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 6.723016089
+    },
+    {
+      "package": "libwebp",
+      "version": "v1.6.0",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 8.33197288
+    },
+    {
+      "package": "libwebp",
+      "version": "v1.6.0",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 9.225555439
+    },
+    {
+      "package": "libxml2",
+      "version": "v2.15.4",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 17.137251625
+    },
+    {
+      "package": "libxml2",
+      "version": "v2.15.4",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 40.8280875
+    },
+    {
+      "package": "libxml2",
+      "version": "v2.15.4",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 10.420509038
+    },
+    {
+      "package": "libxml2",
+      "version": "v2.15.4",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 27.002531285
+    },
+    {
+      "package": "libxml2",
+      "version": "v2.15.4",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 20.138379375
+    },
+    {
+      "package": "libxml2",
+      "version": "v2.15.4",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 43.735255796
+    },
+    {
+      "package": "libxml2",
+      "version": "v2.15.4",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 10.314984769
+    },
+    {
+      "package": "libxml2",
+      "version": "v2.15.4",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 34.635463096
+    },
+    {
+      "package": "lua",
+      "version": "v5.4.8",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 4.672781458
+    },
+    {
+      "package": "lua",
+      "version": "v5.4.8",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 4.833483833
+    },
+    {
+      "package": "lua",
+      "version": "v5.4.8",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 3.370535189
+    },
+    {
+      "package": "lua",
+      "version": "v5.4.8",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 3.604083612
+    },
+    {
+      "package": "lua",
+      "version": "v5.4.8",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 14.610973343
+    },
+    {
+      "package": "lua",
+      "version": "v5.4.8",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 17.863822212
+    },
+    {
+      "package": "lua",
+      "version": "v5.4.8",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 4.15257951
+    },
+    {
+      "package": "lua",
+      "version": "v5.4.8",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 4.08002656
+    },
+    {
+      "package": "luau",
+      "version": "0.747",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 234.5065605
+    },
+    {
+      "package": "luau",
+      "version": "0.747",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 312.537733833
+    },
+    {
+      "package": "luau",
+      "version": "0.747",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 156.327748697
+    },
+    {
+      "package": "luau",
+      "version": "0.747",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 206.759682415
+    },
+    {
+      "package": "luau",
+      "version": "0.747",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 293.352174838
+    },
+    {
+      "package": "luau",
+      "version": "0.747",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 391.023432913
+    },
+    {
+      "package": "luau",
+      "version": "0.747",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 190.457264336
+    },
+    {
+      "package": "luau",
+      "version": "0.747",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 248.884134489
+    },
+    {
+      "package": "mbedtls",
+      "version": "v3.5.2",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 50.879619667
+    },
+    {
+      "package": "mbedtls",
+      "version": "v3.5.2",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 109.419040084
+    },
+    {
+      "package": "mbedtls",
+      "version": "v3.5.2",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 37.973245003
+    },
+    {
+      "package": "mbedtls",
+      "version": "v3.5.2",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 90.550255541
+    },
+    {
+      "package": "mbedtls",
+      "version": "v3.5.2",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 183.45315534
+    },
+    {
+      "package": "mbedtls",
+      "version": "v3.5.2",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 590.467548179
+    },
+    {
+      "package": "mbedtls",
+      "version": "v3.5.2",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 29.721173828
+    },
+    {
+      "package": "mbedtls",
+      "version": "v3.5.2",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 85.196306795
+    },
+    {
+      "package": "mimalloc",
+      "version": "v3.7.0",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 8.910784417
+    },
+    {
+      "package": "mimalloc",
+      "version": "v3.7.0",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 13.752825375
+    },
+    {
+      "package": "mimalloc",
+      "version": "v3.7.0",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 8.469107883
+    },
+    {
+      "package": "mimalloc",
+      "version": "v3.7.0",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 11.407374576
+    },
+    {
+      "package": "mimalloc",
+      "version": "v3.7.0",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 9.3384878
+    },
+    {
+      "package": "mimalloc",
+      "version": "v3.7.0",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 17.540315815
+    },
+    {
+      "package": "mimalloc",
+      "version": "v3.7.0",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 8.121726768
+    },
+    {
+      "package": "mimalloc",
+      "version": "v3.7.0",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 17.447990138
+    },
+    {
+      "package": "nghttp2",
+      "version": "v1.71.0",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 13.396778834
+    },
+    {
+      "package": "nghttp2",
+      "version": "v1.71.0",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 10.843103875
+    },
+    {
+      "package": "nghttp2",
+      "version": "v1.71.0",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 7.24425971
+    },
+    {
+      "package": "nghttp2",
+      "version": "v1.71.0",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 7.653413299
+    },
+    {
+      "package": "nghttp2",
+      "version": "v1.71.0",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 6.958704539
+    },
+    {
+      "package": "nghttp2",
+      "version": "v1.71.0",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 7.387961673
+    },
+    {
+      "package": "nghttp2",
+      "version": "v1.71.0",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 8.279249132
+    },
+    {
+      "package": "nghttp2",
+      "version": "v1.71.0",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 9.602003441
+    },
+    {
+      "package": "openexr",
+      "version": "v2.5.10",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 35.81149225
+    },
+    {
+      "package": "openexr",
+      "version": "v2.5.10",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 29.934732583
+    },
+    {
+      "package": "openexr",
+      "version": "v2.5.10",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 44.619818977
+    },
+    {
+      "package": "openexr",
+      "version": "v2.5.10",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 43.270431873
+    },
+    {
+      "package": "openexr",
+      "version": "v2.5.10",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 323.261008653
+    },
+    {
+      "package": "openexr",
+      "version": "v2.5.10",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 324.125767755
+    },
+    {
+      "package": "openexr",
+      "version": "v2.5.10",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 21.508667864
+    },
+    {
+      "package": "openexr",
+      "version": "v2.5.10",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 22.902915682
+    },
+    {
+      "package": "opus",
+      "version": "v1.5.2",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 42.734857084
+    },
+    {
+      "package": "opus",
+      "version": "v1.5.2",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 38.204804
+    },
+    {
+      "package": "opus",
+      "version": "v1.5.2",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 21.336030771
+    },
+    {
+      "package": "opus",
+      "version": "v1.5.2",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 21.220987902
+    },
+    {
+      "package": "opus",
+      "version": "v1.5.2",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 143.579347486
+    },
+    {
+      "package": "opus",
+      "version": "v1.5.2",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 258.132392546
+    },
+    {
+      "package": "opus",
+      "version": "v1.5.2",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 22.495923227
+    },
+    {
+      "package": "opus",
+      "version": "v1.5.2",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 45.958827825
+    },
+    {
+      "package": "pcre2",
+      "version": "pcre2-10.49",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 37.766822958
+    },
+    {
+      "package": "pcre2",
+      "version": "pcre2-10.49",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 47.733171708
+    },
+    {
+      "package": "pcre2",
+      "version": "pcre2-10.49",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 19.333856681
+    },
+    {
+      "package": "pcre2",
+      "version": "pcre2-10.49",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 26.667413613
+    },
+    {
+      "package": "pcre2",
+      "version": "pcre2-10.49",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 89.457605607
+    },
+    {
+      "package": "pcre2",
+      "version": "pcre2-10.49",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 102.426224162
+    },
+    {
+      "package": "pcre2",
+      "version": "pcre2-10.49",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 18.634116684
+    },
+    {
+      "package": "pcre2",
+      "version": "pcre2-10.49",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 28.105928802
+    },
+    {
+      "package": "quickjs-ng",
+      "version": "v0.18.0",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 19.12872975
+    },
+    {
+      "package": "quickjs-ng",
+      "version": "v0.18.0",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 21.926360417
+    },
+    {
+      "package": "quickjs-ng",
+      "version": "v0.18.0",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 14.484513416
+    },
+    {
+      "package": "quickjs-ng",
+      "version": "v0.18.0",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 18.924092692
+    },
+    {
+      "package": "quickjs-ng",
+      "version": "v0.18.0",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 19.394047707
+    },
+    {
+      "package": "quickjs-ng",
+      "version": "v0.18.0",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 31.400392378
+    },
+    {
+      "package": "quickjs-ng",
+      "version": "v0.18.0",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 12.39296899
+    },
+    {
+      "package": "quickjs-ng",
+      "version": "v0.18.0",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 20.497924751
+    },
+    {
+      "package": "re2",
+      "version": "2023-03-01",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 22.201096375
+    },
+    {
+      "package": "re2",
+      "version": "2023-03-01",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 27.652786625
+    },
+    {
+      "package": "re2",
+      "version": "2023-03-01",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 13.56090927
+    },
+    {
+      "package": "re2",
+      "version": "2023-03-01",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 15.484424428
+    },
+    {
+      "package": "re2",
+      "version": "2023-03-01",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 28.879950414
+    },
+    {
+      "package": "re2",
+      "version": "2023-03-01",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 41.98255006
+    },
+    {
+      "package": "re2",
+      "version": "2023-03-01",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 13.11309126
+    },
+    {
+      "package": "re2",
+      "version": "2023-03-01",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 15.980853849
+    },
+    {
+      "package": "simdjson",
+      "version": "v5.2.0",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 92.953939416
+    },
+    {
+      "package": "simdjson",
+      "version": "v5.2.0",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 108.098257167
+    },
+    {
+      "package": "simdjson",
+      "version": "v5.2.0",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 89.786368209
+    },
+    {
+      "package": "simdjson",
+      "version": "v5.2.0",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 116.75570592
+    },
+    {
+      "package": "simdjson",
+      "version": "v5.2.0",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 86.492783032
+    },
+    {
+      "package": "simdjson",
+      "version": "v5.2.0",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 121.528375898
+    },
+    {
+      "package": "simdjson",
+      "version": "v5.2.0",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 198.406457052
+    },
+    {
+      "package": "simdjson",
+      "version": "v5.2.0",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 399.234409527
+    },
+    {
+      "package": "simdutf",
+      "version": "v9.4.0",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 68.251495458
+    },
+    {
+      "package": "simdutf",
+      "version": "v9.4.0",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 106.247994208
+    },
+    {
+      "package": "simdutf",
+      "version": "v9.4.0",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 66.9419402
+    },
+    {
+      "package": "simdutf",
+      "version": "v9.4.0",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 109.907253598
+    },
+    {
+      "package": "simdutf",
+      "version": "v9.4.0",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 673.839519253
+    },
+    {
+      "package": "simdutf",
+      "version": "v9.4.0",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 1037.355980744
+    },
+    {
+      "package": "simdutf",
+      "version": "v9.4.0",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 116.183623175
+    },
+    {
+      "package": "simdutf",
+      "version": "v9.4.0",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 157.866757373
+    },
+    {
+      "package": "sqlite",
+      "version": "version-3.54.1",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 39.144950083
+    },
+    {
+      "package": "sqlite",
+      "version": "version-3.54.1",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 67.802322292
+    },
+    {
+      "package": "sqlite",
+      "version": "version-3.54.1",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 23.121303866
+    },
+    {
+      "package": "sqlite",
+      "version": "version-3.54.1",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 34.647248066
+    },
+    {
+      "package": "sqlite",
+      "version": "version-3.54.1",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 28.182457823
+    },
+    {
+      "package": "sqlite",
+      "version": "version-3.54.1",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 37.342894279
+    },
+    {
+      "package": "sqlite",
+      "version": "version-3.54.1",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 21.781740199
+    },
+    {
+      "package": "sqlite",
+      "version": "version-3.54.1",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 35.340753316
+    },
+    {
+      "package": "wamr",
+      "version": "WAMR-2.4.6",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 10.313309417
+    },
+    {
+      "package": "wamr",
+      "version": "WAMR-2.4.6",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 6.296406292
+    },
+    {
+      "package": "wamr",
+      "version": "WAMR-2.4.6",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 5.237957973
+    },
+    {
+      "package": "wamr",
+      "version": "WAMR-2.4.6",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 4.191586701
+    },
+    {
+      "package": "wamr",
+      "version": "WAMR-2.4.6",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 4.921721211
+    },
+    {
+      "package": "wamr",
+      "version": "WAMR-2.4.6",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 3.720134175
+    },
+    {
+      "package": "wamr",
+      "version": "WAMR-2.4.6",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 6.237371039
+    },
+    {
+      "package": "wamr",
+      "version": "WAMR-2.4.6",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 4.268951097
+    },
+    {
+      "package": "yyjson",
+      "version": "0.13.0",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 31.863683375
+    },
+    {
+      "package": "yyjson",
+      "version": "0.13.0",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 29.558912625
+    },
+    {
+      "package": "yyjson",
+      "version": "0.13.0",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 17.919888558
+    },
+    {
+      "package": "yyjson",
+      "version": "0.13.0",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 18.630067018
+    },
+    {
+      "package": "yyjson",
+      "version": "0.13.0",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 32.25683236
+    },
+    {
+      "package": "yyjson",
+      "version": "0.13.0",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 42.718244067
+    },
+    {
+      "package": "yyjson",
+      "version": "0.13.0",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 16.513798224
+    },
+    {
+      "package": "yyjson",
+      "version": "0.13.0",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 18.606153604
+    },
+    {
+      "package": "z3",
+      "version": "z3-5.4.1",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 854.196779708
+    },
+    {
+      "package": "z3",
+      "version": "z3-5.4.1",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 981.2283795
+    },
+    {
+      "package": "z3",
+      "version": "z3-5.4.1",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 853.741016494
+    },
+    {
+      "package": "z3",
+      "version": "z3-5.4.1",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 907.461131401
+    },
+    {
+      "package": "z3",
+      "version": "z3-5.4.1",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 809.960195092
+    },
+    {
+      "package": "z3",
+      "version": "z3-5.4.1",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 891.787585761
+    },
+    {
+      "package": "z3",
+      "version": "z3-5.4.1",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 831.218792924
+    },
+    {
+      "package": "z3",
+      "version": "z3-5.4.1",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 905.214418352
+    },
+    {
+      "package": "zlib-ng",
+      "version": "2.3.3",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 21.285640125
+    },
+    {
+      "package": "zlib-ng",
+      "version": "2.3.3",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 24.028321791
+    },
+    {
+      "package": "zlib-ng",
+      "version": "2.3.3",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 7.384757216
+    },
+    {
+      "package": "zlib-ng",
+      "version": "2.3.3",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 5.856837807
+    },
+    {
+      "package": "zlib-ng",
+      "version": "2.3.3",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 7.141788925
+    },
+    {
+      "package": "zlib-ng",
+      "version": "2.3.3",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 7.418865222
+    },
+    {
+      "package": "zlib-ng",
+      "version": "2.3.3",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 8.72512442
+    },
+    {
+      "package": "zlib-ng",
+      "version": "2.3.3",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 8.662370899
+    },
+    {
+      "package": "zstd",
+      "version": "v1.5.7",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 59.646873708
+    },
+    {
+      "package": "zstd",
+      "version": "v1.5.7",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 81.587111167
+    },
+    {
+      "package": "zstd",
+      "version": "v1.5.7",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 46.474019323
+    },
+    {
+      "package": "zstd",
+      "version": "v1.5.7",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 50.991612579
+    },
+    {
+      "package": "zstd",
+      "version": "v1.5.7",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 116.122903205
+    },
+    {
+      "package": "zstd",
+      "version": "v1.5.7",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 127.219543157
+    },
+    {
+      "package": "zstd",
+      "version": "v1.5.7",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 54.193909302
+    },
+    {
+      "package": "zstd",
+      "version": "v1.5.7",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 75.41960448
+    }
+  ]
+}
