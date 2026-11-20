@@ -35,6 +35,9 @@ const (
 	llubiSourceUB   = "source_ub"
 
 	maxAliveTVIRBodyLines = 600
+
+	defaultCommitTimeout = 90 * time.Minute
+	commitReserveMargin  = 5 * time.Minute
 )
 
 var (
@@ -65,6 +68,7 @@ type triageOpts struct {
 	TestTimeout   time.Duration
 	ReduceMaxIter int
 	ReduceTimeout time.Duration
+	CommitTimeout time.Duration
 	Jobs          int
 
 	buildClang func(ctx context.Context, wtDir, buildDir, sha string) (string, error)
@@ -72,12 +76,30 @@ type triageOpts struct {
 }
 
 type triageResult struct {
-	Dropped     bool      `json:"dropped"`
-	DropReason  string    `json:"drop_reason,omitempty"`
-	BuildFailed bool      `json:"build_failed,omitempty"`
-	IsICE       bool      `json:"is_ice,omitempty"`
-	Incident    *incident `json:"incident,omitempty"`
-	BundlePath  string    `json:"bundle_path,omitempty"`
+	Dropped         bool      `json:"dropped"`
+	DropReason      string    `json:"drop_reason,omitempty"`
+	BuildFailed     bool      `json:"build_failed,omitempty"`
+	IsICE           bool      `json:"is_ice,omitempty"`
+	Incident        *incident `json:"incident,omitempty"`
+	BundlePath      string    `json:"bundle_path,omitempty"`
+	CommitBisectErr string    `json:"commit_bisect_err,omitempty"`
+}
+
+func commitBisectBudget(ctx context.Context, timeout time.Duration) (time.Duration, bool) {
+	if timeout <= 0 {
+		timeout = defaultCommitTimeout
+	}
+	dl, ok := ctx.Deadline()
+	if !ok {
+		return timeout, true
+	}
+	rem := time.Until(dl)
+	reserve := min(commitReserveMargin, timeout)
+	avail := rem - reserve
+	if avail <= 0 {
+		return 0, false
+	}
+	return min(timeout, avail), true
 }
 
 func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
@@ -110,15 +132,22 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 	}
 
 	buildProfile := func(name, prof string, tc *toolchain, extraC, extraEnv []string, saveLTO bool) (*workspace, runOut, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, runOut{}, err
+		}
 		dir := filepath.Join(absWork, name)
 		src := filepath.Join(dir, "src")
 		if err := copyTreeClean(baseSrc, src); err != nil {
 			return nil, runOut{}, fmt.Errorf("copy source %s: %w", name, err)
 		}
-		return o.Runner.build(ctx, runConfig{
+		ws, out, err := o.Runner.build(ctx, runConfig{
 			Recipe: o.Recipe, Spec: o.Spec, Profile: prof, TC: tc,
 			WorkDir: dir, SrcDir: src, ExtraCFlags: extraC, ExtraEnv: extraEnv, SaveLTOTemps: saveLTO,
 		})
+		if err == nil && ctx.Err() != nil {
+			return nil, runOut{}, ctx.Err()
+		}
+		return ws, out, err
 	}
 
 	badWS, badOut, err := buildProfile("bad-build", o.Profile, o.BadTC, nil, nil, false)
@@ -132,6 +161,9 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 	testID := strings.TrimSpace(o.TestID)
 	if testID == "" {
 		allOut, failIDs := o.Runner.testAll(ctx, o.Recipe, badWS, nil, o.TestTimeout)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if allOut.Passed {
 			return &triageResult{Dropped: true, DropReason: "flaky"}, nil
 		}
@@ -150,7 +182,11 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if o.Runner.testOne(ctx, o.Recipe, badWS, testID, nil, o.TestTimeout).Passed {
+		out := o.Runner.testOne(ctx, o.Recipe, badWS, testID, nil, o.TestTimeout)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if out.Passed {
 			return &triageResult{Dropped: true, DropReason: "flaky"}, nil
 		}
 	}
@@ -159,7 +195,14 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("good build: %w", err)
 	}
-	if !goodOut.Passed || !o.Runner.testOne(ctx, o.Recipe, goodWS, testID, nil, o.TestTimeout).Passed {
+	if !goodOut.Passed {
+		return &triageResult{Dropped: true, DropReason: "not_regression"}, nil
+	}
+	goodTest := o.Runner.testOne(ctx, o.Recipe, goodWS, testID, nil, o.TestTimeout)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !goodTest.Passed {
 		return &triageResult{Dropped: true, DropReason: "not_regression"}, nil
 	}
 
@@ -172,6 +215,9 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 		}
 	}
 	_ = os.RemoveAll(filepath.Join(absWork, "diag-o0"))
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	sanEnv := sanitizerEnv()
 	sanWS, sanOut, err := buildProfile("asan-ubsan", profDiagSan, o.GoodTC, nil, sanEnv, false)
@@ -186,6 +232,11 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 			}
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		_ = os.RemoveAll(filepath.Join(absWork, "asan-ubsan"))
+		_ = os.RemoveAll(filepath.Join(absWork, "asan-ubsan-host"))
+		return nil, err
+	}
 	if !sanOut.Passed {
 		_ = os.RemoveAll(filepath.Join(absWork, "asan-ubsan"))
 		_ = os.RemoveAll(filepath.Join(absWork, "asan-ubsan-host"))
@@ -198,6 +249,9 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 	sanPassed := sanTest.Passed
 	_ = os.RemoveAll(filepath.Join(absWork, "asan-ubsan"))
 	_ = os.RemoveAll(filepath.Join(absWork, "asan-ubsan-host"))
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if !sanPassed && hasSanitizerReport(sanTest.Output) {
 		return &triageResult{Dropped: true, DropReason: "upstream_ub"}, nil
 	}
@@ -211,9 +265,15 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 	if ownCleanSrc {
 		_ = os.RemoveAll(baseSrc)
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	runObjTest := func(runCtx context.Context) (bool, string, error) {
 		out := o.Runner.testOne(runCtx, o.Recipe, badWS, testID, nil, o.TestTimeout)
+		if err := runCtx.Err(); err != nil {
+			return false, out.Output, err
+		}
 		return out.Passed, out.Output, nil
 	}
 	objRes, err := bisectObjects(ctx, objectBisectOpts{
@@ -288,32 +348,50 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 		conf = confLikely
 	}
 
-	var culpritSHA, culpritSubj string
+	var culpritSHA, culpritSubj, commitErr string
 	if strings.TrimSpace(o.LLVMSrcDir) != "" && o.GoodSHA != "" && o.BadSHA != "" {
-		cObj := *objRes.Culprit
-		if len(cObj.Args) > 0 && cObj.GoodImportBC != "" && o.testClang == nil {
-			probeObj := filepath.Join(absWork, "commit-probe-src.o")
-			repro := false
-			if compileSingleTUWithClang(ctx, o.BadTC.Clang, o.Spec, o.BadTC.SDKRoot, &cObj, probeObj) == nil {
-				if pass, _, err := objRes.relinkSingle(ctx, probeObj); err == nil && !pass {
-					repro = true
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if commitDur, ok := commitBisectBudget(ctx, o.CommitTimeout); !ok {
+			dl, _ := ctx.Deadline()
+			commitErr = fmt.Sprintf("skipped: insufficient remaining time (%s) before triage deadline", max(0, time.Until(dl)).Round(time.Second))
+		} else {
+			commitCtx, cancel := context.WithTimeout(ctx, commitDur)
+			cObj := *objRes.Culprit
+			if len(cObj.Args) > 0 && cObj.GoodImportBC != "" && o.testClang == nil {
+				probeObj := filepath.Join(absWork, "commit-probe-src.o")
+				repro := false
+				if compileSingleTUWithClang(commitCtx, o.BadTC.Clang, o.Spec, o.BadTC.SDKRoot, &cObj, probeObj) == nil {
+					if pass, _, err := objRes.relinkSingle(commitCtx, probeObj); err == nil && !pass {
+						repro = true
+					}
+				}
+				if !repro {
+					// source compile cannot relink or reproduce against ThinLTO peers, bisect from GoodImportBC
+					cObj.Args = nil
 				}
 			}
-			if !repro {
-				// source compile cannot relink or reproduce against ThinLTO peers, bisect from GoodImportBC
-				cObj.Args = nil
+			var sha, subj string
+			err := commitCtx.Err()
+			if err == nil {
+				sha, subj, err = bisectCommit(commitCtx, commitBisectOpts{
+					LLVMSrcDir: o.LLVMSrcDir, GoodSHA: o.GoodSHA, BadSHA: o.BadSHA,
+					WorkDir: filepath.Join(absWork, "commit-bisect"), Spec: o.Spec, Jobs: o.Jobs,
+					Culprit: &cObj, SDKRoot: o.BadTC.SDKRoot, RelinkAndTest: objRes.relinkSingle,
+					buildClang: o.buildClang, testClang: o.testClang,
+				})
+			}
+			cancel()
+			if err != nil {
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				commitErr = err.Error()
+			} else {
+				culpritSHA, culpritSubj = sha, sanitizeText(subj)
 			}
 		}
-		sha, subj, err := bisectCommit(ctx, commitBisectOpts{
-			LLVMSrcDir: o.LLVMSrcDir, GoodSHA: o.GoodSHA, BadSHA: o.BadSHA,
-			WorkDir: filepath.Join(absWork, "commit-bisect"), Spec: o.Spec, Jobs: o.Jobs,
-			Culprit: &cObj, SDKRoot: o.BadTC.SDKRoot, RelinkAndTest: objRes.relinkSingle,
-			buildClang: o.buildClang, testClang: o.testClang,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("commit bisect: %w", err)
-		}
-		culpritSHA, culpritSubj = sha, sanitizeText(subj)
 	}
 
 	now := time.Now().UTC()
@@ -360,7 +438,7 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 			return nil, fmt.Errorf("package reproducer bundle: %w", err)
 		}
 	}
-	return &triageResult{Incident: inc, BundlePath: bundlePath}, nil
+	return &triageResult{Incident: inc, BundlePath: bundlePath, CommitBisectErr: commitErr}, nil
 }
 
 func containsAny(s string, needles []string) bool {
@@ -860,6 +938,10 @@ func runLLVMReduce(ctx context.Context, o triageOpts, badWS *workspace, testID s
 	if o.GoodTC != nil {
 		goodOptFlags = append(irCompileFlags(o.Spec, o.Profile, o.GoodTC), tuCG...)
 	}
+	optNoBase := withoutBaselineFlags(optFlags, o.Spec.BaselineFlags)
+	o0NoBase := withoutBaselineFlags(o0Flags, o.Spec.BaselineFlags)
+	goodOptNoBase := withoutBaselineFlags(goodOptFlags, o.Spec.BaselineFlags)
+	strippedDiffers := !slices.Equal(optNoBase, optFlags) || !slices.Equal(o0NoBase, o0Flags) || !slices.Equal(goodOptNoBase, goodOptFlags)
 
 	type reduceCand struct {
 		ir   string
@@ -871,6 +953,20 @@ func runLLVMReduce(ctx context.Context, o triageOpts, badWS *workspace, testID s
 			BeforeFlags: bFlags, AfterFlags: aFlags,
 			TestCmd: testCmd, TestDir: testDir, TestEnv: testEnv, TimeoutSec: timeoutSec,
 		}
+	}
+	addCands := func(dst []reduceCand, ir string, r reduceRelink) []reduceCand {
+		strip := strippedDiffers && irHasTargetAttrs(ir)
+		if o.GoodTC != nil && o.GoodTC.Clang != "" {
+			if strip {
+				dst = append(dst, reduceCand{ir: ir, spec: makeSpec(r, o.GoodTC.Clang, o.BadTC.Clang, goodOptNoBase, optNoBase)})
+			}
+			dst = append(dst, reduceCand{ir: ir, spec: makeSpec(r, o.GoodTC.Clang, o.BadTC.Clang, goodOptFlags, optFlags)})
+		}
+		if strip {
+			dst = append(dst, reduceCand{ir: ir, spec: makeSpec(r, o.BadTC.Clang, o.BadTC.Clang, o0NoBase, optNoBase)})
+		}
+		dst = append(dst, reduceCand{ir: ir, spec: makeSpec(r, o.BadTC.Clang, o.BadTC.Clang, o0Flags, optFlags)})
+		return dst
 	}
 	var cands []reduceCand
 	if !passRes.IsInterprocedural && passRes.CulpritFunc != "" && o.BadTC.LLVMExtract != "" && fileExists(o.BadTC.LLVMExtract) && fileExists(passRes.BeforeFullIRPath) {
@@ -886,18 +982,12 @@ func runLLVMReduce(ctx context.Context, o triageOpts, badWS *workspace, testID s
 			}
 			if errC == nil && fileNonEmpty(restObj) {
 				if splitRR, ok := appendExtraReduceObj(rr, restObj, scratchDir); ok {
-					cands = append(cands, reduceCand{ir: funcIR, spec: makeSpec(splitRR, o.BadTC.Clang, o.BadTC.Clang, o0Flags, optFlags)})
-					if o.GoodTC != nil && o.GoodTC.Clang != "" {
-						cands = append(cands, reduceCand{ir: funcIR, spec: makeSpec(splitRR, o.GoodTC.Clang, o.BadTC.Clang, goodOptFlags, optFlags)})
-					}
+					cands = addCands(cands, funcIR, splitRR)
 				}
 			}
 		}
 	}
-	cands = append(cands, reduceCand{ir: inputIR, spec: makeSpec(rr, o.BadTC.Clang, o.BadTC.Clang, o0Flags, optFlags)})
-	if o.GoodTC != nil && o.GoodTC.Clang != "" {
-		cands = append(cands, reduceCand{ir: inputIR, spec: makeSpec(rr, o.GoodTC.Clang, o.BadTC.Clang, goodOptFlags, optFlags)})
-	}
+	cands = addCands(cands, inputIR, rr)
 
 	var chosenIR string
 	var spec reduceSpec
@@ -911,11 +1001,7 @@ func runLLVMReduce(ctx context.Context, o triageOpts, badWS *workspace, testID s
 	if !found && objRes.Culprit != nil {
 		preoptIR := filepath.Join(scratchDir, "preopt.ll")
 		if _, err := compileCulpritWithBisect(ctx, o.Spec, o.BadTC, objRes.Culprit, 0, "ir", preoptIR, false); err == nil && fileNonEmpty(preoptIR) {
-			preCands := []reduceCand{{ir: preoptIR, spec: makeSpec(rr, o.BadTC.Clang, o.BadTC.Clang, o0Flags, optFlags)}}
-			if o.GoodTC != nil && o.GoodTC.Clang != "" {
-				preCands = append(preCands, reduceCand{ir: preoptIR, spec: makeSpec(rr, o.GoodTC.Clang, o.BadTC.Clang, goodOptFlags, optFlags)})
-			}
-			for _, c := range preCands {
+			for _, c := range addCands(nil, preoptIR, rr) {
 				if evalReduceCheck(ctx, c.spec, c.ir) {
 					chosenIR, spec, found = c.ir, c.spec, true
 					break
@@ -1077,6 +1163,24 @@ func irO0CompileFlags(spec platformSpec, prof string, tc *toolchain) []string {
 		flags = append(flags, "-isysroot", tc.SDKRoot)
 	}
 	return flags
+}
+
+func irHasTargetAttrs(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return bytes.Contains(data, []byte(`"target-cpu"=`)) || bytes.Contains(data, []byte(`"target-features"=`))
+}
+
+func withoutBaselineFlags(flags, baseline []string) []string {
+	out := make([]string, 0, len(flags))
+	for _, f := range flags {
+		if !slices.Contains(baseline, f) {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 func packageReproducerBundle(ctx context.Context, inc *incident, outDir, tuPath, tuName, beforeIR, afterIR, reducedIR, reducedBeforeIR, reducedAfterIR, beforeAsm, afterAsm string) (string, error) {

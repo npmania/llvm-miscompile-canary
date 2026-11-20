@@ -160,7 +160,7 @@ jobs:
         env:
           CCACHE_DIR: ${{ runner.temp }}/ccache
           CCACHE_BASEDIR: ${{ github.workspace }}
-          CCACHE_MAXSIZE: 3G
+          CCACHE_MAXSIZE: 1.5G
           CCACHE_COMPRESS: 'true'
         run: |
           cmake -G Ninja \

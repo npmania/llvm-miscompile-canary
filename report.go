@@ -431,7 +431,8 @@ func incidentMetaRows(incs []*incident, htmlMode bool, siteURL string) [][2]stri
 		add("Sanitizers", sanVal)
 		add("Conservative", pick(consIndep, "reproduces ("+code("-fno-strict-aliasing -fwrapv -ftrivial-auto-var-init=zero")+")", "masked"))
 		if !isOmittedFormalStatus(primary.AliveTVStatus) {
-			add(code("alive-tv"), txt(primary.AliveTVStatus))
+			aliveVal := pick(strings.EqualFold(strings.TrimSpace(primary.AliveTVStatus), aliveVerified), "verified (single pass; earlier pass or UB)", txt(primary.AliveTVStatus))
+			add(code("alive-tv"), aliveVal)
 		}
 		if m := reLLUBIExits.FindStringSubmatch(primary.LLUBIOutput); primary.LLUBIStatus != formalUnsupported && len(m) >= 3 {
 			add(code("llubi"), code(m[1])+" (before)"+pick(htmlMode, " -&gt; ", " -> ")+code(m[2])+" (after)")

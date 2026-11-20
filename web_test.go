@@ -446,10 +446,27 @@ func TestSiteGenerate(t *testing.T) {
 		t.Errorf("missing CNAME, .nojekyll, or style.css")
 	}
 	idx := read("index.html")
-	for _, w := range []string{"trunk <code>0212d77fa269</code>", "<h2>Open</h2>", "<h2>Corpus</h2>", "<h2>Resolved</h2>", `<a class="fail" href="/incidents/inc-open-1/">fail</a>`, `<a href="/">status</a>`, `<a href="/corpus/">corpus</a>`, `<link rel="stylesheet" href="/style.css">`, "18s", "err"} {
+	wantSpec := `<p class="cmd"><code>O2</code>: <code>-O2</code> · <code>LTO</code>: <code>-O3 -flto=thin</code> (<code>-march=x86-64-v3</code> / <code>-mcpu=neoverse-v1</code> / <code>-march=rva23u64</code> / <code>-mcpu=apple-m1</code>)</p>`
+	for _, w := range []string{"trunk <code>0212d77fa269</code>", "<h2>Open</h2>", "<h2>Corpus</h2>", wantSpec, "<h2>Resolved</h2>", `<a class="fail" href="/incidents/inc-open-1/">fail</a>`, `<a href="/">status</a>`, `<a href="/corpus/">corpus</a>`, `<link rel="stylesheet" href="/style.css">`, "18s", "err"} {
 		if !strings.Contains(idx, w) {
 			t.Errorf("index.html missing %q", w)
 		}
+	}
+	corpusPos := strings.Index(idx, "<h2>Corpus</h2>")
+	specPos := strings.Index(idx, wantSpec)
+	corpusTableRel := strings.Index(idx[corpusPos:], "<table>")
+	if corpusPos < 0 || specPos <= corpusPos || corpusTableRel < 0 || specPos >= corpusPos+corpusTableRel {
+		t.Errorf("profile spec line not placed between <h2>Corpus</h2> and Corpus <table>")
+	}
+	ps1, ps2 := buildProfileSpec(), buildProfileSpec()
+	wantTargets := []string{
+		strings.Join(platformSpecs[platLinuxX86].BaselineFlags, " "),
+		strings.Join(platformSpecs[platLinuxARM64].BaselineFlags, " "),
+		strings.Join(platformSpecs[platLinuxRISCV64].BaselineFlags, " "),
+		strings.Join(platformSpecs[platDarwinARM].BaselineFlags, " "),
+	}
+	if ps1.O2Flags != "-O2" || ps1.LTOFlags != "-O3 -flto=thin" || !slices.Equal(ps1.TargetFlags, wantTargets) || !slices.Equal(ps1.TargetFlags, ps2.TargetFlags) {
+		t.Errorf("buildProfileSpec = %+v / %+v, want targets %v", ps1, ps2, wantTargets)
 	}
 	if err := checkNoCrossRefs(idx); err != nil {
 		t.Errorf("index.html cross-ref: %v", err)
@@ -737,9 +754,9 @@ func TestAggregateAndStoreFixes(t *testing.T) {
 func TestWorkflowsAndInitScript(t *testing.T) {
 	checks := map[string][]string{
 		"ci.yml":        {"go build -o lmc .", "validate-corpus -corpus corpus -require 42"},
-		"toolchain.yml": {"workflow_dispatch:", "fail-fast: false", "--target master", "| zstd ", "GH_REPO: ${{ github.repository }}", "git ls-remote --exit-code --heads", `select(.status == "open")`, "grep -Fxq", "--limit 500", "CCACHE_BASEDIR: ${{ github.workspace }}"},
+		"toolchain.yml": {"workflow_dispatch:", "fail-fast: false", "--target master", "| zstd ", "GH_REPO: ${{ github.repository }}", "git ls-remote --exit-code --heads", `select(.status == "open")`, "grep -Fxq", "--limit 500", "CCACHE_BASEDIR: ${{ github.workspace }}", "CCACHE_MAXSIZE: 1.5G"},
 		"sweep.yml":     {"corpus-matrix -corpus corpus -include -shards 12", "fail-fast: false", "zstd -dc", "| tar -xf -", "GH_REPO: ${{ github.repository }}", "if: always() && !cancelled()", "LLVM_SUBJ: ${{ steps.meta.outputs.subject }}", "./lmc site -store _data -out _site -corpus corpus", `case ",${PKGS}," in`, "contains(format(',{0},', matrix.packages), ',dav1d,')", "corpus-src-v2-${{ matrix.src_hash }}", "fragments/shard-${PLAT}-${SHARD}.json", "fragment-shard-${{ matrix.platform }}-${{ matrix.shard }}"},
-		"triage.yml":    {"./lmc alive-check", "--target master", "BUILD_ALIVE2_LLVM=1", "GH_REPO: ${{ github.repository }}", "TEST_ID: ${{ matrix.test_id }}", "-print -quit", "Free runner disk space", "Fallback download raw triage artifacts", "group: miscompile-triage", "max-parallel: 4", "bad_sha12:", "ccache-toolchain-${{ matrix.tc_platform }}-${{ matrix.bad_sha12 }}", "reduced_before.ll", ".alive_tv_status"},
+		"triage.yml":    {"./lmc alive-check", "--target master", "BUILD_ALIVE2_LLVM=1", "GH_REPO: ${{ github.repository }}", "TEST_ID: ${{ matrix.test_id }}", "-print -quit", "Free runner disk space", "Fallback download raw triage artifacts", "group: miscompile-triage", "max-parallel: 4", "bad_sha12:", "ccache-toolchain-${{ matrix.tc_platform }}-${{ matrix.bad_sha12 }}", "reduced_before.ll", ".alive_tv_status", "-timeout 215m", "-commit-timeout 90m", "CCACHE_MAXSIZE: 1.5G"},
 	}
 	for name, wants := range checks {
 		raw, err := os.ReadFile(filepath.Join(".github", "workflows", name))
@@ -770,13 +787,24 @@ func TestWorkflowsAndInitScript(t *testing.T) {
 		if strings.Contains(s, "./cmd/lmc") || strings.Contains(s, "miscompile proven by alive-tv") {
 			t.Errorf("%s contains stale command or status", name)
 		}
-		if name == "toolchain.yml" && strings.Contains(s, "schedule:") {
-			t.Errorf("%s should not use GitHub schedule trigger", name)
+		if name == "toolchain.yml" {
+			if strings.Contains(s, "schedule:") {
+				t.Errorf("%s should not use GitHub schedule trigger", name)
+			}
+			if strings.Count(s, "CCACHE_MAXSIZE: 1.5G") != 1 {
+				t.Errorf("%s CCACHE_MAXSIZE: 1.5G count = %d, want 1", name, strings.Count(s, "CCACHE_MAXSIZE: 1.5G"))
+			}
+		}
+		if strings.Contains(s, "CCACHE_MAXSIZE: 3G") {
+			t.Errorf("%s still contains CCACHE_MAXSIZE: 3G", name)
 		}
 		if name == "sweep.yml" && regexp.MustCompile(`\bmatrix\.package\b`).MatchString(s) {
 			t.Errorf("%s contains stale matrix.package reference", name)
 		}
 		if name == "triage.yml" {
+			if strings.Count(s, "CCACHE_MAXSIZE: 1.5G") != 2 {
+				t.Errorf("%s CCACHE_MAXSIZE: 1.5G count = %d, want 2", name, strings.Count(s, "CCACHE_MAXSIZE: 1.5G"))
+			}
 			_, after, ok := strings.Cut(s, "key: ccache-bisect-")
 			if !ok {
 				t.Errorf("%s missing key: ccache-bisect-", name)
@@ -2339,5 +2367,72 @@ func TestAggregateRegressionSelection(t *testing.T) {
 		if r.Package != w.pkg || r.Platform != w.plat || r.Profile != w.prof || gotTest != w.test || r.GoodSHA != w.good {
 			t.Errorf("regs3[%d] = (%s, %s, %s, %s, %q), want (%s, %s, %s, %s, %q)", i, r.Package, r.Platform, r.Profile, gotTest, r.GoodSHA, w.pkg, w.plat, w.prof, w.test, w.good)
 		}
+	}
+}
+
+func TestAliveTVVerifiedWording(t *testing.T) {
+	now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	verInc := &incident{
+		ID: "inc-alive-ver", Status: incidentOpen, Confidence: confLikely,
+		GoodSHA: "1111111111111111111111111111111111111111", BadSHA: "2222222222222222222222222222222222222222",
+		CulpritSHA: "2222222222222222222222222222222222222222", CulpritPass: "GVNPass",
+		ASanUBSanClean: true, ConservativeFlagIndependent: true, DiagO0Status: "pass",
+		AliveTVStatus: aliveVerified,
+		Affected:      []affected{{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2, TestID: "t1"}},
+		CreatedAt:     now, UpdatedAt: now,
+	}
+	miscInc := &incident{
+		ID: "inc-alive-misc", Status: incidentOpen, Confidence: confConfirmed,
+		GoodSHA: verInc.GoodSHA, BadSHA: verInc.BadSHA, CulpritSHA: "3333333333333333333333333333333333333333",
+		CulpritPass: "InstCombinePass", ASanUBSanClean: true, AliveTVStatus: aliveMiscompile,
+		Affected:  []affected{{Package: "lua", Platform: platLinuxX86, Profile: profDistroO2, TestID: "t1"}},
+		CreatedAt: now, UpdatedAt: now,
+	}
+
+	const wantNote = "verified (single pass; earlier pass or UB)"
+	verBody := formatGroupBody([]*incident{verInc}, "", defaultSiteURL)
+	if err := checkNoCrossRefs(verBody); err != nil {
+		t.Fatalf("verBody cross-ref: %v", err)
+	}
+	if !strings.Contains(verBody, "| `alive-tv` | "+wantNote+" |") {
+		t.Errorf("verBody missing qualified verified row:\n%s", verBody)
+	}
+	miscBody := formatGroupBody([]*incident{miscInc}, "", defaultSiteURL)
+	if !strings.Contains(miscBody, "| `alive-tv` | miscompile |") {
+		t.Errorf("miscBody missing bare miscompile row:\n%s", miscBody)
+	}
+
+	storeDir, outDir := t.TempDir(), t.TempDir()
+	verPath, err := saveIncident(storeDir, verInc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := saveIncident(storeDir, miscInc); err != nil {
+		t.Fatal(err)
+	}
+	rawJSON, err := os.ReadFile(verPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rawJSON), `"alive_tv_status": "verified"`) {
+		t.Errorf("saved JSON did not preserve bare verified status:\n%s", string(rawJSON))
+	}
+	if err := generateSite(storeDir, outDir, ""); err != nil {
+		t.Fatalf("generateSite: %v", err)
+	}
+	verHTMLBytes, err := os.ReadFile(filepath.Join(outDir, "incidents", verInc.ID, "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	verHTML := string(verHTMLBytes)
+	if !strings.Contains(verHTML, "<code>alive-tv</code>") || !strings.Contains(verHTML, "<td>"+wantNote+"</td>") || strings.Contains(verHTML, "<td>verified</td>") {
+		t.Errorf("verHTML unexpected alive-tv rendering:\n%s", verHTML)
+	}
+	miscHTMLBytes, err := os.ReadFile(filepath.Join(outDir, "incidents", miscInc.ID, "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(miscHTMLBytes), "<td>miscompile</td>") {
+		t.Errorf("miscHTML missing bare miscompile cell:\n%s", string(miscHTMLBytes))
 	}
 }

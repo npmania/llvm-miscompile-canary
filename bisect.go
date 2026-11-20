@@ -1987,8 +1987,11 @@ func bisectCommit(ctx context.Context, o commitBisectOpts) (string, string, erro
 	}
 
 	commits, err := gitListCommits(ctx, o.LLVMSrcDir, goodFull, badFull)
-	if err != nil || len(commits) == 0 {
-		return "", "", fmt.Errorf("list commits %s..%s: %v", goodFull, badFull, err)
+	if err != nil {
+		return "", "", fmt.Errorf("list commits %s..%s: %w", goodFull, badFull, err)
+	}
+	if len(commits) == 0 {
+		return "", "", fmt.Errorf("list commits %s..%s: no commits found", goodFull, badFull)
 	}
 	if len(commits) == 1 {
 		subj, _ := gitOut(ctx, o.LLVMSrcDir, "show", "-s", "--format=%s", commits[0])
@@ -2009,14 +2012,14 @@ func bisectCommit(ctx context.Context, o commitBisectOpts) (string, string, erro
 	}
 	_, _ = gitOut(ctx, o.LLVMSrcDir, "worktree", "prune")
 	_ = os.RemoveAll(wtDir)
-	if _, err := gitOut(ctx, o.LLVMSrcDir, "worktree", "add", "--detach", wtDir, badFull); err != nil {
-		return "", "", err
-	}
 	defer func() {
 		_, _ = gitOut(context.Background(), o.LLVMSrcDir, "worktree", "remove", "--force", wtDir)
 		_ = os.RemoveAll(wtDir)
 		_, _ = gitOut(context.Background(), o.LLVMSrcDir, "worktree", "prune")
 	}()
+	if _, err := gitOut(ctx, o.LLVMSrcDir, "worktree", "add", "--detach", wtDir, badFull); err != nil {
+		return "", "", err
+	}
 
 	buildFn, testFn := o.buildClang, o.testClang
 	if buildFn == nil {
@@ -2037,11 +2040,23 @@ func bisectCommit(ctx context.Context, o commitBisectOpts) (string, string, erro
 	// verify bad endpoint reproduces before bisecting so broken harnesses fail fast
 	badBin, err := buildFn(ctx, wtDir, buildDir, badFull)
 	if err != nil {
+		if ctx.Err() != nil && !errors.Is(err, ctx.Err()) {
+			return "", "", fmt.Errorf("build bad commit %s: %w", shortSHA(badFull), ctx.Err())
+		}
 		return "", "", fmt.Errorf("build bad commit %s: %w", shortSHA(badFull), err)
+	}
+	if ctx.Err() != nil {
+		return "", "", fmt.Errorf("build bad commit %s: %w", shortSHA(badFull), ctx.Err())
 	}
 	badPass, _, err := testFn(ctx, badBin, badFull)
 	if err != nil {
+		if ctx.Err() != nil && !errors.Is(err, ctx.Err()) {
+			return "", "", fmt.Errorf("test bad commit %s: %w", shortSHA(badFull), ctx.Err())
+		}
 		return "", "", fmt.Errorf("test bad commit %s: %w", shortSHA(badFull), err)
+	}
+	if ctx.Err() != nil {
+		return "", "", fmt.Errorf("test bad commit %s: %w", shortSHA(badFull), ctx.Err())
 	}
 	if badPass {
 		return "", "", fmt.Errorf("bad commit %s passed during commit bisect", shortSHA(badFull))
@@ -2049,20 +2064,38 @@ func bisectCommit(ctx context.Context, o commitBisectOpts) (string, string, erro
 
 	revs := append([]string{goodFull}, commits...)
 	cIdx, err := bisectFirstFail(len(revs), func(mid int) (bool, error) {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
 		if mid == len(revs)-1 {
 			return true, nil
 		}
 		sha := revs[mid]
 		if _, err := gitOut(ctx, wtDir, "checkout", "--force", "--detach", sha); err != nil {
+			if ctx.Err() != nil {
+				return false, ctx.Err()
+			}
 			return false, fmt.Errorf("checkout %s: %w", sha, err)
 		}
 		clangBin, err := buildFn(ctx, wtDir, buildDir, sha)
 		if err != nil {
+			if ctx.Err() != nil {
+				return false, ctx.Err()
+			}
 			return false, errBisectSkip
+		}
+		if err := ctx.Err(); err != nil {
+			return false, err
 		}
 		pass, _, err := testFn(ctx, clangBin, sha)
 		if err != nil {
+			if ctx.Err() != nil {
+				return false, ctx.Err()
+			}
 			return false, errBisectSkip
+		}
+		if err := ctx.Err(); err != nil {
+			return false, err
 		}
 		return !pass, nil
 	})
@@ -2161,7 +2194,7 @@ func buildClangInWorktree(ctx context.Context, wtDir, buildDir string, spec plat
 		}
 	}
 	out, err := runToolInDirEnv(ctx, "ninja", []string{"-C", buildDir, "-j", strconv.Itoa(jobs), "clang"}, "", extraEnv)
-	if err != nil && !needCfg && isStaleNinjaError(out) {
+	if err != nil && ctx.Err() == nil && !needCfg && isStaleNinjaError(out) {
 		_ = os.RemoveAll(buildDir)
 		if cfgErr := configure(); cfgErr != nil {
 			return "", cfgErr
@@ -2201,9 +2234,14 @@ func gitListCommits(ctx context.Context, repoDir, goodSHA, badSHA string) ([]str
 }
 
 func gitOut(ctx context.Context, repoDir string, args ...string) (string, error) {
-	out, err := exec.CommandContext(ctx, "git", append([]string{"-C", repoDir}, args...)...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repoDir}, args...)...)
+	setCmdProcessGroup(cmd)
+	out, err := cmd.CombinedOutput()
 	s := strings.TrimSpace(string(out))
 	if err != nil {
+		if ctx.Err() != nil && !errors.Is(err, ctx.Err()) {
+			return s, fmt.Errorf("%w: %v (%s)", ctx.Err(), err, s)
+		}
 		return s, fmt.Errorf("%w (%s)", err, s)
 	}
 	return s, nil
@@ -2217,7 +2255,11 @@ func runToolInDirEnv(ctx context.Context, bin string, args []string, dir string,
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = dir
 	cmd.Env = mergeEnv(os.Environ(), append([]string{"SOURCE_DATE_EPOCH=0"}, extraEnv...))
+	setCmdProcessGroup(cmd)
 	out, err := cmd.CombinedOutput()
+	if err != nil && ctx.Err() != nil && !errors.Is(err, ctx.Err()) {
+		err = fmt.Errorf("%w: %v", ctx.Err(), err)
+	}
 	return strings.TrimSpace(string(out)), err
 }
 

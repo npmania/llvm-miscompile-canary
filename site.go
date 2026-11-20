@@ -34,6 +34,10 @@ type incidentRowView struct {
 	IssueNumber                                                 int
 }
 type kvRow struct{ Label, Value template.HTML }
+type profileSpecView struct {
+	O2Flags, LTOFlags string
+	TargetFlags       []string
+}
 
 var matrixCols = []matrixColumn{
 	{platLinuxX86, profDistroO2, "x86_64 O2"},
@@ -295,9 +299,31 @@ func buildIndexData(st *state, sweeps []*sweep, incs []*incident, catalog []corp
 		Nav               navHeader
 		OpenIncidents     []incidentRowView
 		ResolvedIncidents []incidentRowView
+		ProfileSpec       profileSpecView
 		Columns           []matrixColumn
 		Rows              []matrixRow
-	}{resolveNav(st, sweeps), openRows, resolvedRows, matrixCols, rows}, logEntries
+	}{resolveNav(st, sweeps), openRows, resolvedRows, buildProfileSpec(), matrixCols, rows}, logEntries
+}
+
+func buildProfileSpec() profileSpecView {
+	o2, _ := profileCompilerFlags(profDistroO2, platformSpec{})
+	lto, _ := profileCompilerFlags(profReleaseLTO, platformSpec{})
+	seen := make(map[string]bool, len(matrixCols))
+	var targets []string
+	for _, col := range matrixCols {
+		if seen[col.Platform] {
+			continue
+		}
+		seen[col.Platform] = true
+		if flags := platformSpecs[col.Platform].BaselineFlags; len(flags) > 0 {
+			targets = append(targets, strings.Join(flags, " "))
+		}
+	}
+	return profileSpecView{
+		O2Flags:     strings.Join(o2, " "),
+		LTOFlags:    strings.Join(lto, " "),
+		TargetFlags: targets,
+	}
 }
 
 func logAnchor(pkg, plat, prof string) string {

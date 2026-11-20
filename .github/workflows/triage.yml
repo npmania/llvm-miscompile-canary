@@ -226,7 +226,7 @@ jobs:
       - name: Run lmc triage
         env:
           CCACHE_DIR: ${{ runner.temp }}/ccache
-          CCACHE_MAXSIZE: 3G
+          CCACHE_MAXSIZE: 1.5G
           CCACHE_COMPRESS: 'true'
           TEST_ID: ${{ matrix.test_id }}
           PKG: ${{ matrix.package }}
@@ -257,6 +257,8 @@ jobs:
             -bundle out/dist \
             -store out/store \
             -out out/incident.json \
+            -timeout 215m \
+            -commit-timeout 90m \
             "${extra_args[@]}"
 
           alive_status=""
@@ -365,7 +367,7 @@ jobs:
         env:
           BAD_SHA: ${{ inputs.bad_sha }}
           CCACHE_DIR: ${{ runner.temp }}/ccache-alive2
-          CCACHE_MAXSIZE: 3G
+          CCACHE_MAXSIZE: 1.5G
           CCACHE_COMPRESS: 'true'
         run: |
           set -euo pipefail

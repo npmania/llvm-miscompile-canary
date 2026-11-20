@@ -29,7 +29,32 @@ set -- \
   test_collections \
   test_itertools \
   test_functools \
-  test_ctypes
+  test_ctypes \
+  test_dict \
+  test_set \
+  test_tuple \
+  test_slice \
+  test_range \
+  test_str \
+  test_sort \
+  test_long \
+  test_strtod \
+  test_complex \
+  test_cmath \
+  test_bool \
+  test_compare \
+  test_format \
+  test_opcodes \
+  test_genexps \
+  test_patma \
+  test_array \
+  test_binascii \
+  test_bisect \
+  test_heapq \
+  test_csv \
+  test_operator \
+  test_deque \
+  test_ordered_dict
 
 STATUS_DIR="$BUILD_DIR/.lmc-test-status"
 rm -rf "$STATUS_DIR"

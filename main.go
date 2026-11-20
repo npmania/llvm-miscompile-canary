@@ -799,6 +799,8 @@ func cmdTriage(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	bundleURL := fs.String("bundle-url", "", "optional bundle URL")
 	storeDir := fs.String("store", "", "optional store dir")
 	outPath := fs.String("out", "", "optional incident JSON output path")
+	timeout := fs.Duration("timeout", 0, "overall triage timeout (0 = unlimited)")
+	commitTimeout := fs.Duration("commit-timeout", defaultCommitTimeout, "commit bisection timeout")
 	jobs := fs.Int("jobs", 0, "parallel jobs")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -821,11 +823,17 @@ func cmdTriage(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if err != nil {
 		return err
 	}
+	if *timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, *timeout)
+		defer cancel()
+	}
 
 	res, err := triage(ctx, triageOpts{
 		Runner: &runner{CacheDir: *cache, Jobs: *jobs}, Recipe: rec, Spec: badTC.Spec, Profile: *prof,
 		GoodTC: goodTC, BadTC: badTC, GoodSHA: *goodSHA, BadSHA: *badSHA, TestID: *testID,
-		WorkDir: *dir, BundleDir: *bundle, BundleBaseURL: *bundleURL, LLVMSrcDir: *llvmSrc, Jobs: *jobs,
+		WorkDir: *dir, BundleDir: *bundle, BundleBaseURL: *bundleURL, LLVMSrcDir: *llvmSrc,
+		CommitTimeout: *commitTimeout, Jobs: *jobs,
 	})
 	if err != nil {
 		return err
@@ -837,6 +845,9 @@ func cmdTriage(ctx context.Context, args []string, stdout, stderr io.Writer) err
 			fmt.Fprintf(stdout, "[triage] dropped %s (%s/%s): %s\n", rec.Name, badTC.Spec.ID, *prof, res.DropReason)
 		}
 		return nil
+	}
+	if res.CommitBisectErr != "" {
+		fmt.Fprintf(stderr, "[triage] commit bisect skipped/failed (continuing with pass bisect): %s\n", res.CommitBisectErr)
 	}
 
 	inc := res.Incident

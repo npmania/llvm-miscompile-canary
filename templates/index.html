@@ -40,6 +40,9 @@
     {{- end}}
 
     <h2>Corpus</h2>
+    {{- if .ProfileSpec.O2Flags}}
+    <p class="cmd"><code>O2</code>: <code>{{.ProfileSpec.O2Flags}}</code> · <code>LTO</code>: <code>{{.ProfileSpec.LTOFlags}}</code>{{- if .ProfileSpec.TargetFlags}} ({{- range $i, $f := .ProfileSpec.TargetFlags}}{{if $i}} / {{end}}<code>{{$f}}</code>{{- end}}){{- end}}</p>
+    {{- end}}
     <div class="table-scroll">
       <table>
         <thead>

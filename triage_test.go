@@ -498,6 +498,58 @@ func TestCommitBisect(t *testing.T) {
 	if out := runGit("worktree", "list"); strings.Contains(out, "llvm-project") {
 		t.Fatalf("worktree leaked:\n%s", out)
 	}
+
+	ctxCancelBuild, cancelBuild := context.WithCancel(context.Background())
+	defer cancelBuild()
+	buildCalls := 0
+	_, _, err = bisectCommit(ctxCancelBuild, commitBisectOpts{
+		LLVMSrcDir: repo, GoodSHA: shas[0], BadSHA: shas[9], WorkDir: filepath.Join(t.TempDir(), "work-cancel-build"),
+		buildClang: func(_ context.Context, wt, _, _ string) (string, error) {
+			buildCalls++
+			if buildCalls == 2 {
+				cancelBuild()
+				return "", errors.New("interrupted")
+			}
+			return filepath.Join(wt, "v.txt"), nil
+		},
+		testClang: func(_ context.Context, marker, _ string) (bool, string, error) {
+			raw, err := os.ReadFile(marker)
+			return strings.HasPrefix(string(raw), "GOOD"), "", err
+		},
+	})
+	if !errors.Is(err, context.Canceled) || buildCalls != 2 {
+		t.Fatalf("cancel in buildClang: err=%v calls=%d, want context.Canceled with calls=2", err, buildCalls)
+	}
+
+	ctxCancelTest, cancelTest := context.WithCancel(context.Background())
+	defer cancelTest()
+	testCalls := 0
+	_, _, err = bisectCommit(ctxCancelTest, commitBisectOpts{
+		LLVMSrcDir: repo, GoodSHA: shas[0], BadSHA: shas[9], WorkDir: filepath.Join(t.TempDir(), "work-cancel-test"),
+		buildClang: func(_ context.Context, wt, _, _ string) (string, error) {
+			return filepath.Join(wt, "v.txt"), nil
+		},
+		testClang: func(_ context.Context, marker, _ string) (bool, string, error) {
+			testCalls++
+			if testCalls == 2 {
+				cancelTest()
+				return false, "", nil
+			}
+			raw, err := os.ReadFile(marker)
+			return strings.HasPrefix(string(raw), "GOOD"), "", err
+		},
+	})
+	if !errors.Is(err, context.Canceled) || testCalls != 2 {
+		t.Fatalf("cancel in testClang: err=%v calls=%d, want context.Canceled with calls=2", err, testCalls)
+	}
+
+	ctxKill, cancelKill := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancelKill()
+	start := time.Now()
+	_, err = runToolInDirEnv(ctxKill, "sh", []string{"-c", "sleep 30 & wait"}, "", nil)
+	if elapsed := time.Since(start); !errors.Is(err, context.DeadlineExceeded) || elapsed >= 2*time.Second {
+		t.Fatalf("runToolInDirEnv pgid kill: err=%v elapsed=%v", err, elapsed)
+	}
 }
 
 func TestAliveTV(t *testing.T) {
@@ -947,6 +999,217 @@ sed 's/ret i32 0/ret i32 1/' "$in" > "$out"
 	if !fileNonEmpty(resSmall.ReducedBeforePath) || !fileNonEmpty(resSmall.ReducedAfterPath) {
 		t.Fatalf("expected verified smaller reduced pair, got %+v", resSmall)
 	}
+	var smallSpec reduceSpec
+	if err := readJSON(filepath.Join(scratchSmall, "reduce_spec.json"), &smallSpec); err != nil {
+		t.Fatalf("read scratchSmall reduce_spec.json: %v", err)
+	}
+	if smallSpec.BeforeClang != tc.Clang || !slices.Contains(smallSpec.BeforeFlags, "-O2") || slices.Contains(smallSpec.BeforeFlags, "-O0") {
+		t.Fatalf("expected GoodTC -O2 oracle, got BeforeClang=%q BeforeFlags=%v", smallSpec.BeforeClang, smallSpec.BeforeFlags)
+	}
+
+	failClang := filepath.Join(tmp, "fail-clang")
+	if err := os.WriteFile(failClang, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	brokenGoodTC := *tc
+	brokenGoodTC.Clang = failClang
+	for _, tcCase := range []struct {
+		name   string
+		goodTC *toolchain
+	}{
+		{"good-exit-1", &brokenGoodTC},
+		{"good-nil", nil},
+	} {
+		sc := filepath.Join(tmp, "scratch-fb-"+tcCase.name)
+		if _, err := runLLVMReduce(context.Background(), triageOpts{
+			Runner: &runner{LMCBin: selfExe}, Recipe: rec, Spec: spec, Profile: profDistroO2, GoodTC: tcCase.goodTC, BadTC: &redTC,
+		}, badWS, "t1", objRes, &passBisectResult{
+			CulpritPass: "instcombine", BeforeFullIRPath: goodIR, BeforeIRPath: largeBefore, AfterIRPath: largeAfter,
+		}, sc); err != nil {
+			t.Fatalf("runLLVMReduce(%s): %v", tcCase.name, err)
+		}
+		var fbSpec reduceSpec
+		if err := readJSON(filepath.Join(sc, "reduce_spec.json"), &fbSpec); err != nil {
+			t.Fatalf("read %s reduce_spec.json: %v", tcCase.name, err)
+		}
+		if fbSpec.BeforeClang != redTC.Clang || !slices.Contains(fbSpec.BeforeFlags, "-O0") {
+			t.Fatalf("%s fallback got BeforeClang=%q BeforeFlags=%v", tcCase.name, fbSpec.BeforeClang, fbSpec.BeforeFlags)
+		}
+	}
+
+	if len(spec.BaselineFlags) == 0 {
+		t.Fatal("expected non-empty BaselineFlags on host platform")
+	}
+	attrIR := filepath.Join(tmp, "attr.ll")
+	if err := os.WriteFile(attrIR, []byte("define i32 @main() #0 {\n  ret i32 0\n}\nattributes #0 = { \"target-features\"=\"\" }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mockClangO3 := filepath.Join(tmp, "mock-clang-o3")
+	o3Script := fmt.Sprintf(`#!/bin/sh
+set -eu
+has_o3=0
+prev=""
+ir=""
+out=""
+for a in "$@"; do
+  if [ "$a" = "-O3" ]; then has_o3=1; fi
+  if [ "$prev" = "-o" ]; then out="$a"; fi
+  case "$a" in *.ll) ir="$a" ;; esac
+  prev="$a"
+done
+if [ "$has_o3" -eq 1 ] && grep -q "ret i32 0" "$ir"; then
+  mod="${out}.mod.ll"
+  sed 's/ret i32 0/ret i32 1/' "$ir" > "$mod"
+  first=1
+  for a in "$@"; do
+    if [ "$first" -eq 1 ]; then set --; first=0; fi
+    if [ "$a" = "$ir" ]; then set -- "$@" "$mod"; else set -- "$@" "$a"; fi
+  done
+  exec %s "$@"
+fi
+exec %s "$@"
+`, shQuote(tc.Clang), shQuote(tc.Clang))
+	if err := os.WriteFile(mockClangO3, []byte(o3Script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mockClangNeedBase := filepath.Join(tmp, "mock-clang-need-base")
+	needBaseScript := fmt.Sprintf(`#!/bin/sh
+set -eu
+has_o3=0
+has_base=0
+prev=""
+ir=""
+out=""
+for a in "$@"; do
+  if [ "$a" = "-O3" ]; then has_o3=1; fi
+  if [ "$a" = %s ]; then has_base=1; fi
+  if [ "$prev" = "-o" ]; then out="$a"; fi
+  case "$a" in *.ll) ir="$a" ;; esac
+  prev="$a"
+done
+if [ "$has_o3" -eq 1 ] && [ "$has_base" -eq 1 ] && grep -q "ret i32 0" "$ir"; then
+  mod="${out}.mod.ll"
+  sed 's/ret i32 0/ret i32 1/' "$ir" > "$mod"
+  first=1
+  for a in "$@"; do
+    if [ "$first" -eq 1 ]; then set --; first=0; fi
+    if [ "$a" = "$ir" ]; then set -- "$@" "$mod"; else set -- "$@" "$a"; fi
+  done
+  exec %s "$@"
+fi
+exec %s "$@"
+`, shQuote(spec.BaselineFlags[0]), shQuote(tc.Clang), shQuote(tc.Clang))
+	if err := os.WriteFile(mockClangNeedBase, []byte(needBaseScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ltoRedTC := redTC
+	ltoRedTC.Clang = mockClangO3
+	scratchAttr := filepath.Join(tmp, "scratch-lto-attr")
+	if _, err := runLLVMReduce(context.Background(), triageOpts{
+		Runner: &runner{LMCBin: selfExe}, Recipe: rec, Spec: spec, Profile: profReleaseLTO, GoodTC: tc, BadTC: &ltoRedTC,
+	}, badWS, "t1", objRes, &passBisectResult{
+		CulpritPass: "instcombine", BeforeFullIRPath: attrIR, BeforeIRPath: largeBefore, AfterIRPath: largeAfter,
+	}, scratchAttr); err != nil {
+		t.Fatalf("runLLVMReduce(lto-attr): %v", err)
+	}
+	var attrSpec reduceSpec
+	if err := readJSON(filepath.Join(scratchAttr, "reduce_spec.json"), &attrSpec); err != nil {
+		t.Fatalf("read scratchAttr reduce_spec.json: %v", err)
+	}
+	for _, bf := range spec.BaselineFlags {
+		if slices.Contains(attrSpec.BeforeFlags, bf) || slices.Contains(attrSpec.AfterFlags, bf) {
+			t.Fatalf("expected baseline flag %q stripped for attrIR, got before=%v after=%v", bf, attrSpec.BeforeFlags, attrSpec.AfterFlags)
+		}
+	}
+
+	scratchNoAttr := filepath.Join(tmp, "scratch-lto-noattr")
+	if _, err := runLLVMReduce(context.Background(), triageOpts{
+		Runner: &runner{LMCBin: selfExe}, Recipe: rec, Spec: spec, Profile: profReleaseLTO, GoodTC: tc, BadTC: &ltoRedTC,
+	}, badWS, "t1", objRes, &passBisectResult{
+		CulpritPass: "instcombine", BeforeFullIRPath: goodIR, BeforeIRPath: largeBefore, AfterIRPath: largeAfter,
+	}, scratchNoAttr); err != nil {
+		t.Fatalf("runLLVMReduce(lto-noattr): %v", err)
+	}
+	var noAttrSpec reduceSpec
+	if err := readJSON(filepath.Join(scratchNoAttr, "reduce_spec.json"), &noAttrSpec); err != nil {
+		t.Fatalf("read scratchNoAttr reduce_spec.json: %v", err)
+	}
+	for _, bf := range spec.BaselineFlags {
+		if !slices.Contains(noAttrSpec.BeforeFlags, bf) || !slices.Contains(noAttrSpec.AfterFlags, bf) {
+			t.Fatalf("expected baseline flag %q kept for goodIR, got before=%v after=%v", bf, noAttrSpec.BeforeFlags, noAttrSpec.AfterFlags)
+		}
+	}
+
+	ltoNeedBaseTC := redTC
+	ltoNeedBaseTC.Clang = mockClangNeedBase
+	scratchNeedBase := filepath.Join(tmp, "scratch-lto-needbase")
+	if _, err := runLLVMReduce(context.Background(), triageOpts{
+		Runner: &runner{LMCBin: selfExe}, Recipe: rec, Spec: spec, Profile: profReleaseLTO, GoodTC: tc, BadTC: &ltoNeedBaseTC,
+	}, badWS, "t1", objRes, &passBisectResult{
+		CulpritPass: "instcombine", BeforeFullIRPath: attrIR, BeforeIRPath: largeBefore, AfterIRPath: largeAfter,
+	}, scratchNeedBase); err != nil {
+		t.Fatalf("runLLVMReduce(lto-needbase): %v", err)
+	}
+	var needBaseSpec reduceSpec
+	if err := readJSON(filepath.Join(scratchNeedBase, "reduce_spec.json"), &needBaseSpec); err != nil {
+		t.Fatalf("read scratchNeedBase reduce_spec.json: %v", err)
+	}
+	for _, bf := range spec.BaselineFlags {
+		if !slices.Contains(needBaseSpec.BeforeFlags, bf) || !slices.Contains(needBaseSpec.AfterFlags, bf) {
+			t.Fatalf("expected fallback to keep baseline flag %q, got before=%v after=%v", bf, needBaseSpec.BeforeFlags, needBaseSpec.AfterFlags)
+		}
+	}
+
+	mockGoodNeedBase := filepath.Join(tmp, "mock-good-need-base")
+	goodNeedBaseScript := fmt.Sprintf(`#!/bin/sh
+set -eu
+for a in "$@"; do
+  if [ "$a" = %s ]; then exec %s "$@"; fi
+done
+exit 1
+`, shQuote(spec.BaselineFlags[0]), shQuote(tc.Clang))
+	if err := os.WriteFile(mockGoodNeedBase, []byte(goodNeedBaseScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	goodNeedBaseTC := *tc
+	goodNeedBaseTC.Clang = mockGoodNeedBase
+	scratchGoodOrder := filepath.Join(tmp, "scratch-lto-good-order")
+	if _, err := runLLVMReduce(context.Background(), triageOpts{
+		Runner: &runner{LMCBin: selfExe}, Recipe: rec, Spec: spec, Profile: profReleaseLTO, GoodTC: &goodNeedBaseTC, BadTC: &ltoRedTC,
+	}, badWS, "t1", objRes, &passBisectResult{
+		CulpritPass: "instcombine", BeforeFullIRPath: attrIR, BeforeIRPath: largeBefore, AfterIRPath: largeAfter,
+	}, scratchGoodOrder); err != nil {
+		t.Fatalf("runLLVMReduce(lto-good-order): %v", err)
+	}
+	var goodOrderSpec reduceSpec
+	if err := readJSON(filepath.Join(scratchGoodOrder, "reduce_spec.json"), &goodOrderSpec); err != nil {
+		t.Fatalf("read scratchGoodOrder reduce_spec.json: %v", err)
+	}
+	if goodOrderSpec.BeforeClang != mockGoodNeedBase || !slices.Contains(goodOrderSpec.BeforeFlags, spec.BaselineFlags[0]) {
+		t.Fatalf("expected GoodTC withBase before BadTC -O0 noBase, got BeforeClang=%q BeforeFlags=%v", goodOrderSpec.BeforeClang, goodOrderSpec.BeforeFlags)
+	}
+
+	scratchSkew := filepath.Join(tmp, "scratch-lto-skew")
+	if _, err := runLLVMReduce(context.Background(), triageOpts{
+		Runner: &runner{LMCBin: selfExe}, Recipe: rec, Spec: spec, Profile: profReleaseLTO, GoodTC: &brokenGoodTC, BadTC: &ltoRedTC,
+	}, badWS, "t1", objRes, &passBisectResult{
+		CulpritPass: "instcombine", BeforeFullIRPath: attrIR, BeforeIRPath: largeBefore, AfterIRPath: largeAfter,
+	}, scratchSkew); err != nil {
+		t.Fatalf("runLLVMReduce(lto-skew): %v", err)
+	}
+	var skewSpec reduceSpec
+	if err := readJSON(filepath.Join(scratchSkew, "reduce_spec.json"), &skewSpec); err != nil {
+		t.Fatalf("read scratchSkew reduce_spec.json: %v", err)
+	}
+	if skewSpec.BeforeClang != ltoRedTC.Clang || !slices.Contains(skewSpec.BeforeFlags, "-O0") {
+		t.Fatalf("expected BadTC -O0 fallback on GoodTC skew, got BeforeClang=%q BeforeFlags=%v", skewSpec.BeforeClang, skewSpec.BeforeFlags)
+	}
+	for _, bf := range spec.BaselineFlags {
+		if slices.Contains(skewSpec.BeforeFlags, bf) || slices.Contains(skewSpec.AfterFlags, bf) {
+			t.Fatalf("expected skew fallback to preserve stripped flag %q, got before=%v after=%v", bf, skewSpec.BeforeFlags, skewSpec.AfterFlags)
+		}
+	}
 
 	noRedTC := redTC
 	noRedTC.LLVMReduce = ""
@@ -1078,6 +1341,57 @@ func TestTriageHelpers(t *testing.T) {
 	}
 	if raw, err := os.ReadFile(filepath.Join(flScratch2, "filelist_reduce_split.txt")); err != nil || string(raw) != "a.o\n"+candPath+"\n"+restPath+"\nb.o\n" {
 		t.Fatalf("split -Wl,-filelist content = %q (%v)", string(raw), err)
+	}
+
+	if d, ok := commitBisectBudget(context.Background(), 0); !ok || d != defaultCommitTimeout {
+		t.Fatalf("commitBisectBudget(bg, 0) = (%v, %v), want (%v, true)", d, ok, defaultCommitTimeout)
+	}
+	if d, ok := commitBisectBudget(context.Background(), 10*time.Minute); !ok || d != 10*time.Minute {
+		t.Fatalf("commitBisectBudget(bg, 10m) = (%v, %v), want (10m, true)", d, ok)
+	}
+	ctx30s, c30s := context.WithTimeout(context.Background(), 30*time.Second)
+	defer c30s()
+	if d, ok := commitBisectBudget(ctx30s, 200*time.Millisecond); !ok || d != 200*time.Millisecond {
+		t.Fatalf("commitBisectBudget(30s, 200ms) = (%v, %v), want (200ms, true)", d, ok)
+	}
+	ctx10m, c10m := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer c10m()
+	if d, ok := commitBisectBudget(ctx10m, 90*time.Minute); !ok || d < 4*time.Minute+50*time.Second || d > 5*time.Minute {
+		t.Fatalf("commitBisectBudget(10m, 90m) = (%v, %v), want (~5m, true)", d, ok)
+	}
+	ctx2m, c2m := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer c2m()
+	if d, ok := commitBisectBudget(ctx2m, 90*time.Minute); ok || d != 0 {
+		t.Fatalf("commitBisectBudget(2m, 90m) = (%v, %v), want (0, false)", d, ok)
+	}
+	ctx100ms, c100ms := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer c100ms()
+	if d, ok := commitBisectBudget(ctx100ms, 200*time.Millisecond); ok || d != 0 {
+		t.Fatalf("commitBisectBudget(100ms, 200ms) = (%v, %v), want (0, false)", d, ok)
+	}
+
+	plainIR := filepath.Join(tmp, "plain.ll")
+	cpuIR := filepath.Join(tmp, "cpu.ll")
+	featIR := filepath.Join(tmp, "feat.ll")
+	_ = os.WriteFile(plainIR, []byte("define i32 @f() {\n  ret i32 0\n}\n"), 0o644)
+	_ = os.WriteFile(cpuIR, []byte("attributes #0 = { \"target-cpu\"=\"apple-m1\" }\n"), 0o644)
+	_ = os.WriteFile(featIR, []byte("attributes #0 = { \"target-features\"=\"+avx2\" }\n"), 0o644)
+	if irHasTargetAttrs(filepath.Join(tmp, "missing.ll")) || irHasTargetAttrs(plainIR) {
+		t.Fatal("irHasTargetAttrs false-positived")
+	}
+	if !irHasTargetAttrs(cpuIR) || !irHasTargetAttrs(featIR) {
+		t.Fatal("irHasTargetAttrs missed target-cpu or target-features")
+	}
+
+	origFlags := []string{"-O3", "-march=x86-64-v3", "-Wno-error"}
+	stripped := withoutBaselineFlags(origFlags, []string{"-march=x86-64-v3"})
+	if !slices.Equal(stripped, []string{"-O3", "-Wno-error"}) || !slices.Equal(origFlags, []string{"-O3", "-march=x86-64-v3", "-Wno-error"}) {
+		t.Fatalf("withoutBaselineFlags = %v (orig=%v)", stripped, origFlags)
+	}
+	cloned := withoutBaselineFlags(origFlags, nil)
+	cloned[0] = "-O0"
+	if origFlags[0] != "-O3" {
+		t.Fatalf("withoutBaselineFlags aliased input slice: %v", origFlags)
 	}
 }
 
@@ -1478,4 +1792,251 @@ exec %s "$@"
 			t.Errorf("bundle missing or empty %q (seen=%v)", f, seen)
 		}
 	}
+
+	noRedBadTC := badTC
+	noRedBadTC.LLVMReduce, noRedBadTC.AliveTV, noRedBadTC.LLUBI = "", "", ""
+
+	t.Run("commit-bisect-error-best-effort", func(t *testing.T) {
+		r, err := triage(context.Background(), triageOpts{
+			Runner:        &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2},
+			Recipe:        rec,
+			Spec:          spec,
+			Profile:       profDistroO2,
+			GoodTC:        goodTC,
+			BadTC:         &noRedBadTC,
+			GoodSHA:       commits[0],
+			BadSHA:        commits[4],
+			WorkDir:       filepath.Join(tmp, "work-cb-err"),
+			BundleDir:     filepath.Join(tmp, "bundles-cb-err"),
+			LLVMSrcDir:    llvmRepo,
+			ReduceMaxIter: 1,
+			ReduceTimeout: 20 * time.Second,
+			buildClang: func(context.Context, string, string, string) (string, error) {
+				return "", errors.New("boom")
+			},
+		})
+		if err != nil || r == nil || r.Dropped || r.Incident == nil {
+			t.Fatalf("got r=%+v err=%v", r, err)
+		}
+		if r.CommitBisectErr == "" || r.Incident.CulpritSHA != "" || !strings.Contains(r.Incident.ReducedIR, "@compute_kernel") || !fileNonEmpty(r.BundlePath) {
+			t.Fatalf("unexpected best-effort result: err=%q sha=%q bundle=%q ir=%q", r.CommitBisectErr, r.Incident.CulpritSHA, r.BundlePath, r.Incident.ReducedIR)
+		}
+	})
+
+	t.Run("commit-bisect-timeout-best-effort", func(t *testing.T) {
+		r, err := triage(context.Background(), triageOpts{
+			Runner:        &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2},
+			Recipe:        rec,
+			Spec:          spec,
+			Profile:       profDistroO2,
+			GoodTC:        goodTC,
+			BadTC:         &noRedBadTC,
+			GoodSHA:       commits[0],
+			BadSHA:        commits[4],
+			WorkDir:       filepath.Join(tmp, "work-cb-timeout"),
+			BundleDir:     filepath.Join(tmp, "bundles-cb-timeout"),
+			LLVMSrcDir:    llvmRepo,
+			ReduceMaxIter: 1,
+			ReduceTimeout: 20 * time.Second,
+			CommitTimeout: 150 * time.Millisecond,
+			buildClang: func(ctx context.Context, _, _, _ string) (string, error) {
+				<-ctx.Done()
+				return "", ctx.Err()
+			},
+		})
+		if err != nil || r == nil || r.Dropped || r.Incident == nil {
+			t.Fatalf("got r=%+v err=%v", r, err)
+		}
+		if !strings.Contains(r.CommitBisectErr, "deadline exceeded") || r.Incident.CulpritSHA != "" || !strings.Contains(r.Incident.ReducedIR, "@compute_kernel") || !fileNonEmpty(r.BundlePath) {
+			t.Fatalf("unexpected timeout result: err=%q sha=%q bundle=%q", r.CommitBisectErr, r.Incident.CulpritSHA, r.BundlePath)
+		}
+	})
+
+	t.Run("commit-bisect-skip-on-tight-deadline", func(t *testing.T) {
+		tightCtx, cancelTight := context.WithTimeout(context.Background(), 4*time.Minute)
+		defer cancelTight()
+		called := false
+		r, err := triage(tightCtx, triageOpts{
+			Runner:        &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2},
+			Recipe:        rec,
+			Spec:          spec,
+			Profile:       profDistroO2,
+			GoodTC:        goodTC,
+			BadTC:         &noRedBadTC,
+			GoodSHA:       commits[0],
+			BadSHA:        commits[4],
+			WorkDir:       filepath.Join(tmp, "work-cb-skip"),
+			BundleDir:     filepath.Join(tmp, "bundles-cb-skip"),
+			LLVMSrcDir:    llvmRepo,
+			ReduceMaxIter: 1,
+			ReduceTimeout: 20 * time.Second,
+			buildClang: func(context.Context, string, string, string) (string, error) {
+				called = true
+				return badClang, nil
+			},
+		})
+		if err != nil || r == nil || r.Dropped || r.Incident == nil {
+			t.Fatalf("got r=%+v err=%v", r, err)
+		}
+		if called || r.CommitBisectErr == "" || r.Incident.CulpritSHA != "" || !fileNonEmpty(r.BundlePath) {
+			t.Fatalf("unexpected skip result: called=%v err=%q sha=%q bundle=%q", called, r.CommitBisectErr, r.Incident.CulpritSHA, r.BundlePath)
+		}
+	})
+
+	t.Run("parent-cancel-propagates", func(t *testing.T) {
+		parentCtx, cancelParent := context.WithCancel(context.Background())
+		defer cancelParent()
+		_, err := triage(parentCtx, triageOpts{
+			Runner:        &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2},
+			Recipe:        rec,
+			Spec:          spec,
+			Profile:       profDistroO2,
+			GoodTC:        goodTC,
+			BadTC:         &noRedBadTC,
+			GoodSHA:       commits[0],
+			BadSHA:        commits[4],
+			WorkDir:       filepath.Join(tmp, "work-cb-cancel"),
+			BundleDir:     filepath.Join(tmp, "bundles-cb-cancel"),
+			LLVMSrcDir:    llvmRepo,
+			ReduceMaxIter: 1,
+			ReduceTimeout: 20 * time.Second,
+			buildClang: func(context.Context, string, string, string) (string, error) {
+				cancelParent()
+				return "", context.Canceled
+			},
+		})
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("got err=%v, want context.Canceled", err)
+		}
+	})
+
+	t.Run("cmd-triage-timeout-flags", func(t *testing.T) {
+		writeExec := func(dir, name, target string) {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			p := filepath.Join(dir, name)
+			body := fmt.Sprintf("#!/bin/sh\nexec %s \"$@\"\n", shQuote(target))
+			if err := os.WriteFile(p, []byte(body), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		goodTCBin := filepath.Join(tmp, "cli-good-bin")
+		badTCBin := filepath.Join(tmp, "cli-bad-bin")
+		writeExec(goodTCBin, "clang", goodTC.Clang)
+		writeExec(goodTCBin, "clang++", goodTC.ClangXX)
+		writeExec(goodTCBin, filepath.Base(goodTC.Linker), goodTC.Linker)
+		writeExec(badTCBin, "clang", badClang)
+		writeExec(badTCBin, "clang++", goodTC.ClangXX)
+		writeExec(badTCBin, filepath.Base(goodTC.Linker), goodTC.Linker)
+
+		outJSON := filepath.Join(tmp, "cli-incident.json")
+		var cliOut, cliErr bytes.Buffer
+		err := cmdTriage(context.Background(), []string{
+			"-corpus", filepath.Join(tmp, "corpus"),
+			"-pkg", "cleanbug",
+			"-plat", spec.ID,
+			"-prof", profDistroO2,
+			"-good-tc", goodTCBin,
+			"-bad-tc", badTCBin,
+			"-good", commits[0],
+			"-bad", commits[4],
+			"-llvm", llvmRepo,
+			"-dir", filepath.Join(tmp, "work-cli"),
+			"-cache", filepath.Join(tmp, "cache"),
+			"-bundle", filepath.Join(tmp, "bundles-cli"),
+			"-out", outJSON,
+			"-timeout", "4m",
+			"-commit-timeout", "90m",
+			"-jobs", "2",
+		}, &cliOut, &cliErr)
+		if err != nil {
+			t.Fatalf("cmdTriage: %v\nstderr=%s", err, cliErr.String())
+		}
+		if !strings.Contains(cliErr.String(), "[triage] commit bisect skipped/failed (continuing with pass bisect):") {
+			t.Fatalf("missing commit bisect warning on stderr: %q", cliErr.String())
+		}
+		var cliInc incident
+		if err := readJSON(outJSON, &cliInc); err != nil {
+			t.Fatalf("read -out JSON: %v", err)
+		}
+		if cliInc.CulpritSHA != "" || cliInc.CulpritTU != "culprit.c" || cliInc.CulpritPassIndex != bugPass {
+			t.Fatalf("unexpected CLI incident: %+v", cliInc)
+		}
+	})
+}
+
+func TestTriageContextCancel(t *testing.T) {
+	spec, tc := hostToolchainOrSkip(t)
+	selfExe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp := t.TempDir()
+	srcDir := filepath.Join(tmp, "src")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "stub.c"), []byte("int main(void){return 0;}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	makeRec := func(name, buildBody, testBody string) *recipe {
+		dir := filepath.Join(tmp, "rec-"+name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "build.sh"), []byte("#!/bin/sh\nset -eu\n"+buildBody+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "test_one.sh"), []byte("#!/bin/sh\nset -eu\n"+testBody+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return &recipe{Name: name, Dir: dir, TimeoutMin: 1, SmokeTest: "t1"}
+	}
+
+	t.Run("bad-build-deadline", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+		rec := makeRec("bad-hang", "sleep 10", "exit 1")
+		res, err := triage(ctx, triageOpts{
+			Runner: &runner{LMCBin: selfExe, Jobs: 1}, Recipe: rec, Spec: spec, Profile: profDistroO2,
+			GoodTC: tc, BadTC: tc, TestID: "t1", SrcDir: srcDir, WorkDir: filepath.Join(tmp, "w-bad-hang"),
+		})
+		if !errors.Is(err, context.DeadlineExceeded) || res != nil {
+			t.Fatalf("bad-build deadline: res=%+v err=%v, want context.DeadlineExceeded", res, err)
+		}
+	})
+
+	t.Run("good-test-cancel", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		marker := filepath.Join(tmp, "in-good-test")
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			tk := time.NewTicker(10 * time.Millisecond)
+			defer tk.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-tk.C:
+					if fileExists(marker) {
+						cancel()
+						return
+					}
+				}
+			}
+		}()
+		rec := makeRec("good-test-hang", "exit 0", fmt.Sprintf(`case "$BUILD_DIR" in *good-build*) : > %s; sleep 10 ;; *) exit 1 ;; esac`, shQuote(marker)))
+		res, err := triage(ctx, triageOpts{
+			Runner: &runner{LMCBin: selfExe, Jobs: 1}, Recipe: rec, Spec: spec, Profile: profDistroO2,
+			GoodTC: tc, BadTC: tc, TestID: "t1", FlakyAttempts: 1, SrcDir: srcDir, WorkDir: filepath.Join(tmp, "w-good-test-hang"),
+		})
+		cancel()
+		<-done
+		if !errors.Is(err, context.Canceled) || res != nil {
+			t.Fatalf("good-test cancel: res=%+v err=%v, want context.Canceled", res, err)
+		}
+	})
 }
