@@ -1,0 +1,11 @@
+LLVM Miscompile Canary
+======================
+
+Miscompile testing for trunk LLVM.
+
+About
+-----
+
+Builds and tests various projects with trunk LLVM to catch miscompiles and
+compiler crashes. Regressions are isolated into a minimal reproducer and
+diff using bisection, llvm-reduce, alive-tv, and llubi.
