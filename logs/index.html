@@ -7,77 +7,41 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <header><strong>llvm-miscompile-canary</strong> · trunk <a href="https://github.com/llvm/llvm-project/commit/d71d3a9b75d9b21fc8fc8069cce2de71023b5b41" rel="noopener"><code>d71d3a9b75d9</code></a> · <time datetime="2026-11-21T09:26:59Z">2026-11-21 09:26 UTC</time> · <a href="/">status</a> · <a href="/corpus/">corpus</a> · <a href="https://github.com/npmania/llvm-miscompile-canary" rel="noopener">git</a></header>
+  <header><strong>llvm-miscompile-canary</strong> · trunk <a href="https://github.com/llvm/llvm-project/commit/4d3d622e99e50163981323a3d114a92006956a37" rel="noopener"><code>4d3d622e99e5</code></a> · <time datetime="2026-11-21T14:17:09Z">2026-11-21 14:17 UTC</time> · <a href="/">status</a> · <a href="/corpus/">corpus</a> · <a href="https://github.com/npmania/llvm-miscompile-canary" rel="noopener">git</a></header>
   <main>
     <h1>Failure Logs</h1>
-    <h2 id="log-ffmpeg-linux-riscv64-release-lto">ffmpeg (linux-riscv64 / -O3 -flto=thin) <span class="muted">· test failure</span></h2>
+    <h2 id="log-simdutf-linux-riscv64-release-lto">simdutf (linux-riscv64 / -O3 -flto=thin) <span class="muted">· test failure</span></h2>
+    <p class="cmd"><code>validate_utf32_basic_tests</code></p>
     <pre><code>...
-TEST    lavf-xwd
-TEST    lavf-rgba.xwd
-TEST    lavf-rgb565be.xwd
-TEST    lavf-rgb555be.xwd
-TEST    lavf-rgb8.xwd
-TEST    lavf-rgb4_byte.xwd
-TEST    lavf-gray.xwd
-TEST    lavf-monow.xwd
-TEST    lavf-pbmpipe
-TEST    lavf-pgmpipe
-TEST    lavf-ppmpipe
-TEST    lavf-qoipipe
-TEST    lavf-xbmpipe
-TEST    lavf-xwdpipe
-TEST    lavf-y4m
-TEST    lavf-gray.fits
-TEST    lavf-gray16be.fits
-TEST    lavf-gbrp.fits
-TEST    lavf-gbrap.fits
-TEST    lavf-gbrp16be.fits
-TEST    lavf-gbrap16be.fits
-TEST    lavf-gif
-TEST    seek-lavf-aiff
-TEST    seek-lavf-al
-TEST    seek-lavf-au
-TEST    seek-lavf-mmf
-TEST    seek-lavf-ogg
-TEST    seek-lavf-ul
-TEST    seek-lavf-voc
-TEST    seek-lavf-wav
-TEST    seek-lavf-asf
-TEST    seek-lavf-avi
-TEST    seek-lavf-dv
-TEST    seek-lavf-gxf
-TEST    seek-lavf-mkv
-TEST    seek-lavf-mov
-TEST    seek-lavf-mpg
-TEST    seek-lavf-mxf
-TEST    seek-lavf-mxf_d10
-TEST    seek-lavf-mxf_dv25
-TEST    seek-lavf-mxf_dvcpro50
-TEST    seek-lavf-mxf_opatom
-TEST    seek-lavf-mxf_opatom_audio
-TEST    seek-lavf-nut
-TEST    seek-lavf-swf
-TEST    seek-lavf-ts
-TEST    seek-lavf-wtv
-TEST    seek-lavf-rm
-TEST    seek-lavf-y4m
-TEST    seek-lavf-bmp
-TEST    seek-lavf-jpg
-TEST    seek-lavf-pcx
-TEST    seek-lavf-pgm
-TEST    seek-lavf-ppm
-TEST    seek-lavf-sgi
-TEST    seek-lavf-tga
-TEST    seek-lavf-tiff
-TEST    seek-lavf-pbmpipe
-TEST    seek-lavf-pgmpipe
-TEST    seek-lavf-ppmpipe
-TEST    pixfmt-bgr24
-TEST    pixfmt-gray
-TEST    pixfmt-nv12
-TEST    pixfmt-nv16
-TEST    pixfmt-nv24
-TEST    pixfmt-monob</code></pre>
+ternal_tests
+77/86 Test #80: internal_tests .................................   Passed    0.05 sec
+      Start 81: utf8_length_from_utf16_tests
+78/86 Test #81: utf8_length_from_utf16_tests ...................   Passed    0.08 sec
+      Start 82: to_well_formed_utf16_tests
+79/86 Test #82: to_well_formed_utf16_tests .....................   Passed   17.42 sec
+      Start 83: convert_utf16_to_utf8_with_replacement_tests
+80/86 Test #83: convert_utf16_to_utf8_with_replacement_tests ...   Passed    0.52 sec
+      Start 84: convert_utf8_to_utf16_with_replacement_tests
+81/86 Test #84: convert_utf8_to_utf16_with_replacement_tests ...   Passed    0.19 sec
+      Start 85: fixed_string_tests
+82/86 Test #85: fixed_string_tests .............................   Passed    0.06 sec
+      Start 86: nostdlibcxx_c_api_test
+83/86 Test #86: nostdlibcxx_c_api_test .........................   Passed    0.04 sec
+84/86 Test #20: validate_utf32_with_errors_tests ...............   Passed  630.46 sec
+85/86 Test #19: validate_utf32_basic_tests .....................***Timeout 900.00 sec
+Checking implementation rvv
+Running &#39;validate utf32 returns true for valid input&#39;... .......... OK
+Running &#39;validate utf32 returns true for empty string&#39;...  OK
+
+86/86 Test #74: basic_fuzzer ...................................   Passed  739.98 sec
+
+99% tests passed, 1 tests failed out of 86
+
+Total Test time (real) = 1282.61 sec
+
+The following tests FAILED:
+	 19 - validate_utf32_basic_tests (Timeout)
+Errors while running CTest</code></pre>
   </main>
 </body>
 </html>
