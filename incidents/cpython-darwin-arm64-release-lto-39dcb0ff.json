@@ -28,6 +28,8 @@
     }
   ],
   "created_at": "2026-11-21T00:35:45.642Z",
-  "updated_at": "2026-11-21T00:35:45.642Z",
-  "resolved_at": "2026-10-19T17:07:37Z"
+  "updated_at": "2026-11-21T02:12:30Z",
+  "resolved_at": "2026-10-19T17:07:37Z",
+  "error_excerpt": "Traceback (most recent call last):\n  File \"<frozen runpy>\", line 198, in _run_module_as_main\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"Lib/test/__main__.py\", line 1, in <module>\n    from test.libregrtest.main import main\n  File \"Lib/test/libregrtest/main.py\", line 14, in <module>\n    from .cmdline import _parse_args, Namespace\n  File \"Lib/test/libregrtest/cmdline.py\", line 6, in <module>\n    from .utils import ALL_RESOURCES, RESOURCE_NAMES, TestFilter\n  File \"Lib/test/libregrtest/utils.py\", line 10, in <module>\n    import subprocess\n  File \"Lib/subprocess.py\", line 106, in <module>\n    from _posixsubprocess import fork_exec as _fork_exec\nModuleNotFoundError: No module named '_posixsubprocess'",
+  "pass_diff": "--- good (python.exe, nm -gU | grep PyInterpreterState_Main)\n+++ bad (python.exe, nm -gU | grep PyInterpreterState_Main)\n@@ -1,2 +1,1 @@\n-_PyInterpreterState_Main\n __PyInterpreterState_Main"
 }
