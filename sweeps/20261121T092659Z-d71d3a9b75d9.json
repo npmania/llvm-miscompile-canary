@@ -1,0 +1,2683 @@
+{
+  "id": "20261121T092659Z-d71d3a9b75d9",
+  "llvm_commit": "d71d3a9b75d9b21fc8fc8069cce2de71023b5b41",
+  "llvm_subject": "[llvm] Remove write-only private member variables (NFC)",
+  "previous_sha": "25b1c803e1e1504f6dc11f7afd68e65ad3ee5964",
+  "started_at": "2026-11-21T09:26:59.116650374Z",
+  "completed_at": "2026-11-21T09:26:59.116650374Z",
+  "results": [
+    {
+      "package": "abseil-cpp",
+      "version": "20260817.0",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 41.497389417
+    },
+    {
+      "package": "abseil-cpp",
+      "version": "20260817.0",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 37.121408208
+    },
+    {
+      "package": "abseil-cpp",
+      "version": "20260817.0",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 49.079519245
+    },
+    {
+      "package": "abseil-cpp",
+      "version": "20260817.0",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 44.344459242
+    },
+    {
+      "package": "abseil-cpp",
+      "version": "20260817.0",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 75.670748194
+    },
+    {
+      "package": "abseil-cpp",
+      "version": "20260817.0",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 70.539329693
+    },
+    {
+      "package": "abseil-cpp",
+      "version": "20260817.0",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 76.895874014
+    },
+    {
+      "package": "abseil-cpp",
+      "version": "20260817.0",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 72.541544478
+    },
+    {
+      "package": "aws-lc",
+      "version": "v5.15.0",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 298.972332166
+    },
+    {
+      "package": "aws-lc",
+      "version": "v5.15.0",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 360.296140625
+    },
+    {
+      "package": "aws-lc",
+      "version": "v5.15.0",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 187.435232944
+    },
+    {
+      "package": "aws-lc",
+      "version": "v5.15.0",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 223.427835991
+    },
+    {
+      "package": "aws-lc",
+      "version": "v5.15.0",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 173.995619016
+    },
+    {
+      "package": "aws-lc",
+      "version": "v5.15.0",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 198.719748386
+    },
+    {
+      "package": "binaryen",
+      "version": "version_133-206-g6e873a7",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 276.100479208
+    },
+    {
+      "package": "binaryen",
+      "version": "version_133-206-g6e873a7",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 328.360952291
+    },
+    {
+      "package": "binaryen",
+      "version": "version_133-206-g6e873a7",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 344.552559545
+    },
+    {
+      "package": "binaryen",
+      "version": "version_133-206-g6e873a7",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 351.700484627
+    },
+    {
+      "package": "binaryen",
+      "version": "version_133-206-g6e873a7",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 328.535563065
+    },
+    {
+      "package": "binaryen",
+      "version": "version_133-206-g6e873a7",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 336.531075608
+    },
+    {
+      "package": "binaryen",
+      "version": "version_133-206-g6e873a7",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 324.273592153
+    },
+    {
+      "package": "binaryen",
+      "version": "version_133-206-g6e873a7",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 326.799913964
+    },
+    {
+      "package": "box2d",
+      "version": "v3.2.0",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 22.270957583
+    },
+    {
+      "package": "box2d",
+      "version": "v3.2.0",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 20.927358
+    },
+    {
+      "package": "box2d",
+      "version": "v3.2.0",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 12.376579125
+    },
+    {
+      "package": "box2d",
+      "version": "v3.2.0",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 13.006632549
+    },
+    {
+      "package": "box2d",
+      "version": "v3.2.0",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 150.914706455
+    },
+    {
+      "package": "box2d",
+      "version": "v3.2.0",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 330.750485904
+    },
+    {
+      "package": "box2d",
+      "version": "v3.2.0",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 14.120437254
+    },
+    {
+      "package": "box2d",
+      "version": "v3.2.0",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 13.956042083
+    },
+    {
+      "package": "brotli",
+      "version": "v1.2.1",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 8.243353625
+    },
+    {
+      "package": "brotli",
+      "version": "v1.2.1",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 7.563434208
+    },
+    {
+      "package": "brotli",
+      "version": "v1.2.1",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 5.786535099
+    },
+    {
+      "package": "brotli",
+      "version": "v1.2.1",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 7.221093518
+    },
+    {
+      "package": "brotli",
+      "version": "v1.2.1",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 7.199464727
+    },
+    {
+      "package": "brotli",
+      "version": "v1.2.1",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 8.114554965
+    },
+    {
+      "package": "brotli",
+      "version": "v1.2.1",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 8.004665597
+    },
+    {
+      "package": "brotli",
+      "version": "v1.2.1",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 7.119173606
+    },
+    {
+      "package": "cpython",
+      "version": "v3.14.3",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 81.829174458
+    },
+    {
+      "package": "cpython",
+      "version": "v3.14.3",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 144.314602875
+    },
+    {
+      "package": "cpython",
+      "version": "v3.14.3",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 82.725568299
+    },
+    {
+      "package": "cpython",
+      "version": "v3.14.3",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 193.535037799
+    },
+    {
+      "package": "cpython",
+      "version": "v3.14.3",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 315.431592203
+    },
+    {
+      "package": "cpython",
+      "version": "v3.14.3",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 452.289982918
+    },
+    {
+      "package": "cpython",
+      "version": "v3.14.3",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 94.972494443
+    },
+    {
+      "package": "cpython",
+      "version": "v3.14.3",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 239.728381627
+    },
+    {
+      "package": "dav1d",
+      "version": "1.5.5",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 16.483125084
+    },
+    {
+      "package": "dav1d",
+      "version": "1.5.5",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 24.477212167
+    },
+    {
+      "package": "dav1d",
+      "version": "1.5.5",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 8.883086346
+    },
+    {
+      "package": "dav1d",
+      "version": "1.5.5",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 14.277191258
+    },
+    {
+      "package": "dav1d",
+      "version": "1.5.5",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 9.345354347
+    },
+    {
+      "package": "dav1d",
+      "version": "1.5.5",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 15.835277699
+    },
+    {
+      "package": "dav1d",
+      "version": "1.5.5",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 9.154607844
+    },
+    {
+      "package": "dav1d",
+      "version": "1.5.5",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 16.569815336
+    },
+    {
+      "package": "duckdb",
+      "version": "v1.5.6",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 630.883655458
+    },
+    {
+      "package": "duckdb",
+      "version": "v1.5.6",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 744.645096792
+    },
+    {
+      "package": "duckdb",
+      "version": "v1.5.6",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 641.547010788
+    },
+    {
+      "package": "duckdb",
+      "version": "v1.5.6",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 749.544757996
+    },
+    {
+      "package": "duckdb",
+      "version": "v1.5.6",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 1160.390965116
+    },
+    {
+      "package": "duckdb",
+      "version": "v1.5.6",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 1409.884803399
+    },
+    {
+      "package": "duckdb",
+      "version": "v1.5.6",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 600.634226415
+    },
+    {
+      "package": "duckdb",
+      "version": "v1.5.6",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 735.86724281
+    },
+    {
+      "package": "eigen",
+      "version": "5.0.1",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 91.997441375
+    },
+    {
+      "package": "eigen",
+      "version": "5.0.1",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 91.141950584
+    },
+    {
+      "package": "eigen",
+      "version": "5.0.1",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 110.180776493
+    },
+    {
+      "package": "eigen",
+      "version": "5.0.1",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 102.001409192
+    },
+    {
+      "package": "eigen",
+      "version": "5.0.1",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 100.910974903
+    },
+    {
+      "package": "eigen",
+      "version": "5.0.1",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 127.107524501
+    },
+    {
+      "package": "eigen",
+      "version": "5.0.1",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 96.887511082
+    },
+    {
+      "package": "eigen",
+      "version": "5.0.1",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 105.620533679
+    },
+    {
+      "package": "ffmpeg",
+      "version": "n8.1.3",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 244.051357166
+    },
+    {
+      "package": "ffmpeg",
+      "version": "n8.1.3",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 765.94143275
+    },
+    {
+      "package": "ffmpeg",
+      "version": "n8.1.3",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 228.652463297
+    },
+    {
+      "package": "ffmpeg",
+      "version": "n8.1.3",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 948.120345099
+    },
+    {
+      "package": "ffmpeg",
+      "version": "n8.1.3",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 1359.166509696
+    },
+    {
+      "package": "ffmpeg",
+      "version": "n8.1.3",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "test_fail",
+      "duration_sec": 5775.895540173,
+      "error_excerpt": "...\nTEST    lavf-xwd\nTEST    lavf-rgba.xwd\nTEST    lavf-rgb565be.xwd\nTEST    lavf-rgb555be.xwd\nTEST    lavf-rgb8.xwd\nTEST    lavf-rgb4_byte.xwd\nTEST    lavf-gray.xwd\nTEST    lavf-monow.xwd\nTEST    lavf-pbmpipe\nTEST    lavf-pgmpipe\nTEST    lavf-ppmpipe\nTEST    lavf-qoipipe\nTEST    lavf-xbmpipe\nTEST    lavf-xwdpipe\nTEST    lavf-y4m\nTEST    lavf-gray.fits\nTEST    lavf-gray16be.fits\nTEST    lavf-gbrp.fits\nTEST    lavf-gbrap.fits\nTEST    lavf-gbrp16be.fits\nTEST    lavf-gbrap16be.fits\nTEST    lavf-gif\nTEST    seek-lavf-aiff\nTEST    seek-lavf-al\nTEST    seek-lavf-au\nTEST    seek-lavf-mmf\nTEST    seek-lavf-ogg\nTEST    seek-lavf-ul\nTEST    seek-lavf-voc\nTEST    seek-lavf-wav\nTEST    seek-lavf-asf\nTEST    seek-lavf-avi\nTEST    seek-lavf-dv\nTEST    seek-lavf-gxf\nTEST    seek-lavf-mkv\nTEST    seek-lavf-mov\nTEST    seek-lavf-mpg\nTEST    seek-lavf-mxf\nTEST    seek-lavf-mxf_d10\nTEST    seek-lavf-mxf_dv25\nTEST    seek-lavf-mxf_dvcpro50\nTEST    seek-lavf-mxf_opatom\nTEST    seek-lavf-mxf_opatom_audio\nTEST    seek-lavf-nut\nTEST    seek-lavf-swf\nTEST    seek-lavf-ts\nTEST    seek-lavf-wtv\nTEST    seek-lavf-rm\nTEST    seek-lavf-y4m\nTEST    seek-lavf-bmp\nTEST    seek-lavf-jpg\nTEST    seek-lavf-pcx\nTEST    seek-lavf-pgm\nTEST    seek-lavf-ppm\nTEST    seek-lavf-sgi\nTEST    seek-lavf-tga\nTEST    seek-lavf-tiff\nTEST    seek-lavf-pbmpipe\nTEST    seek-lavf-pgmpipe\nTEST    seek-lavf-ppmpipe\nTEST    pixfmt-bgr24\nTEST    pixfmt-gray\nTEST    pixfmt-nv12\nTEST    pixfmt-nv16\nTEST    pixfmt-nv24\nTEST    pixfmt-monob"
+    },
+    {
+      "package": "ffmpeg",
+      "version": "n8.1.3",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 248.860442184
+    },
+    {
+      "package": "ffmpeg",
+      "version": "n8.1.3",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 1086.372112249
+    },
+    {
+      "package": "flac",
+      "version": "1.5.0",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 14.968972625
+    },
+    {
+      "package": "flac",
+      "version": "1.5.0",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 15.7957355
+    },
+    {
+      "package": "flac",
+      "version": "1.5.0",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 8.397846082
+    },
+    {
+      "package": "flac",
+      "version": "1.5.0",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 10.259232415
+    },
+    {
+      "package": "flac",
+      "version": "1.5.0",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 17.356239493
+    },
+    {
+      "package": "flac",
+      "version": "1.5.0",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 16.09559126
+    },
+    {
+      "package": "flac",
+      "version": "1.5.0",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 7.327230985
+    },
+    {
+      "package": "flac",
+      "version": "1.5.0",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 8.87030072
+    },
+    {
+      "package": "flatbuffers",
+      "version": "v25.12.19",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 63.692213083
+    },
+    {
+      "package": "flatbuffers",
+      "version": "v25.12.19",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 73.69242
+    },
+    {
+      "package": "flatbuffers",
+      "version": "v25.12.19",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 70.22438674
+    },
+    {
+      "package": "flatbuffers",
+      "version": "v25.12.19",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 76.86219835
+    },
+    {
+      "package": "flatbuffers",
+      "version": "v25.12.19",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 69.855568631
+    },
+    {
+      "package": "flatbuffers",
+      "version": "v25.12.19",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 76.621363888
+    },
+    {
+      "package": "flatbuffers",
+      "version": "v25.12.19",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 72.865612025
+    },
+    {
+      "package": "flatbuffers",
+      "version": "v25.12.19",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 76.671512788
+    },
+    {
+      "package": "fmt",
+      "version": "12.2.1",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 43.464728166
+    },
+    {
+      "package": "fmt",
+      "version": "12.2.1",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 64.142124125
+    },
+    {
+      "package": "fmt",
+      "version": "12.2.1",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 59.227127042
+    },
+    {
+      "package": "fmt",
+      "version": "12.2.1",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 87.902197725
+    },
+    {
+      "package": "fmt",
+      "version": "12.2.1",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 58.263302265
+    },
+    {
+      "package": "fmt",
+      "version": "12.2.1",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 85.148485954
+    },
+    {
+      "package": "fmt",
+      "version": "12.2.1",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 98.941662512
+    },
+    {
+      "package": "fmt",
+      "version": "12.2.1",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 149.058447514
+    },
+    {
+      "package": "glslang",
+      "version": "16.6.0",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 44.56462825
+    },
+    {
+      "package": "glslang",
+      "version": "16.6.0",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 40.413052875
+    },
+    {
+      "package": "glslang",
+      "version": "16.6.0",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 38.511961046
+    },
+    {
+      "package": "glslang",
+      "version": "16.6.0",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 40.154875819
+    },
+    {
+      "package": "glslang",
+      "version": "16.6.0",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 84.726904798
+    },
+    {
+      "package": "glslang",
+      "version": "16.6.0",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 95.311307441
+    },
+    {
+      "package": "glslang",
+      "version": "16.6.0",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 38.866169935
+    },
+    {
+      "package": "glslang",
+      "version": "16.6.0",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 41.179345809
+    },
+    {
+      "package": "h3",
+      "version": "v4.6.0",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 51.909724458
+    },
+    {
+      "package": "h3",
+      "version": "v4.6.0",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 52.311093042
+    },
+    {
+      "package": "h3",
+      "version": "v4.6.0",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 50.629826946
+    },
+    {
+      "package": "h3",
+      "version": "v4.6.0",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 50.349255079
+    },
+    {
+      "package": "h3",
+      "version": "v4.6.0",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 840.50500312
+    },
+    {
+      "package": "h3",
+      "version": "v4.6.0",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 855.769949134
+    },
+    {
+      "package": "h3",
+      "version": "v4.6.0",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 54.583070674
+    },
+    {
+      "package": "h3",
+      "version": "v4.6.0",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 49.454918801
+    },
+    {
+      "package": "harfbuzz",
+      "version": "15.1.0",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 125.8107205
+    },
+    {
+      "package": "harfbuzz",
+      "version": "15.1.0",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 135.634970583
+    },
+    {
+      "package": "harfbuzz",
+      "version": "15.1.0",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 150.604888487
+    },
+    {
+      "package": "harfbuzz",
+      "version": "15.1.0",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 157.99038468
+    },
+    {
+      "package": "harfbuzz",
+      "version": "15.1.0",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 128.36939194
+    },
+    {
+      "package": "harfbuzz",
+      "version": "15.1.0",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 139.527034238
+    },
+    {
+      "package": "harfbuzz",
+      "version": "15.1.0",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 133.297307198
+    },
+    {
+      "package": "harfbuzz",
+      "version": "15.1.0",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 139.164258777
+    },
+    {
+      "package": "highway",
+      "version": "1.4.0-787-ga31b7f1",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 40.086663166
+    },
+    {
+      "package": "highway",
+      "version": "1.4.0-787-ga31b7f1",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 36.520819208
+    },
+    {
+      "package": "highway",
+      "version": "1.4.0-787-ga31b7f1",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 21.216497115
+    },
+    {
+      "package": "highway",
+      "version": "1.4.0-787-ga31b7f1",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 42.581219236
+    },
+    {
+      "package": "highway",
+      "version": "1.4.0-787-ga31b7f1",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 87.269805732
+    },
+    {
+      "package": "highway",
+      "version": "1.4.0-787-ga31b7f1",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 106.57046177
+    },
+    {
+      "package": "highway",
+      "version": "1.4.0-787-ga31b7f1",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 17.100784361
+    },
+    {
+      "package": "highway",
+      "version": "1.4.0-787-ga31b7f1",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 18.593822121
+    },
+    {
+      "package": "joltphysics",
+      "version": "v5.7.0",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 91.773469167
+    },
+    {
+      "package": "joltphysics",
+      "version": "v5.7.0",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 96.650833083
+    },
+    {
+      "package": "joltphysics",
+      "version": "v5.7.0",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 106.574105317
+    },
+    {
+      "package": "joltphysics",
+      "version": "v5.7.0",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 110.501866997
+    },
+    {
+      "package": "joltphysics",
+      "version": "v5.7.0",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 152.317957176
+    },
+    {
+      "package": "joltphysics",
+      "version": "v5.7.0",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 239.528703385
+    },
+    {
+      "package": "joltphysics",
+      "version": "v5.7.0",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 103.588612442
+    },
+    {
+      "package": "joltphysics",
+      "version": "v5.7.0",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 111.035104807
+    },
+    {
+      "package": "kissat",
+      "version": "rel-4.0.4",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 15.697439375
+    },
+    {
+      "package": "kissat",
+      "version": "rel-4.0.4",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 16.077993625
+    },
+    {
+      "package": "kissat",
+      "version": "rel-4.0.4",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 8.852338917
+    },
+    {
+      "package": "kissat",
+      "version": "rel-4.0.4",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 12.710973298
+    },
+    {
+      "package": "kissat",
+      "version": "rel-4.0.4",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 22.939596035
+    },
+    {
+      "package": "kissat",
+      "version": "rel-4.0.4",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 33.270868196
+    },
+    {
+      "package": "kissat",
+      "version": "rel-4.0.4",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 7.972477798
+    },
+    {
+      "package": "kissat",
+      "version": "rel-4.0.4",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 12.34943455
+    },
+    {
+      "package": "libjpeg-turbo",
+      "version": "3.2.1",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 48.951093875
+    },
+    {
+      "package": "libjpeg-turbo",
+      "version": "3.2.1",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 59.452941208
+    },
+    {
+      "package": "libjpeg-turbo",
+      "version": "3.2.1",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 38.322628284
+    },
+    {
+      "package": "libjpeg-turbo",
+      "version": "3.2.1",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 50.558036181
+    },
+    {
+      "package": "libjpeg-turbo",
+      "version": "3.2.1",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 226.507645423
+    },
+    {
+      "package": "libjpeg-turbo",
+      "version": "3.2.1",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 632.26672976
+    },
+    {
+      "package": "libjpeg-turbo",
+      "version": "3.2.1",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 45.98269658
+    },
+    {
+      "package": "libjpeg-turbo",
+      "version": "3.2.1",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 57.002799907
+    },
+    {
+      "package": "libressl",
+      "version": "v4.4.1",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 71.351706417
+    },
+    {
+      "package": "libressl",
+      "version": "v4.4.1",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 552.100350875
+    },
+    {
+      "package": "libressl",
+      "version": "v4.4.1",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 46.55452616
+    },
+    {
+      "package": "libressl",
+      "version": "v4.4.1",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 459.514952907
+    },
+    {
+      "package": "libressl",
+      "version": "v4.4.1",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 141.593678542
+    },
+    {
+      "package": "libressl",
+      "version": "v4.4.1",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 655.341468215
+    },
+    {
+      "package": "libressl",
+      "version": "v4.4.1",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 60.882933686
+    },
+    {
+      "package": "libressl",
+      "version": "v4.4.1",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 573.902811456
+    },
+    {
+      "package": "libsodium",
+      "version": "1.0.22-RELEASE",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 91.651261541
+    },
+    {
+      "package": "libsodium",
+      "version": "1.0.22-RELEASE",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 122.177489375
+    },
+    {
+      "package": "libsodium",
+      "version": "1.0.22-RELEASE",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 28.615528147
+    },
+    {
+      "package": "libsodium",
+      "version": "1.0.22-RELEASE",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 45.273702804
+    },
+    {
+      "package": "libsodium",
+      "version": "1.0.22-RELEASE",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 32.444315241
+    },
+    {
+      "package": "libsodium",
+      "version": "1.0.22-RELEASE",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 110.477601625
+    },
+    {
+      "package": "libsodium",
+      "version": "1.0.22-RELEASE",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 22.241845654
+    },
+    {
+      "package": "libsodium",
+      "version": "1.0.22-RELEASE",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 101.664794152
+    },
+    {
+      "package": "libwebp",
+      "version": "v1.6.0",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 18.443889
+    },
+    {
+      "package": "libwebp",
+      "version": "v1.6.0",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 16.651011042
+    },
+    {
+      "package": "libwebp",
+      "version": "v1.6.0",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 7.6520208830000005
+    },
+    {
+      "package": "libwebp",
+      "version": "v1.6.0",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 9.448233245
+    },
+    {
+      "package": "libwebp",
+      "version": "v1.6.0",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 5.697363365
+    },
+    {
+      "package": "libwebp",
+      "version": "v1.6.0",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 8.50999356
+    },
+    {
+      "package": "libwebp",
+      "version": "v1.6.0",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 9.349540917
+    },
+    {
+      "package": "libwebp",
+      "version": "v1.6.0",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 13.099060141
+    },
+    {
+      "package": "libxml2",
+      "version": "v2.15.4",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 10.385762708
+    },
+    {
+      "package": "libxml2",
+      "version": "v2.15.4",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 34.870254292
+    },
+    {
+      "package": "libxml2",
+      "version": "v2.15.4",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 7.896255374
+    },
+    {
+      "package": "libxml2",
+      "version": "v2.15.4",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 37.79948813
+    },
+    {
+      "package": "libxml2",
+      "version": "v2.15.4",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 16.757865172
+    },
+    {
+      "package": "libxml2",
+      "version": "v2.15.4",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 42.715453771
+    },
+    {
+      "package": "libxml2",
+      "version": "v2.15.4",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 12.890335194
+    },
+    {
+      "package": "libxml2",
+      "version": "v2.15.4",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 64.289895898
+    },
+    {
+      "package": "lua",
+      "version": "v5.4.8",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 6.830584667
+    },
+    {
+      "package": "lua",
+      "version": "v5.4.8",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 7.369063708
+    },
+    {
+      "package": "lua",
+      "version": "v5.4.8",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 3.253549708
+    },
+    {
+      "package": "lua",
+      "version": "v5.4.8",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 3.9498507309999997
+    },
+    {
+      "package": "lua",
+      "version": "v5.4.8",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 14.779088885
+    },
+    {
+      "package": "lua",
+      "version": "v5.4.8",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 18.481493494
+    },
+    {
+      "package": "lua",
+      "version": "v5.4.8",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 2.752172424
+    },
+    {
+      "package": "lua",
+      "version": "v5.4.8",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 3.652067611
+    },
+    {
+      "package": "luau",
+      "version": "0.747",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 189.494715584
+    },
+    {
+      "package": "luau",
+      "version": "0.747",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 304.74930775
+    },
+    {
+      "package": "luau",
+      "version": "0.747",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 184.937521636
+    },
+    {
+      "package": "luau",
+      "version": "0.747",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 244.63316359
+    },
+    {
+      "package": "luau",
+      "version": "0.747",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 373.314201016
+    },
+    {
+      "package": "luau",
+      "version": "0.747",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 502.630826528
+    },
+    {
+      "package": "luau",
+      "version": "0.747",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 207.132374057
+    },
+    {
+      "package": "luau",
+      "version": "0.747",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 272.992883564
+    },
+    {
+      "package": "mbedtls",
+      "version": "v3.5.2",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 50.518542125
+    },
+    {
+      "package": "mbedtls",
+      "version": "v3.5.2",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 109.075282625
+    },
+    {
+      "package": "mbedtls",
+      "version": "v3.5.2",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 43.758257628
+    },
+    {
+      "package": "mbedtls",
+      "version": "v3.5.2",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 115.257201515
+    },
+    {
+      "package": "mbedtls",
+      "version": "v3.5.2",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 181.290066507
+    },
+    {
+      "package": "mbedtls",
+      "version": "v3.5.2",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 601.872264973
+    },
+    {
+      "package": "mbedtls",
+      "version": "v3.5.2",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 27.911342233
+    },
+    {
+      "package": "mbedtls",
+      "version": "v3.5.2",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 103.275124821
+    },
+    {
+      "package": "mimalloc",
+      "version": "v3.7.0",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 7.60499975
+    },
+    {
+      "package": "mimalloc",
+      "version": "v3.7.0",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 16.573714667
+    },
+    {
+      "package": "mimalloc",
+      "version": "v3.7.0",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 6.344822603
+    },
+    {
+      "package": "mimalloc",
+      "version": "v3.7.0",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 13.691803746
+    },
+    {
+      "package": "mimalloc",
+      "version": "v3.7.0",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 6.604861622
+    },
+    {
+      "package": "mimalloc",
+      "version": "v3.7.0",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 14.702121035
+    },
+    {
+      "package": "mimalloc",
+      "version": "v3.7.0",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 5.792998947
+    },
+    {
+      "package": "mimalloc",
+      "version": "v3.7.0",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 15.020416062
+    },
+    {
+      "package": "nghttp2",
+      "version": "v1.71.0",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 11.22739575
+    },
+    {
+      "package": "nghttp2",
+      "version": "v1.71.0",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 14.188444083
+    },
+    {
+      "package": "nghttp2",
+      "version": "v1.71.0",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 5.707833702
+    },
+    {
+      "package": "nghttp2",
+      "version": "v1.71.0",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 8.962607836
+    },
+    {
+      "package": "nghttp2",
+      "version": "v1.71.0",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 8.441973612
+    },
+    {
+      "package": "nghttp2",
+      "version": "v1.71.0",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 13.772845577
+    },
+    {
+      "package": "nghttp2",
+      "version": "v1.71.0",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 4.542136854
+    },
+    {
+      "package": "nghttp2",
+      "version": "v1.71.0",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 6.906293517
+    },
+    {
+      "package": "openexr",
+      "version": "v2.5.10",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 19.838953708
+    },
+    {
+      "package": "openexr",
+      "version": "v2.5.10",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 18.530427583
+    },
+    {
+      "package": "openexr",
+      "version": "v2.5.10",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 44.477241917
+    },
+    {
+      "package": "openexr",
+      "version": "v2.5.10",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 46.386381596
+    },
+    {
+      "package": "openexr",
+      "version": "v2.5.10",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 548.021643179
+    },
+    {
+      "package": "openexr",
+      "version": "v2.5.10",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 550.487919893
+    },
+    {
+      "package": "openexr",
+      "version": "v2.5.10",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 13.481265632
+    },
+    {
+      "package": "openexr",
+      "version": "v2.5.10",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 15.532107729
+    },
+    {
+      "package": "opus",
+      "version": "v1.5.2",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 34.178488542
+    },
+    {
+      "package": "opus",
+      "version": "v1.5.2",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 30.038490166
+    },
+    {
+      "package": "opus",
+      "version": "v1.5.2",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 16.153577335
+    },
+    {
+      "package": "opus",
+      "version": "v1.5.2",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 22.33249362
+    },
+    {
+      "package": "opus",
+      "version": "v1.5.2",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 141.404690088
+    },
+    {
+      "package": "opus",
+      "version": "v1.5.2",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 258.956983169
+    },
+    {
+      "package": "opus",
+      "version": "v1.5.2",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 20.329872349
+    },
+    {
+      "package": "opus",
+      "version": "v1.5.2",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 47.442110243
+    },
+    {
+      "package": "pcre2",
+      "version": "pcre2-10.49",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 26.035224958
+    },
+    {
+      "package": "pcre2",
+      "version": "pcre2-10.49",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 37.971129542
+    },
+    {
+      "package": "pcre2",
+      "version": "pcre2-10.49",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 18.876387074
+    },
+    {
+      "package": "pcre2",
+      "version": "pcre2-10.49",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 31.640352625
+    },
+    {
+      "package": "pcre2",
+      "version": "pcre2-10.49",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 86.193215158
+    },
+    {
+      "package": "pcre2",
+      "version": "pcre2-10.49",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 106.472781482
+    },
+    {
+      "package": "pcre2",
+      "version": "pcre2-10.49",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 16.868567291
+    },
+    {
+      "package": "pcre2",
+      "version": "pcre2-10.49",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 33.377083796
+    },
+    {
+      "package": "quickjs-ng",
+      "version": "v0.18.0",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 13.881350417
+    },
+    {
+      "package": "quickjs-ng",
+      "version": "v0.18.0",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 18.93685775
+    },
+    {
+      "package": "quickjs-ng",
+      "version": "v0.18.0",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 17.193318139
+    },
+    {
+      "package": "quickjs-ng",
+      "version": "v0.18.0",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 24.863074911
+    },
+    {
+      "package": "quickjs-ng",
+      "version": "v0.18.0",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 20.626960641
+    },
+    {
+      "package": "quickjs-ng",
+      "version": "v0.18.0",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 33.932236256
+    },
+    {
+      "package": "quickjs-ng",
+      "version": "v0.18.0",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 12.274927295
+    },
+    {
+      "package": "quickjs-ng",
+      "version": "v0.18.0",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 21.914293144
+    },
+    {
+      "package": "re2",
+      "version": "2023-03-01",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 20.048462792
+    },
+    {
+      "package": "re2",
+      "version": "2023-03-01",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 28.695932792
+    },
+    {
+      "package": "re2",
+      "version": "2023-03-01",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 13.401727219
+    },
+    {
+      "package": "re2",
+      "version": "2023-03-01",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 19.396611482
+    },
+    {
+      "package": "re2",
+      "version": "2023-03-01",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 35.293000365
+    },
+    {
+      "package": "re2",
+      "version": "2023-03-01",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 47.038025647
+    },
+    {
+      "package": "re2",
+      "version": "2023-03-01",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 15.28744004
+    },
+    {
+      "package": "re2",
+      "version": "2023-03-01",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 22.940524252
+    },
+    {
+      "package": "simdjson",
+      "version": "v5.2.0",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 91.015276292
+    },
+    {
+      "package": "simdjson",
+      "version": "v5.2.0",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 124.944494333
+    },
+    {
+      "package": "simdjson",
+      "version": "v5.2.0",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 114.370527013
+    },
+    {
+      "package": "simdjson",
+      "version": "v5.2.0",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 153.945832527
+    },
+    {
+      "package": "simdjson",
+      "version": "v5.2.0",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 108.032914687
+    },
+    {
+      "package": "simdjson",
+      "version": "v5.2.0",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 151.393542967
+    },
+    {
+      "package": "simdjson",
+      "version": "v5.2.0",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 160.797245546
+    },
+    {
+      "package": "simdjson",
+      "version": "v5.2.0",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 335.606844326
+    },
+    {
+      "package": "simdutf",
+      "version": "v9.4.0",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 95.541265583
+    },
+    {
+      "package": "simdutf",
+      "version": "v9.4.0",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 163.226172167
+    },
+    {
+      "package": "simdutf",
+      "version": "v9.4.0",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 71.540844296
+    },
+    {
+      "package": "simdutf",
+      "version": "v9.4.0",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 124.385161559
+    },
+    {
+      "package": "simdutf",
+      "version": "v9.4.0",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 528.021164755
+    },
+    {
+      "package": "simdutf",
+      "version": "v9.4.0",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 1137.344053274
+    },
+    {
+      "package": "simdutf",
+      "version": "v9.4.0",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 118.769233856
+    },
+    {
+      "package": "simdutf",
+      "version": "v9.4.0",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 189.072928856
+    },
+    {
+      "package": "sqlite",
+      "version": "version-3.54.1",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 75.190388708
+    },
+    {
+      "package": "sqlite",
+      "version": "version-3.54.1",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 104.170508834
+    },
+    {
+      "package": "sqlite",
+      "version": "version-3.54.1",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 35.060060973
+    },
+    {
+      "package": "sqlite",
+      "version": "version-3.54.1",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 54.725011312
+    },
+    {
+      "package": "sqlite",
+      "version": "version-3.54.1",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 38.543966335
+    },
+    {
+      "package": "sqlite",
+      "version": "version-3.54.1",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 51.513981132
+    },
+    {
+      "package": "sqlite",
+      "version": "version-3.54.1",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 42.488520227
+    },
+    {
+      "package": "sqlite",
+      "version": "version-3.54.1",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 70.855748943
+    },
+    {
+      "package": "wamr",
+      "version": "WAMR-2.4.6",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 7.899296833
+    },
+    {
+      "package": "wamr",
+      "version": "WAMR-2.4.6",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 8.840469542
+    },
+    {
+      "package": "wamr",
+      "version": "WAMR-2.4.6",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 4.655388122
+    },
+    {
+      "package": "wamr",
+      "version": "WAMR-2.4.6",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 4.50121744
+    },
+    {
+      "package": "wamr",
+      "version": "WAMR-2.4.6",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 4.040848947
+    },
+    {
+      "package": "wamr",
+      "version": "WAMR-2.4.6",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 4.650125415
+    },
+    {
+      "package": "wamr",
+      "version": "WAMR-2.4.6",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 4.050708201
+    },
+    {
+      "package": "wamr",
+      "version": "WAMR-2.4.6",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 4.224001037
+    },
+    {
+      "package": "yyjson",
+      "version": "0.13.0",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 29.410156125
+    },
+    {
+      "package": "yyjson",
+      "version": "0.13.0",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 46.653729292
+    },
+    {
+      "package": "yyjson",
+      "version": "0.13.0",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 17.742684166
+    },
+    {
+      "package": "yyjson",
+      "version": "0.13.0",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 21.893109214
+    },
+    {
+      "package": "yyjson",
+      "version": "0.13.0",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 29.308498274
+    },
+    {
+      "package": "yyjson",
+      "version": "0.13.0",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 45.589805515
+    },
+    {
+      "package": "yyjson",
+      "version": "0.13.0",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 24.930399859
+    },
+    {
+      "package": "yyjson",
+      "version": "0.13.0",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 34.71972799
+    },
+    {
+      "package": "z3",
+      "version": "z3-5.4.1",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 1035.261916667
+    },
+    {
+      "package": "z3",
+      "version": "z3-5.4.1",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 828.423058334
+    },
+    {
+      "package": "z3",
+      "version": "z3-5.4.1",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 1110.278896218
+    },
+    {
+      "package": "z3",
+      "version": "z3-5.4.1",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 1180.563052092
+    },
+    {
+      "package": "z3",
+      "version": "z3-5.4.1",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 1961.284909293
+    },
+    {
+      "package": "z3",
+      "version": "z3-5.4.1",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 2140.04493073
+    },
+    {
+      "package": "z3",
+      "version": "z3-5.4.1",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 1039.344071365
+    },
+    {
+      "package": "z3",
+      "version": "z3-5.4.1",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 1119.249624754
+    },
+    {
+      "package": "zlib-ng",
+      "version": "2.3.3",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 11.625449709
+    },
+    {
+      "package": "zlib-ng",
+      "version": "2.3.3",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 17.129177291
+    },
+    {
+      "package": "zlib-ng",
+      "version": "2.3.3",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 4.445873821
+    },
+    {
+      "package": "zlib-ng",
+      "version": "2.3.3",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 6.781158321
+    },
+    {
+      "package": "zlib-ng",
+      "version": "2.3.3",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 4.029861285
+    },
+    {
+      "package": "zlib-ng",
+      "version": "2.3.3",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 7.138362607
+    },
+    {
+      "package": "zlib-ng",
+      "version": "2.3.3",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 6.370266994
+    },
+    {
+      "package": "zlib-ng",
+      "version": "2.3.3",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 9.751934808
+    },
+    {
+      "package": "zstd",
+      "version": "v1.5.7",
+      "platform": "darwin-arm64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 55.2797175
+    },
+    {
+      "package": "zstd",
+      "version": "v1.5.7",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 70.791746583
+    },
+    {
+      "package": "zstd",
+      "version": "v1.5.7",
+      "platform": "linux-aarch64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 48.831211257
+    },
+    {
+      "package": "zstd",
+      "version": "v1.5.7",
+      "platform": "linux-aarch64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 59.182166948
+    },
+    {
+      "package": "zstd",
+      "version": "v1.5.7",
+      "platform": "linux-riscv64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 177.190724701
+    },
+    {
+      "package": "zstd",
+      "version": "v1.5.7",
+      "platform": "linux-riscv64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 186.873688066
+    },
+    {
+      "package": "zstd",
+      "version": "v1.5.7",
+      "platform": "linux-x86_64",
+      "profile": "distro-O2",
+      "status": "pass",
+      "duration_sec": 43.37469535
+    },
+    {
+      "package": "zstd",
+      "version": "v1.5.7",
+      "platform": "linux-x86_64",
+      "profile": "release-lto",
+      "status": "pass",
+      "duration_sec": 57.469771896
+    }
+  ]
+}
