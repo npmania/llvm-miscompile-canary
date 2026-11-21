@@ -21,6 +21,7 @@ import (
 )
 
 func TestBisectFirstFail(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		n       int
@@ -75,6 +76,7 @@ func TestBisectFirstFail(t *testing.T) {
 }
 
 func TestParseBisectOutput(t *testing.T) {
+	t.Parallel()
 	raw := strings.Join([]string{
 		"BISECT: running pass (1) annotation2metadata on [module]",
 		"BISECT: running pass (5) sroa on compute_val",
@@ -97,6 +99,7 @@ func TestParseBisectOutput(t *testing.T) {
 }
 
 func TestUnifiedDiff(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	before := "define i32 @foo(i32 %x) {\nentry:\n  %add = add nsw i32 %x, 1\n  ret i32 %add\n}\n"
 	after := "define i32 @foo(i32 %x) {\nentry:\n  %add = add nsw i32 %x, 99\n  ret i32 %add\n}\n"
@@ -653,6 +656,7 @@ func TestCommitBisect(t *testing.T) {
 }
 
 func TestAliveTV(t *testing.T) {
+	t.Parallel()
 	ctx, dir := context.Background(), t.TempDir()
 	bIR, aIR := filepath.Join(dir, "before.ll"), filepath.Join(dir, "after.ll")
 	_ = os.WriteFile(bIR, []byte("define i32 @f(i32 %x) { ret i32 %x }\n"), 0o644)
@@ -859,6 +863,7 @@ func TestAliveTV(t *testing.T) {
 }
 
 func TestLLUBI(t *testing.T) {
+	t.Parallel()
 	ctx, dir := context.Background(), t.TempDir()
 	writeMock := func(name, body string) string {
 		p := filepath.Join(dir, name)
@@ -1341,6 +1346,7 @@ exit 1
 }
 
 func TestTriageHelpers(t *testing.T) {
+	t.Parallel()
 	if !isInterproceduralPass("InlinerPass", "(caller)") ||
 		!isInterproceduralPass("PostOrderFunctionAttrsPass", "(foo, bar)") ||
 		!isInterproceduralPass("GlobalOptPass", "[module]") ||
@@ -1684,6 +1690,19 @@ func makeTestRecipe(t *testing.T, root, name, tarPath, sha string) *recipe {
 	return r
 }
 
+func makeSingleFileRecipe(t *testing.T, baseDir, name, srcName, srcBody string) *recipe {
+	t.Helper()
+	tarPath := filepath.Join(baseDir, name+".tar.gz")
+	sha := makeTarGz(t, tarPath, map[string]string{srcName: srcBody})
+	rec := makeTestRecipe(t, filepath.Join(baseDir, "corpus"), name, tarPath, sha)
+	objName := strings.TrimSuffix(srcName, ".c") + ".o"
+	buildBody := fmt.Sprintf("#!/bin/sh\nset -eu\n\"$CC\" -c \"$SRC_DIR/%s\" -o \"$BUILD_DIR/%s\"\n\"$CC\" \"$BUILD_DIR/%s\" -o \"$BUILD_DIR/runner\"\n", srcName, objName, objName)
+	if err := os.WriteFile(filepath.Join(rec.Dir, "build.sh"), []byte(buildBody), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return rec
+}
+
 func TestTriageDrops(t *testing.T) {
 	t.Parallel()
 	spec, goodTC := hostToolchainOrSkip(t)
@@ -1695,13 +1714,9 @@ func TestTriageDrops(t *testing.T) {
 	t.Run("flaky", func(t *testing.T) {
 		t.Parallel()
 		tmp := t.TempDir()
-		tarPath := filepath.Join(tmp, "flaky.tar.gz")
 		counter := filepath.Join(tmp, "counter")
-		sha := makeTarGz(t, tarPath, map[string]string{
-			"a.c": "int fa(void) { return 1; }\n", "b.c": "int fb(void) { return 2; }\n", "culprit.c": "int fc(void) { return 3; }\n",
-			"main.c": fmt.Sprintf("#include <stdio.h>\nint main(void) { FILE *f = fopen(%q, \"a+\"); int c = 0; if (f) { fseek(f, 0, SEEK_END); c = (int)ftell(f); fputc('x', f); fclose(f); } return c == 0 ? 1 : 0; }\n", counter),
-		})
-		rec := makeTestRecipe(t, filepath.Join(tmp, "corpus"), "flakypkg", tarPath, sha)
+		mainSrc := fmt.Sprintf("#include <stdio.h>\nint main(void) { FILE *f = fopen(%q, \"a+\"); int c = 0; if (f) { fseek(f, 0, SEEK_END); c = (int)ftell(f); fputc('x', f); fclose(f); } return c == 0 ? 1 : 0; }\n", counter)
+		rec := makeSingleFileRecipe(t, tmp, "flakypkg", "main.c", mainSrc)
 		res, err := triage(context.Background(), triageOpts{
 			Runner: &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2},
 			Recipe: rec, Spec: spec, Profile: profDistroO2, GoodTC: goodTC, BadTC: goodTC,
@@ -1712,93 +1727,125 @@ func TestTriageDrops(t *testing.T) {
 		}
 	})
 
-	ubFiles := map[string]string{
-		"a.c": "int fa(int x) { return x; }\n", "b.c": "int fb(int x) { return x; }\n",
-		"culprit.c": "int trigger_ub(int x) { volatile int base = 0x7fffffff; int ovf = base + x;\n#ifdef BAD_MISCOMPILE\nreturn ovf == 0 ? 0 : 99;\n#else\nreturn ovf == 0 ? 0 : 42;\n#endif\n}\n",
-		"main.c":    "extern int trigger_ub(int); int main(void) { return trigger_ub(10) == 42 ? 0 : 1; }\n",
+	ubSrc := `int trigger_ub(int x) {
+    volatile int base = 0x7fffffff;
+    int ovf = base + x;
+#ifdef BAD_MISCOMPILE
+    return ovf == 0 ? 0 : 99;
+#else
+    return ovf == 0 ? 0 : 42;
+#endif
+}
+int main(void) { return trigger_ub(10) == 42 ? 0 : 1; }
+`
+	writeOptSwitchCC := func(t *testing.T, path, flagMatch, extraArg string) *toolchain {
+		t.Helper()
+		body := fmt.Sprintf("#!/bin/sh\nfor a in \"$@\"; do\n  case \"$a\" in\n    %s) %s ;;\n  esac\ndone\nexec %s \"$@\"\n",
+			flagMatch, extraArg, shQuote(goodTC.Clang))
+		if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		tc := *goodTC
+		tc.Clang = path
+		return &tc
 	}
 
-	t.Run("upstream-ub-and-clang-rt-fallback", func(t *testing.T) {
+	t.Run("clang-rt-fallback", func(t *testing.T) {
 		t.Parallel()
 		tmp := t.TempDir()
-		tarPath := filepath.Join(tmp, "ub.tar.gz")
-		rec := makeTestRecipe(t, filepath.Join(tmp, "corpus"), "ubpkg", tarPath, makeTarGz(t, tarPath, ubFiles))
-		r := &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2}
-
-		writeBadO2 := func(name string) *toolchain {
-			p := filepath.Join(tmp, name)
-			body := fmt.Sprintf("#!/bin/sh\nfor a in \"$@\"; do\n  if [ \"$a\" = \"-O2\" ]; then exec %s -DBAD_MISCOMPILE=1 \"$@\"; fi\ndone\nexec %s \"$@\"\n",
-				shQuote(goodTC.Clang), shQuote(goodTC.Clang))
-			_ = os.WriteFile(p, []byte(body), 0o755)
-			tc := *goodTC
-			tc.Clang = p
-			return &tc
-		}
-		writeGoodSan := func(name, sanBody string) *toolchain {
-			p := filepath.Join(tmp, name)
-			body := fmt.Sprintf("#!/bin/sh\nfor a in \"$@\"; do\n  case \"$a\" in\n    -fsanitize=*) %s ;;\n  esac\ndone\nexec %s \"$@\"\n",
-				sanBody, shQuote(goodTC.Clang))
-			_ = os.WriteFile(p, []byte(body), 0o755)
-			tc := *goodTC
-			tc.Clang = p
-			return &tc
-		}
-		badO2TC := writeBadO2("bad-o2")
-
+		rec := makeSingleFileRecipe(t, tmp, "ubrt", "main.c", ubSrc)
+		goodSan := writeOptSwitchCC(t, filepath.Join(tmp, "no-rt"), "-fsanitize=*", `echo "ld.lld: error: cannot open libclang_rt.asan.a: No such file or directory" >&2; exit 1`)
+		badO2 := writeOptSwitchCC(t, filepath.Join(tmp, "bad-o2"), "-O2", fmt.Sprintf("exec %s -DBAD_MISCOMPILE=1 \"$@\"", shQuote(goodTC.Clang)))
 		res, err := triage(context.Background(), triageOpts{
-			Runner:  r,
-			Recipe:  rec,
-			Spec:    spec,
-			Profile: profDistroO2,
-			GoodTC:  writeGoodSan("no-rt", `echo "ld.lld: error: cannot open libclang_rt.asan.a: No such file or directory" >&2; exit 1`),
-			BadTC:   badO2TC,
-			GoodSHA: "111111111111",
-			BadSHA:  "222222222222",
-			TestID:  "check_calc",
-			WorkDir: filepath.Join(tmp, "w1"),
+			Runner:        &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2},
+			Recipe:        rec,
+			Spec:          spec,
+			Profile:       profDistroO2,
+			GoodTC:        goodSan,
+			BadTC:         badO2,
+			GoodSHA:       "111111111111",
+			BadSHA:        "222222222222",
+			TestID:        "check_calc",
+			WorkDir:       filepath.Join(tmp, "w"),
+			FlakyAttempts: 1,
 		})
 		if err != nil || !res.Dropped || res.DropReason != "upstream_ub" {
 			t.Fatalf("missing clang_rt fallback: res=%+v err=%v", res, err)
 		}
+	})
 
-		_, err = triage(context.Background(), triageOpts{
-			Runner:  r,
-			Recipe:  rec,
-			Spec:    spec,
-			Profile: profDistroO2,
-			GoodTC:  writeGoodSan("broken-san", `echo "error: unrelated compiler flag error" >&2; exit 1`),
-			BadTC:   badO2TC,
-			GoodSHA: "111111111111",
-			BadSHA:  "222222222222",
-			TestID:  "check_calc",
-			WorkDir: filepath.Join(tmp, "w2"),
+	t.Run("asan-build-non-trap-continues", func(t *testing.T) {
+		t.Parallel()
+		tmp := t.TempDir()
+		rec := makeSingleFileRecipe(t, tmp, "ubcont", "main.c", ubSrc)
+		goodSan := writeOptSwitchCC(t, filepath.Join(tmp, "broken-san"), "-fsanitize=*", `echo "error: unrelated compiler flag error" >&2; exit 1`)
+		badO2 := writeOptSwitchCC(t, filepath.Join(tmp, "bad-o2"), "-O2", fmt.Sprintf("exec %s -DBAD_MISCOMPILE=1 \"$@\"", shQuote(goodTC.Clang)))
+		badO2.AliveTV, badO2.LLUBI, badO2.LLVMReduce = "", "", ""
+		resBroken, err := triage(context.Background(), triageOpts{
+			Runner:        &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2},
+			Recipe:        rec,
+			Spec:          spec,
+			Profile:       profDistroO2,
+			GoodTC:        goodSan,
+			BadTC:         badO2,
+			GoodSHA:       "111111111111",
+			BadSHA:        "222222222222",
+			TestID:        "check_calc",
+			WorkDir:       filepath.Join(tmp, "w"),
+			FlakyAttempts: 1,
 		})
-		if err == nil || !strings.Contains(err.Error(), "without sanitizer trap") {
-			t.Fatalf("expected non-sanitizer build error, got %v", err)
+		if err != nil || resBroken.Dropped || resBroken.Incident == nil {
+			t.Fatalf("non-trap asan build fail should continue triage: res=%+v err=%v", resBroken, err)
+		}
+		if resBroken.Incident.ASanUBSanClean || resBroken.Incident.ConservativeFlagIndependent || resBroken.Incident.Confidence != confNeedsReview {
+			t.Fatalf("expected ASanUBSanClean=false, Conservative=false, needs-review: %+v", resBroken.Incident)
+		}
+		if _, statErr := os.Stat(filepath.Join(tmp, "w", "asan-ubsan")); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("asan-ubsan workdir not cleaned up: %v", statErr)
 		}
 	})
 
-	cleanFiles := map[string]string{
-		"a.c": "int fa(int x) { return x; }\n",
-		"b.c": "int fb(int x) { return x; }\n",
-		"culprit.c": `int calc(int x) {
+	t.Run("asan-build-trap-drops", func(t *testing.T) {
+		t.Parallel()
+		tmp := t.TempDir()
+		rec := makeSingleFileRecipe(t, tmp, "ubtrap", "main.c", ubSrc)
+		goodSan := writeOptSwitchCC(t, filepath.Join(tmp, "trap-san"), "-fsanitize=*", `echo "AddressSanitizer: heap-buffer-overflow on address 0x10" >&2; exit 1`)
+		badO2 := writeOptSwitchCC(t, filepath.Join(tmp, "bad-o2"), "-O2", fmt.Sprintf("exec %s -DBAD_MISCOMPILE=1 \"$@\"", shQuote(goodTC.Clang)))
+		resTrap, err := triage(context.Background(), triageOpts{
+			Runner:        &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2},
+			Recipe:        rec,
+			Spec:          spec,
+			Profile:       profDistroO2,
+			GoodTC:        goodSan,
+			BadTC:         badO2,
+			GoodSHA:       "111111111111",
+			BadSHA:        "222222222222",
+			TestID:        "check_calc",
+			WorkDir:       filepath.Join(tmp, "w"),
+			FlakyAttempts: 1,
+		})
+		if err != nil || !resTrap.Dropped || resTrap.DropReason != "upstream_ub" {
+			t.Fatalf("sanitizer-report build fail should drop upstream_ub: res=%+v err=%v", resTrap, err)
+		}
+		if _, statErr := os.Stat(filepath.Join(tmp, "w", "asan-ubsan")); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("asan-ubsan workdir not cleaned up on trap: %v", statErr)
+		}
+	})
+
+	cleanSrc := `int calc(int x) {
 #if defined(BAD_MISCOMPILE) || defined(FAIL_IN_SAN)
     return x + 99;
 #else
     return x + 1;
 #endif
 }
-`,
-		"main.c": "extern int calc(int); int main(void) { return calc(5) == 6 ? 0 : 1; }\n",
-	}
+int main(void) { return calc(5) == 6 ? 0 : 1; }
+`
 
 	t.Run("bad-tc-asan-segv-not-dropped", func(t *testing.T) {
 		t.Parallel()
 		tmp := t.TempDir()
-		tarPath := filepath.Join(tmp, "clean.tar.gz")
-		rec := makeTestRecipe(t, filepath.Join(tmp, "corpus"), "cleansegv", tarPath, makeTarGz(t, tarPath, cleanFiles))
-		r := &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2}
-
+		rec := makeSingleFileRecipe(t, tmp, "cleansegv", "main.c", cleanSrc)
 		badPath := filepath.Join(tmp, "bad-asan-segv")
 		badBody := fmt.Sprintf("#!/bin/sh\nfor a in \"$@\"; do\n  case \"$a\" in\n    -fsanitize=*|-O1) echo \"AddressSanitizer: SEGV on unknown address 0x0\" >&2; exit 1 ;;\n    -O2) exec %s -DBAD_MISCOMPILE=1 \"$@\" ;;\n  esac\ndone\nexec %s \"$@\"\n",
 			shQuote(goodTC.Clang), shQuote(goodTC.Clang))
@@ -1810,8 +1857,8 @@ func TestTriageDrops(t *testing.T) {
 		badTC.AliveTV, badTC.LLUBI, badTC.LLVMReduce = "", "", ""
 
 		res, err := triage(context.Background(), triageOpts{
-			Runner: r, Recipe: rec, Spec: spec, Profile: profDistroO2, GoodTC: goodTC, BadTC: &badTC,
-			GoodSHA: "111111111111", BadSHA: "222222222222", TestID: "check_calc", WorkDir: filepath.Join(tmp, "w"),
+			Runner: &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2}, Recipe: rec, Spec: spec, Profile: profDistroO2, GoodTC: goodTC, BadTC: &badTC,
+			GoodSHA: "111111111111", BadSHA: "222222222222", TestID: "check_calc", WorkDir: filepath.Join(tmp, "w"), FlakyAttempts: 1,
 		})
 		if err != nil || res.Dropped || res.Incident == nil {
 			t.Fatalf("bad-tc asan segv falsely dropped or errored: res=%+v err=%v", res, err)
@@ -1824,32 +1871,14 @@ func TestTriageDrops(t *testing.T) {
 	t.Run("san-test-non-sanitizer-fail", func(t *testing.T) {
 		t.Parallel()
 		tmp := t.TempDir()
-		tarPath := filepath.Join(tmp, "clean.tar.gz")
-		rec := makeTestRecipe(t, filepath.Join(tmp, "corpus"), "sanfail", tarPath, makeTarGz(t, tarPath, cleanFiles))
-		r := &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2}
-
-		goodPath := filepath.Join(tmp, "good-san-fail")
-		goodBody := fmt.Sprintf("#!/bin/sh\nfor a in \"$@\"; do\n  case \"$a\" in\n    -fsanitize=*) exec %s -DFAIL_IN_SAN=1 \"$@\" ;;\n  esac\ndone\nexec %s \"$@\"\n",
-			shQuote(goodTC.Clang), shQuote(goodTC.Clang))
-		if err := os.WriteFile(goodPath, []byte(goodBody), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		gTC := *goodTC
-		gTC.Clang = goodPath
-
-		badPath := filepath.Join(tmp, "bad-o2")
-		badBody := fmt.Sprintf("#!/bin/sh\nfor a in \"$@\"; do\n  if [ \"$a\" = \"-O2\" ]; then exec %s -DBAD_MISCOMPILE=1 \"$@\"; fi\ndone\nexec %s \"$@\"\n",
-			shQuote(goodTC.Clang), shQuote(goodTC.Clang))
-		if err := os.WriteFile(badPath, []byte(badBody), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		badTC := *goodTC
-		badTC.Clang = badPath
+		rec := makeSingleFileRecipe(t, tmp, "sanfail", "main.c", cleanSrc)
+		gTC := writeOptSwitchCC(t, filepath.Join(tmp, "good-san-fail"), "-fsanitize=*", fmt.Sprintf("exec %s -DFAIL_IN_SAN=1 \"$@\"", shQuote(goodTC.Clang)))
+		badTC := writeOptSwitchCC(t, filepath.Join(tmp, "bad-o2"), "-O2", fmt.Sprintf("exec %s -DBAD_MISCOMPILE=1 \"$@\"", shQuote(goodTC.Clang)))
 		badTC.AliveTV, badTC.LLUBI, badTC.LLVMReduce = "", "", ""
 
 		res, err := triage(context.Background(), triageOpts{
-			Runner: r, Recipe: rec, Spec: spec, Profile: profDistroO2, GoodTC: &gTC, BadTC: &badTC,
-			GoodSHA: "111111111111", BadSHA: "222222222222", TestID: "check_calc", WorkDir: filepath.Join(tmp, "w"),
+			Runner: &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2}, Recipe: rec, Spec: spec, Profile: profDistroO2, GoodTC: gTC, BadTC: badTC,
+			GoodSHA: "111111111111", BadSHA: "222222222222", TestID: "check_calc", WorkDir: filepath.Join(tmp, "w"), FlakyAttempts: 1,
 		})
 		if err != nil || res.Dropped || res.Incident == nil {
 			t.Fatalf("non-sanitizer test fail dropped or errored: res=%+v err=%v", res, err)
@@ -1862,8 +1891,7 @@ func TestTriageDrops(t *testing.T) {
 	t.Run("bad-build-good-fails", func(t *testing.T) {
 		t.Parallel()
 		tmp := t.TempDir()
-		tarPath := filepath.Join(tmp, "clean.tar.gz")
-		rec := makeTestRecipe(t, filepath.Join(tmp, "corpus"), "bothfail", tarPath, makeTarGz(t, tarPath, cleanFiles))
+		rec := makeSingleFileRecipe(t, tmp, "bothfail", "main.c", cleanSrc)
 		r := &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2}
 		failPath := filepath.Join(tmp, "fail-cc")
 		_ = os.WriteFile(failPath, []byte("#!/bin/sh\necho 'error: broken both' >&2\nexit 1\n"), 0o755)
@@ -1883,16 +1911,20 @@ func TestTriageDrops(t *testing.T) {
 	t.Run("bad-build-good-passes-plain-and-ice", func(t *testing.T) {
 		t.Parallel()
 		tmp := t.TempDir()
-		tarPath := filepath.Join(tmp, "clean.tar.gz")
-		rec := makeTestRecipe(t, filepath.Join(tmp, "corpus"), "badbuild", tarPath, makeTarGz(t, tarPath, cleanFiles))
+		rec := makeSingleFileRecipe(t, tmp, "badbuild", "main.c", cleanSrc)
 		r := &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2}
+
+		stubGoodCC := filepath.Join(tmp, "good-stub-cc")
+		_ = os.WriteFile(stubGoodCC, []byte("#!/bin/sh\nexit 0\n"), 0o755)
+		stubGoodTC := *goodTC
+		stubGoodTC.Clang = stubGoodCC
 
 		plainCC := filepath.Join(tmp, "plain-fail-cc")
 		_ = os.WriteFile(plainCC, []byte("#!/bin/sh\necho 'culprit.c:1:2: error: syntax broken' >&2\nexit 1\n"), 0o755)
 		plainTC := *goodTC
 		plainTC.Clang = plainCC
 		resPlain, err := triage(context.Background(), triageOpts{
-			Runner: r, Recipe: rec, Spec: spec, Profile: profDistroO2, GoodTC: goodTC, BadTC: &plainTC,
+			Runner: r, Recipe: rec, Spec: spec, Profile: profDistroO2, GoodTC: &stubGoodTC, BadTC: &plainTC,
 			GoodSHA: "111111111111", BadSHA: "222222222222", TestID: "check_calc", WorkDir: filepath.Join(tmp, "w-plain"),
 		})
 		if err != nil || resPlain.Dropped || !resPlain.BuildFailed || resPlain.IsICE || resPlain.Incident == nil || resPlain.Incident.Kind != incidentKindBuildFail || !strings.Contains(resPlain.Incident.ErrorExcerpt, "syntax broken") {
@@ -1904,7 +1936,7 @@ func TestTriageDrops(t *testing.T) {
 		iceTC := *goodTC
 		iceTC.Clang = iceCC
 		resICE, err := triage(context.Background(), triageOpts{
-			Runner: r, Recipe: rec, Spec: spec, Profile: profDistroO2, GoodTC: goodTC, BadTC: &iceTC,
+			Runner: r, Recipe: rec, Spec: spec, Profile: profDistroO2, GoodTC: &stubGoodTC, BadTC: &iceTC,
 			GoodSHA: "111111111111", BadSHA: "222222222222", TestID: "check_calc", WorkDir: filepath.Join(tmp, "w-ice"),
 		})
 		if err != nil || resICE.Dropped || !resICE.BuildFailed || !resICE.IsICE || resICE.Incident == nil || !strings.Contains(resICE.Incident.Title, "ICE") {
@@ -1915,8 +1947,7 @@ func TestTriageDrops(t *testing.T) {
 	t.Run("conservative-skipped-on-diag-o0-fail", func(t *testing.T) {
 		t.Parallel()
 		tmp := t.TempDir()
-		tarPath := filepath.Join(tmp, "clean.tar.gz")
-		rec := makeTestRecipe(t, filepath.Join(tmp, "corpus"), "skipcons", tarPath, makeTarGz(t, tarPath, cleanFiles))
+		rec := makeSingleFileRecipe(t, tmp, "skipcons", "main.c", cleanSrc)
 		r := &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2}
 
 		invLog := filepath.Join(tmp, "inv.log")
@@ -1932,7 +1963,7 @@ func TestTriageDrops(t *testing.T) {
 
 		res, err := triage(context.Background(), triageOpts{
 			Runner: r, Recipe: rec, Spec: spec, Profile: profDistroO2, GoodTC: goodTC, BadTC: &badTC,
-			GoodSHA: "111111111111", BadSHA: "222222222222", TestID: "check_calc", WorkDir: filepath.Join(tmp, "w"),
+			GoodSHA: "111111111111", BadSHA: "222222222222", TestID: "check_calc", WorkDir: filepath.Join(tmp, "w"), FlakyAttempts: 1,
 		})
 		if err != nil || res.Dropped || res.Incident == nil {
 			t.Fatalf("unexpected result: res=%+v err=%v", res, err)
@@ -1971,17 +2002,17 @@ int compute_kernel(int n) {
 }
 `
 	sha := makeTarGz(t, tarPath, map[string]string{
-		"a.c":       "int helper_a(int x) { return x + 10; }\n",
-		"b.c":       "int helper_b(int x) { return x * 2; }\n",
 		"culprit.c": culpritSrc,
-		"main.c": `extern int helper_a(int); extern int helper_b(int); extern int compute_kernel(int);
+		"main.c": `extern int compute_kernel(int);
 int main(void) {
-    if (helper_a(5) != 15 || helper_b(5) != 10) return 2;
     return compute_kernel(5) == 15 ? 0 : 1;
 }
 `,
 	})
 	rec := makeTestRecipe(t, filepath.Join(tmp, "corpus"), "cleanbug", tarPath, sha)
+	if err := os.WriteFile(filepath.Join(rec.Dir, "build.sh"), []byte("#!/bin/sh\nset -eu\n\"$CC\" -c \"$SRC_DIR/culprit.c\" -o \"$BUILD_DIR/culprit.o\"\n\"$CC\" -c \"$SRC_DIR/main.c\" -o \"$BUILD_DIR/main.o\"\n\"$CC\" \"$BUILD_DIR/culprit.o\" \"$BUILD_DIR/main.o\" -o \"$BUILD_DIR/runner\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	probeC := filepath.Join(tmp, "probe_culprit.c")
 	if err := os.WriteFile(probeC, []byte(culpritSrc), 0o644); err != nil {
@@ -2089,13 +2120,28 @@ exec %s "$@"
 
 	t.Run("full-pipeline", func(t *testing.T) {
 		t.Parallel()
+		mockReduce := filepath.Join(tmp, "mock-reduce")
+		reduceBody := `#!/bin/sh
+set -eu
+out=""; in=""; prev=""
+for a in "$@"; do
+  if [ "$prev" = "-o" ]; then out="$a"; else case "$a" in *.ll) in="$a" ;; esac; fi
+  prev="$a"
+done
+cp "$in" "$out"
+`
+		if err := os.WriteFile(mockReduce, []byte(reduceBody), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		fullBadTC := badTC
+		fullBadTC.LLVMReduce = mockReduce
 		res, err := triage(context.Background(), triageOpts{
 			Runner:        &runner{CacheDir: filepath.Join(tmp, "cache-main"), LMCBin: selfExe, Jobs: 2},
 			Recipe:        rec,
 			Spec:          spec,
 			Profile:       profDistroO2,
 			GoodTC:        goodTC,
-			BadTC:         &badTC,
+			BadTC:         &fullBadTC,
 			GoodSHA:       commits[0],
 			BadSHA:        commits[4],
 			WorkDir:       filepath.Join(tmp, "work-main"),
@@ -2104,6 +2150,7 @@ exec %s "$@"
 			LLVMSrcDir:    llvmRepo,
 			ReduceMaxIter: 1,
 			ReduceTimeout: 20 * time.Second,
+			FlakyAttempts: 1,
 			buildClang: func(_ context.Context, wt, _, _ string) (string, error) {
 				raw, _ := os.ReadFile(filepath.Join(wt, "rev.txt"))
 				if strings.HasPrefix(string(raw), "BAD") {
@@ -2163,6 +2210,8 @@ exec %s "$@"
 
 	t.Run("cmd-triage-timeout-flags", func(t *testing.T) {
 		t.Parallel()
+		cmdTmp := t.TempDir()
+		_ = makeSingleFileRecipe(t, cmdTmp, "cmdbug", "culprit.c", culpritSrc+"\nint main(void) { return compute_kernel(5) == 15 ? 0 : 1; }\n")
 		writeExec := func(dir, name, target string) {
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				t.Fatal(err)
@@ -2173,8 +2222,8 @@ exec %s "$@"
 				t.Fatal(err)
 			}
 		}
-		goodTCBin := filepath.Join(tmp, "cli-good-bin")
-		badTCBin := filepath.Join(tmp, "cli-bad-bin")
+		goodTCBin := filepath.Join(cmdTmp, "cli-good-bin")
+		badTCBin := filepath.Join(cmdTmp, "cli-bad-bin")
 		writeExec(goodTCBin, "clang", goodTC.Clang)
 		writeExec(goodTCBin, "clang++", goodTC.ClangXX)
 		writeExec(goodTCBin, filepath.Base(goodTC.Linker), goodTC.Linker)
@@ -2182,11 +2231,11 @@ exec %s "$@"
 		writeExec(badTCBin, "clang++", goodTC.ClangXX)
 		writeExec(badTCBin, filepath.Base(goodTC.Linker), goodTC.Linker)
 
-		outJSON := filepath.Join(tmp, "cli-incident.json")
+		outJSON := filepath.Join(cmdTmp, "cli-incident.json")
 		var cliOut, cliErr bytes.Buffer
 		err := cmdTriage(context.Background(), []string{
-			"-corpus", filepath.Join(tmp, "corpus"),
-			"-pkg", "cleanbug",
+			"-corpus", filepath.Join(cmdTmp, "corpus"),
+			"-pkg", "cmdbug",
 			"-plat", spec.ID,
 			"-prof", profDistroO2,
 			"-good-tc", goodTCBin,
@@ -2194,9 +2243,9 @@ exec %s "$@"
 			"-good", commits[0],
 			"-bad", commits[4],
 			"-llvm", llvmRepo,
-			"-dir", filepath.Join(tmp, "work-cli"),
-			"-cache", filepath.Join(tmp, "cache-cli"),
-			"-bundle", filepath.Join(tmp, "bundles-cli"),
+			"-dir", filepath.Join(cmdTmp, "work-cli"),
+			"-cache", filepath.Join(cmdTmp, "cache-cli"),
+			"-bundle", filepath.Join(cmdTmp, "bundles-cli"),
 			"-out", outJSON,
 			"-timeout", "4m",
 			"-commit-timeout", "90m",
@@ -2356,8 +2405,8 @@ func TestLinkerBugIsolationAndCommitBisect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bisectObjects linker bug: %v", err)
 	}
-	if !objRes.IsLinkerBug || objRes.Culprit != nil || objRes.relinkLinker == nil || objRes.TargetLink == nil || objRes.decomp == nil {
-		t.Fatalf("expected IsLinkerBug isolation without Culprit, got %+v", objRes)
+	if !objRes.IsLinkerBug || objRes.Culprit != nil || objRes.LinkDiff != "" || objRes.relinkLinker == nil || objRes.TargetLink == nil || objRes.decomp == nil {
+		t.Fatalf("expected IsLinkerBug isolation without Culprit or LinkDiff, got %+v", objRes)
 	}
 	if want := filepath.Base(badLinker); objRes.LinkerName != want {
 		t.Fatalf("LinkerName = %q, want %q", objRes.LinkerName, want)
@@ -2428,6 +2477,12 @@ func TestLinkerBugIsolationAndCommitBisect(t *testing.T) {
 
 func TestLinkerBugPipelineBundle(t *testing.T) {
 	t.Parallel()
+	if got := diffExportedSymbols(context.Background(), "", nil, []string{"a"}); got != "" {
+		t.Fatalf("expected empty diff for empty goodSyms, got %q", got)
+	}
+	if got := diffExportedSymbols(context.Background(), "/tmp/runner", []string{"a", "b"}, []string{"a", "b"}); got != "" {
+		t.Fatalf("expected empty diff for identical syms, got %q", got)
+	}
 	spec, goodTC := hostToolchainOrSkip(t)
 	if _, err := exec.LookPath("zstd"); err != nil {
 		t.Skip("zstd unavailable")
@@ -2437,9 +2492,22 @@ func TestLinkerBugPipelineBundle(t *testing.T) {
 		t.Fatal(err)
 	}
 	tmp := t.TempDir()
+
+	badSrc := filepath.Join(tmp, "bad_alt.c")
+	badBin := filepath.Join(tmp, "bad_alt.out")
+	if err := os.WriteFile(badSrc, []byte("int dup_one(void) { return 1; }\nint main(void) { return 1; }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	extraEnv, compileArgs := applySDKRoot(goodTC, []string{badSrc, "-o", badBin})
+	cmd := exec.Command(goodTC.Clang, compileArgs...)
+	cmd.Env = append(os.Environ(), extraEnv...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("compile bad_alt: %v\n%s", err, out)
+	}
+
 	tarPath := filepath.Join(tmp, "lnkbug.tar.gz")
 	sha := makeTarGz(t, tarPath, map[string]string{
-		"sub1/dup.c": "int dup_one(void) { return 10; }\n",
+		"sub1/dup.c": "int dup_one(void) { return 10; }\nint dropped_sym(void) { return 2; }\n",
 		"sub2/dup.c": "int dup_two(void) { return 20; }\n",
 		"libsrc.c":   "int lib_fn(void) { return 12; }\n",
 		"main.c":     "extern int dup_one(void); extern int dup_two(void); extern int lib_fn(void); int main(void) { return (dup_one() + dup_two() + lib_fn()) == 42 ? 0 : 1; }\n",
@@ -2458,11 +2526,35 @@ mkdir -p "$BUILD_DIR/sub1" "$BUILD_DIR/sub2"
 	if err := os.WriteFile(filepath.Join(rec.Dir, "build.sh"), []byte(buildScript), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(rec.Dir, "test_one.sh"), []byte("#!/bin/sh\nset -eu\nif ! \"$BUILD_DIR/runner\" \"$1\"; then\n  printf '%s/runner: missing symbol dropped_sym\\n' \"$BUILD_DIR\" >&2\n  exit 1\nfi\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	goodLinker := filepath.Join(tmp, "good-ld")
 	badLinker := filepath.Join(tmp, "bad-ld")
 	_ = os.WriteFile(goodLinker, []byte(fmt.Sprintf("#!/bin/sh\nexec %s \"$@\"\n", shQuote(goodTC.Linker))), 0o755)
-	writeBadLinkerScript(t, badLinker, goodTC.Linker)
+	badScript := fmt.Sprintf(`#!/bin/sh
+set -eu
+out=""; prev=""
+for a in "$@"; do
+  if [ "$prev" = "-o" ]; then out="$a"; fi
+  prev="$a"
+done
+case "$out" in
+  *diag-o0*) exec %s "$@" ;;
+  *)
+    %s "$@"
+    if [ -n "$out" ]; then
+      rm -f "$out"
+      cp %s "$out"
+      chmod 0755 "$out"
+    fi
+    ;;
+esac
+`, shQuote(goodTC.Linker), shQuote(goodTC.Linker), shQuote(badBin))
+	if err := os.WriteFile(badLinker, []byte(badScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	gTC := *goodTC
 	gTC.Linker = goodLinker
@@ -2487,8 +2579,14 @@ mkdir -p "$BUILD_DIR/sub1" "$BUILD_DIR/sub2"
 		t.Fatalf("triage linker bug: res=%+v err=%v", res, err)
 	}
 	inc := res.Incident
-	if !inc.IsLinkerBug || inc.Confidence != confLikely || inc.HasReducedIR || inc.CulpritTU != "" || inc.PassDiff != "" {
+	if !inc.IsLinkerBug || inc.Confidence != confLikely || inc.HasReducedIR || inc.CulpritTU != "" {
 		t.Fatalf("unexpected linker incident fields: %+v", inc)
+	}
+	if !strings.Contains(inc.ErrorExcerpt, "missing symbol dropped_sym") || strings.Contains(inc.ErrorExcerpt, tmp) {
+		t.Fatalf("unexpected ErrorExcerpt %q (tmp=%q)", inc.ErrorExcerpt, tmp)
+	}
+	if !strings.Contains(inc.PassDiff, "--- good (runner)") || !strings.Contains(inc.PassDiff, "+++ bad (runner)") || !strings.Contains(inc.PassDiff, "dropped_sym") {
+		t.Fatalf("unexpected PassDiff:\n%s", inc.PassDiff)
 	}
 	if inc.CulpritPass != filepath.Base(badLinker) || inc.AliveTVStatus != formalUnsupported || inc.LLUBIStatus != formalUnsupported {
 		t.Fatalf("unexpected pass/formal status: %+v", inc)
@@ -2615,99 +2713,409 @@ mkdir -p "$BUILD_DIR/sub1" "$BUILD_DIR/sub2"
 	}
 }
 
-func TestLinkerBugSymbolDiffAndTestError(t *testing.T) {
+func TestBuildProjectToolLinuxClang(t *testing.T) {
 	t.Parallel()
-	if got := diffExportedSymbols(context.Background(), "", nil, []string{"a"}); got != "" {
-		t.Fatalf("expected empty diff for empty goodSyms, got %q", got)
+	tmp := t.TempDir()
+	fakeBin := filepath.Join(tmp, "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if got := diffExportedSymbols(context.Background(), "/tmp/runner", []string{"a", "b"}, []string{"a", "b"}); got != "" {
-		t.Fatalf("expected empty diff for identical syms, got %q", got)
+	cmakeLog := filepath.Join(tmp, "cmake.log")
+	cmakeScript := fmt.Sprintf(`#!/bin/sh
+set -eu
+src=""
+bld=""
+proj=""
+cc=""
+cxx=""
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "-S" ]; then src="$a"; fi
+  if [ "$prev" = "-B" ]; then bld="$a"; fi
+  case "$a" in
+    -DLLVM_ENABLE_PROJECTS=*) proj="${a#-DLLVM_ENABLE_PROJECTS=}" ;;
+    -DCMAKE_C_COMPILER=*) cc="${a#-DCMAKE_C_COMPILER=}" ;;
+    -DCMAKE_CXX_COMPILER=*) cxx="${a#-DCMAKE_CXX_COMPILER=}" ;;
+  esac
+  prev="$a"
+done
+printf 'ARGS: %%s | CC=%%s CXX=%%s CCACHE_DISABLE=%%s\n' "$*" "${CC:-unset}" "${CXX:-unset}" "${CCACHE_DISABLE:-unset}" >> %s
+mkdir -p "$bld"
+: > "$bld/build.ninja"
+{
+  printf 'CMAKE_HOME_DIRECTORY:INTERNAL=%%s\n' "$src"
+  printf 'LLVM_ENABLE_PROJECTS:STRING=%%s\n' "$proj"
+  if [ -n "$cc" ]; then
+    printf 'CMAKE_C_COMPILER:FILEPATH=%%s/%%s\n' %s "$cc"
+    printf 'CMAKE_CXX_COMPILER:FILEPATH=%%s/%%s\n' %s "$cxx"
+  else
+    printf 'CMAKE_C_COMPILER:FILEPATH=/usr/bin/cc\n'
+    printf 'CMAKE_CXX_COMPILER:FILEPATH=/usr/bin/c++\n'
+  fi
+} > "$bld/CMakeCache.txt"
+`, shQuote(cmakeLog), shQuote(fakeBin), shQuote(fakeBin))
+	ninjaScript := `#!/bin/sh
+set -eu
+bld=""
+target=""
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "-C" ]; then bld="$a"; fi
+  target="$a"
+  prev="$a"
+done
+mkdir -p "$bld/bin"
+out="$target"
+if [ "$target" = "lld" ]; then out="ld.lld"; fi
+printf '#!/bin/sh\nexit 0\n' > "$bld/bin/$out"
+chmod 0755 "$bld/bin/$out"
+`
+	for name, body := range map[string]string{
+		"cmake":   cmakeScript,
+		"ninja":   ninjaScript,
+		"clang":   "#!/bin/sh\nexit 0\n",
+		"clang++": "#!/bin/sh\nexit 0\n",
+		"ccache":  "#!/bin/sh\nexit 0\n",
+		"ld.lld":  "#!/bin/sh\nexit 0\n",
+	} {
+		if err := os.WriteFile(filepath.Join(fakeBin, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 
+	makeLook := func(omit ...string) func(string) (string, error) {
+		return func(name string) (string, error) {
+			if slices.Contains(omit, name) {
+				return "", exec.ErrNotFound
+			}
+			p := filepath.Join(fakeBin, name)
+			if isExecFile(p) {
+				return p, nil
+			}
+			return "", exec.ErrNotFound
+		}
+	}
+
+	wtDir := filepath.Join(tmp, "wt")
+	if err := os.MkdirAll(filepath.Join(wtDir, "llvm"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	baseEnv := []string{"PATH=" + os.Getenv("PATH"), "CC=gcc", "CXX=g++", "CCACHE_DISABLE=1"}
+
+	linuxBuild := filepath.Join(tmp, "build-linux")
+	gotBin, err := buildProjectTool(context.Background(), wtDir, linuxBuild, platformSpecs[platLinuxX86], 2, "clang", "clang", "clang", baseEnv, makeLook())
+	if err != nil || gotBin != filepath.Join(linuxBuild, "bin", "clang") {
+		t.Fatalf("buildProjectTool(linux): bin=%q err=%v", gotBin, err)
+	}
+	logRaw, err := os.ReadFile(cmakeLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := nonEmptyLines(string(logRaw))
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 cmake call, got %d:\n%s", len(lines), string(logRaw))
+	}
+	for _, want := range []string{"-DCMAKE_C_COMPILER=clang", "-DCMAKE_CXX_COMPILER=clang++", "-DLLVM_USE_LINKER=lld", "-DLLVM_CCACHE_BUILD=ON", "CC=unset CXX=unset CCACHE_DISABLE=unset"} {
+		if !strings.Contains(lines[0], want) {
+			t.Errorf("linux cmake line missing %q:\n%s", want, lines[0])
+		}
+	}
+
+	if _, err := buildProjectTool(context.Background(), wtDir, linuxBuild, platformSpecs[platLinuxX86], 2, "clang", "clang", "clang", baseEnv, makeLook()); err != nil {
+		t.Fatalf("buildProjectTool(linux reuse): %v", err)
+	}
+	logRaw, _ = os.ReadFile(cmakeLog)
+	if got := len(nonEmptyLines(string(logRaw))); got != 1 {
+		t.Fatalf("expected cached clang buildDir reuse (1 cmake call), got %d:\n%s", got, string(logRaw))
+	}
+
+	staleCache := fmt.Sprintf("CMAKE_HOME_DIRECTORY:INTERNAL=%s\nLLVM_ENABLE_PROJECTS:STRING=clang\nCMAKE_C_COMPILER:FILEPATH=/usr/bin/gcc\nCMAKE_CXX_COMPILER:FILEPATH=/usr/bin/g++\n", filepath.Join(wtDir, "llvm"))
+	if err := os.WriteFile(filepath.Join(linuxBuild, "CMakeCache.txt"), []byte(staleCache), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := buildProjectTool(context.Background(), wtDir, linuxBuild, platformSpecs[platLinuxX86], 2, "clang", "clang", "clang", baseEnv, makeLook()); err != nil {
+		t.Fatalf("buildProjectTool(linux gcc->clang reconfig): %v", err)
+	}
+	logRaw, _ = os.ReadFile(cmakeLog)
+	if got := len(nonEmptyLines(string(logRaw))); got != 2 {
+		t.Fatalf("expected gcc->clang cache mismatch to reconfigure (2 cmake calls), got %d:\n%s", got, string(logRaw))
+	}
+
+	noClangXXBuild := filepath.Join(tmp, "build-noclangxx")
+	if _, err := buildProjectTool(context.Background(), wtDir, noClangXXBuild, platformSpecs[platLinuxX86], 2, "clang", "clang", "clang", baseEnv, makeLook("clang++")); err != nil {
+		t.Fatalf("buildProjectTool(no clang++): %v", err)
+	}
+	logRaw, _ = os.ReadFile(cmakeLog)
+	lines = nonEmptyLines(string(logRaw))
+	if len(lines) != 3 || strings.Contains(lines[2], "-DCMAKE_C_COMPILER=clang") || !strings.Contains(lines[2], "CC=gcc CXX=g++") {
+		t.Fatalf("unexpected no-clang++ cmake line:\n%s", lines[len(lines)-1])
+	}
+
+	darwinBuild := filepath.Join(tmp, "build-darwin")
+	if _, err := buildProjectTool(context.Background(), wtDir, darwinBuild, platformSpecs[platDarwinARM], 2, "clang", "clang", "clang", baseEnv, makeLook()); err != nil {
+		t.Fatalf("buildProjectTool(darwin): %v", err)
+	}
+	logRaw, _ = os.ReadFile(cmakeLog)
+	lines = nonEmptyLines(string(logRaw))
+	if len(lines) != 4 || strings.Contains(lines[3], "-DCMAKE_C_COMPILER=clang") || strings.Contains(lines[3], "-DLLVM_USE_LINKER=lld") {
+		t.Fatalf("unexpected darwin cmake line:\n%s", lines[len(lines)-1])
+	}
+}
+
+func TestBuildFailCommitBisect(t *testing.T) {
+	t.Parallel()
 	spec, goodTC := hostToolchainOrSkip(t)
 	selfExe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
 	tmp := t.TempDir()
-	badSrc := filepath.Join(tmp, "bad_alt.c")
-	badBin := filepath.Join(tmp, "bad_alt.out")
-	if err := os.WriteFile(badSrc, []byte("int kept_sym(void) { return 41; }\nint main(void) { return kept_sym() == 40 ? 0 : 1; }\n"), 0o644); err != nil {
+
+	llvmRepo := filepath.Join(tmp, "llvm-repo")
+	if err := os.MkdirAll(llvmRepo, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	extraEnv, compileArgs := applySDKRoot(goodTC, []string{badSrc, "-o", badBin})
-	cmd := exec.Command(goodTC.Clang, compileArgs...)
-	cmd.Env = append(os.Environ(), extraEnv...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("compile bad_alt: %v\n%s", err, out)
+	runGit := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", llvmRepo}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=D", "GIT_AUTHOR_EMAIL=d@e", "GIT_COMMITTER_NAME=D", "GIT_COMMITTER_EMAIL=d@e")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	runGit("init", "-b", "main")
+	var commits []string
+	for i := range 5 {
+		mode := "GOOD"
+		if i >= 3 {
+			mode = "BAD"
+		}
+		_ = os.WriteFile(filepath.Join(llvmRepo, "rev.txt"), []byte(fmt.Sprintf("%s\n%d\n", mode, i)), 0o644)
+		runGit("add", "rev.txt")
+		subj := fmt.Sprintf("[LLVM] Normal %d", i)
+		if i == 3 {
+			subj = "[InstCombine] Crash on phi fold (#251111) by @maintainer fixes llvm/llvm-project#250000"
+		}
+		runGit("commit", "-m", subj)
+		commits = append(commits, runGit("rev-parse", "HEAD"))
 	}
 
-	tarPath := filepath.Join(tmp, "symbug.tar.gz")
-	sha := makeTarGz(t, tarPath, map[string]string{
-		"good.c": "int kept_sym(void) { return 40; }\nint dropped_sym(void) { return 2; }\n",
-		"main.c": "extern int kept_sym(void); int main(void) { return kept_sym() == 40 ? 0 : 1; }\n",
-	})
-	rec := makeTestRecipe(t, filepath.Join(tmp, "corpus"), "symbug", tarPath, sha)
-	if err := os.WriteFile(filepath.Join(rec.Dir, "build.sh"), []byte("#!/bin/sh\nset -eu\n\"$CC\" -c \"$SRC_DIR/good.c\" -o \"$BUILD_DIR/good.o\"\n\"$CC\" -c \"$SRC_DIR/main.c\" -o \"$BUILD_DIR/main.o\"\n\"$CC\" \"$BUILD_DIR/good.o\" \"$BUILD_DIR/main.o\" -o \"$BUILD_DIR/runner\"\n"), 0o755); err != nil {
-		t.Fatal(err)
+	files := map[string]string{
+		"culprit.c": "int fc(void) { return 3; }\n",
+		"main.c":    "extern int fc(void); int main(void) { return fc() == 3 ? 0 : 1; }\n",
 	}
-	if err := os.WriteFile(filepath.Join(rec.Dir, "test_one.sh"), []byte("#!/bin/sh\nset -eu\nif ! \"$BUILD_DIR/runner\" \"$1\"; then\n  printf '%s/runner: missing symbol dropped_sym\\n' \"$BUILD_DIR\" >&2\n  exit 1\nfi\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	tarPath := filepath.Join(tmp, "bf.tar.gz")
+	sha := makeTarGz(t, tarPath, files)
+	twoFileBuild := "#!/bin/sh\nset -eu\n\"$CC\" -c \"$SRC_DIR/culprit.c\" -o \"$BUILD_DIR/culprit.o\"\n\"$CC\" -c \"$SRC_DIR/main.c\" -o \"$BUILD_DIR/main.o\"\n\"$CC\" \"$BUILD_DIR/culprit.o\" \"$BUILD_DIR/main.o\" -o \"$BUILD_DIR/runner\"\n"
 
-	goodLinker := filepath.Join(tmp, "good-ld")
-	badLinker := filepath.Join(tmp, "bad-ld")
-	_ = os.WriteFile(goodLinker, []byte(fmt.Sprintf("#!/bin/sh\nexec %s \"$@\"\n", shQuote(goodTC.Linker))), 0o755)
-	badScript := fmt.Sprintf(`#!/bin/sh
-set -eu
-out=""; prev=""
+	t.Run("compile-ice", func(t *testing.T) {
+		t.Parallel()
+		sub := t.TempDir()
+		rec := makeTestRecipe(t, filepath.Join(sub, "corpus"), "bfcomp", tarPath, sha)
+		if err := os.WriteFile(filepath.Join(rec.Dir, "build.sh"), []byte(twoFileBuild), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		badCC := filepath.Join(sub, "bad-ice-cc")
+		body := fmt.Sprintf(`#!/bin/sh
 for a in "$@"; do
-  if [ "$prev" = "-o" ]; then out="$a"; fi
-  prev="$a"
+  case "$a" in
+    *culprit.c)
+      echo "PLEASE submit a bug report to https://github.com/llvm/llvm-project/issues/" >&2
+      echo "LLVM ERROR: Crash on phi fold" >&2
+      exit 1
+      ;;
+  esac
 done
-case "$out" in
-  *diag-o0*) exec %s "$@" ;;
-  *)
-    %s "$@"
-    if [ -n "$out" ]; then
-      rm -f "$out"
-      cp %s "$out"
-      chmod 0755 "$out"
-    fi
+exec %s "$@"
+`, shQuote(goodTC.Clang))
+		if err := os.WriteFile(badCC, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		badTC := *goodTC
+		badTC.Clang = badCC
+
+		res, err := triage(context.Background(), triageOpts{
+			Runner:     &runner{CacheDir: filepath.Join(sub, "cache"), LMCBin: selfExe, Jobs: 2},
+			Recipe:     rec,
+			Spec:       spec,
+			Profile:    profDistroO2,
+			GoodTC:     goodTC,
+			BadTC:      &badTC,
+			GoodSHA:    commits[0],
+			BadSHA:     commits[4],
+			WorkDir:    filepath.Join(sub, "work"),
+			LLVMSrcDir: llvmRepo,
+			buildClang: func(_ context.Context, wt, _, _ string) (string, error) {
+				raw, _ := os.ReadFile(filepath.Join(wt, "rev.txt"))
+				if strings.HasPrefix(string(raw), "BAD") {
+					return badCC, nil
+				}
+				return goodTC.Clang, nil
+			},
+		})
+		if err != nil || res.Dropped || !res.BuildFailed || !res.IsICE || res.Incident == nil {
+			t.Fatalf("compile-ice triage: res=%+v err=%v", res, err)
+		}
+		inc := res.Incident
+		if res.CommitBisectErr != "" || inc.CulpritSHA != commits[3] || inc.CulpritTU != "culprit.c" {
+			t.Fatalf("compile-ice culprit mismatch: commitErr=%q sha=%q tu=%q", res.CommitBisectErr, inc.CulpritSHA, inc.CulpritTU)
+		}
+		if !strings.HasSuffix(inc.ID, commits[3][:8]) {
+			t.Fatalf("incident ID %q missing culprit short SHA %s", inc.ID, commits[3][:8])
+		}
+		if err := checkNoCrossRefs(inc.CulpritSubject); err != nil || !strings.Contains(inc.CulpritSubject, "Crash on phi fold") {
+			t.Fatalf("unexpected CulpritSubject %q (err=%v)", inc.CulpritSubject, err)
+		}
+	})
+
+	t.Run("link-fail", func(t *testing.T) {
+		t.Parallel()
+		sub := t.TempDir()
+		rec := makeTestRecipe(t, filepath.Join(sub, "corpus"), "bflink", tarPath, sha)
+		if err := os.WriteFile(filepath.Join(rec.Dir, "build.sh"), []byte(twoFileBuild), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		goodLD := filepath.Join(sub, "good-ld")
+		badLD := filepath.Join(sub, "bad-ld")
+		if err := os.WriteFile(goodLD, []byte(fmt.Sprintf("#!/bin/sh\nexec %s \"$@\"\n", shQuote(goodTC.Linker))), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(badLD, []byte("#!/bin/sh\necho 'LLVM ERROR: lld ThinLTO crash' >&2\nexit 1\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		gTC := *goodTC
+		gTC.Linker = goodLD
+		bTC := *goodTC
+		bTC.Linker = badLD
+
+		res, err := triage(context.Background(), triageOpts{
+			Runner:     &runner{CacheDir: filepath.Join(sub, "cache"), LMCBin: selfExe, Jobs: 2},
+			Recipe:     rec,
+			Spec:       spec,
+			Profile:    profDistroO2,
+			GoodTC:     &gTC,
+			BadTC:      &bTC,
+			GoodSHA:    commits[0],
+			BadSHA:     commits[4],
+			WorkDir:    filepath.Join(sub, "work"),
+			LLVMSrcDir: llvmRepo,
+			buildClang: func(_ context.Context, wt, _, _ string) (string, error) {
+				raw, _ := os.ReadFile(filepath.Join(wt, "rev.txt"))
+				if strings.HasPrefix(string(raw), "BAD") {
+					return badLD, nil
+				}
+				return goodLD, nil
+			},
+		})
+		if err != nil || res.Dropped || !res.BuildFailed || !res.IsICE || res.Incident == nil {
+			t.Fatalf("link-fail triage: res=%+v err=%v", res, err)
+		}
+		inc := res.Incident
+		if res.CommitBisectErr != "" || inc.CulpritSHA != commits[3] || inc.CulpritTU != "" {
+			t.Fatalf("link-fail culprit mismatch: commitErr=%q sha=%q tu=%q", res.CommitBisectErr, inc.CulpritSHA, inc.CulpritTU)
+		}
+	})
+
+	t.Run("unisolatable-graceful-degrade", func(t *testing.T) {
+		t.Parallel()
+		sub := t.TempDir()
+		rec := makeTestRecipe(t, filepath.Join(sub, "corpus"), "bfuniso", tarPath, sha)
+		buildBody := `#!/bin/sh
+set -eu
+case "$BUILD_DIR" in
+  *bad-build*)
+    echo "error: configure step failed before compile" >&2
+    exit 1
     ;;
 esac
-`, shQuote(goodTC.Linker), shQuote(goodTC.Linker), shQuote(badBin))
-	if err := os.WriteFile(badLinker, []byte(badScript), 0o755); err != nil {
+`
+		if err := os.WriteFile(filepath.Join(rec.Dir, "build.sh"), []byte(buildBody), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		res, err := triage(context.Background(), triageOpts{
+			Runner:     &runner{CacheDir: filepath.Join(sub, "cache"), LMCBin: selfExe, Jobs: 2},
+			Recipe:     rec,
+			Spec:       spec,
+			Profile:    profDistroO2,
+			GoodTC:     goodTC,
+			BadTC:      goodTC,
+			GoodSHA:    commits[0],
+			BadSHA:     commits[4],
+			WorkDir:    filepath.Join(sub, "work"),
+			LLVMSrcDir: llvmRepo,
+		})
+		if err != nil || res.Dropped || !res.BuildFailed || res.Incident == nil {
+			t.Fatalf("unisolatable triage: res=%+v err=%v", res, err)
+		}
+		if res.Incident.CulpritSHA != "" || res.Incident.CulpritTU != "" || res.CommitBisectErr == "" {
+			t.Fatalf("expected graceful degrade with CommitBisectErr: sha=%q tu=%q commitErr=%q", res.Incident.CulpritSHA, res.Incident.CulpritTU, res.CommitBisectErr)
+		}
+	})
+}
+
+func TestStripLinkLibsAndBuildFailCompileArgs(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	spec := platformSpecs[platLinuxX86]
+
+	gotStrip := stripLinkLibs([]string{
+		"-O2", "-mllvm", "-loop-vectorize", "-Xclang", "-load", "-Xclang", "plugin.so",
+		"-L", "/lib", "-L/lib2", "-l", "z", "-lm", "bar.o", "liba.a", "mod.bc",
+		"--", "-lfoo.c",
+	})
+	wantStrip := []string{
+		"-O2", "-mllvm", "-loop-vectorize", "-Xclang", "-load", "-Xclang", "plugin.so",
+		"--", "-lfoo.c",
+	}
+	if !slices.Equal(gotStrip, wantStrip) {
+		t.Fatalf("stripLinkLibs = %v, want %v", gotStrip, wantStrip)
+	}
+
+	_, gotCompileLink := buildFailCompileArgs(compileRec{
+		CWD: dir,
+		FullArgs: []string{
+			"-O2", "-mllvm", "-loop-vectorize", "-Xclang", "-load", "-Xclang", "plugin.so",
+			"-lfoo", "bar.o", "-o", "app", "--", "-lfoo.c",
+		},
+	}, spec, "", "out.o")
+	wantCompileLink := []string{
+		"-O2", "-mllvm", "-loop-vectorize", "-Xclang", "-load", "-Xclang", "plugin.so",
+		"-c", "-o", "out.o", "--", "-lfoo.c",
+	}
+	if !slices.Equal(gotCompileLink, wantCompileLink) {
+		t.Fatalf("buildFailCompileArgs(compile_link) = %v, want %v", gotCompileLink, wantCompileLink)
+	}
+
+	_, gotIR := buildFailCompileArgs(compileRec{
+		CWD:      dir,
+		FullArgs: []string{"-O2", "-c", "-x", "ir", "foo.bc", "-o", "foo.o"},
+	}, spec, "", "out.o")
+	wantIR := []string{"-O2", "-x", "ir", "foo.bc", "-c", "-o", "out.o"}
+	if !slices.Equal(gotIR, wantIR) {
+		t.Fatalf("buildFailCompileArgs(-c -x ir) = %v, want %v", gotIR, wantIR)
+	}
+
+	_, gotEmitBC := buildFailCompileArgs(compileRec{
+		CWD:      dir,
+		FullArgs: []string{"-O2", "-c", "-emit-llvm", "foo.c", "-o", "foo.bc"},
+	}, spec, "", "out.bc")
+	wantEmitBC := []string{"-O2", "foo.c", "-c", "-emit-llvm", "-o", "out.bc"}
+	if !slices.Equal(gotEmitBC, wantEmitBC) {
+		t.Fatalf("buildFailCompileArgs(-c -emit-llvm) = %v, want %v", gotEmitBC, wantEmitBC)
+	}
+
+	rspPath := filepath.Join(dir, "flags.rsp")
+	if err := os.WriteFile(rspPath, []byte("-O2 -S -emit-llvm\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-
-	gTC, bTC := *goodTC, *goodTC
-	gTC.Linker, bTC.Linker = goodLinker, badLinker
-	bTC.AliveTV, bTC.LLUBI, bTC.LLVMReduce = "", "", ""
-
-	res, err := triage(context.Background(), triageOpts{
-		Runner:        &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2},
-		Recipe:        rec,
-		Spec:          spec,
-		Profile:       profDistroO2,
-		GoodTC:        &gTC,
-		BadTC:         &bTC,
-		GoodSHA:       "1111111111111111111111111111111111111111",
-		BadSHA:        "2222222222222222222222222222222222222222",
-		WorkDir:       filepath.Join(tmp, "work"),
-		FlakyAttempts: 1,
-	})
-	if err != nil || res.Dropped || res.Incident == nil {
-		t.Fatalf("triage symbol diff: res=%+v err=%v", res, err)
-	}
-	inc := res.Incident
-	if !inc.IsLinkerBug {
-		t.Fatalf("expected IsLinkerBug, got %+v", inc)
-	}
-	if !strings.Contains(inc.ErrorExcerpt, "missing symbol dropped_sym") || strings.Contains(inc.ErrorExcerpt, tmp) {
-		t.Fatalf("unexpected ErrorExcerpt %q (tmp=%q)", inc.ErrorExcerpt, tmp)
-	}
-	if !strings.Contains(inc.PassDiff, "--- good (runner)") || !strings.Contains(inc.PassDiff, "+++ bad (runner)") || !strings.Contains(inc.PassDiff, "dropped_sym") {
-		t.Fatalf("unexpected PassDiff:\n%s", inc.PassDiff)
+	_, gotRsp := buildFailCompileArgs(compileRec{
+		CWD:      dir,
+		FullArgs: []string{"@" + rspPath, "foo.c", "-o", "foo.ll"},
+	}, spec, "", "out.ll")
+	wantRsp := []string{"-O2", "foo.c", "-S", "-emit-llvm", "-o", "out.ll"}
+	if !slices.Equal(gotRsp, wantRsp) {
+		t.Fatalf("buildFailCompileArgs(@flags.rsp) = %v, want %v", gotRsp, wantRsp)
 	}
 }

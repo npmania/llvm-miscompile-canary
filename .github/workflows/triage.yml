@@ -226,7 +226,7 @@ jobs:
       - name: Run lmc triage
         env:
           CCACHE_DIR: ${{ runner.temp }}/ccache
-          CCACHE_MAXSIZE: 1.5G
+          CCACHE_MAXSIZE: ${{ runner.os == 'macOS' && '2.5G' || '1.5G' }}
           CCACHE_COMPRESS: 'true'
           TEST_ID: ${{ matrix.test_id }}
           PKG: ${{ matrix.package }}
@@ -240,6 +240,10 @@ jobs:
           extra_args=()
           if [ -n "${TEST_ID}" ]; then
             extra_args+=(-test "${TEST_ID}")
+          fi
+
+          if command -v ccache >/dev/null 2>&1; then
+            ccache -z || true
           fi
 
           set +e
@@ -264,6 +268,10 @@ jobs:
             "${extra_args[@]}" 2>&1 | tee out/triage.log
           rc=${PIPESTATUS[0]}
           set -e
+
+          if command -v ccache >/dev/null 2>&1; then
+            ccache -s || true
+          fi
 
           if [ "${rc}" -ne 0 ] && [ ! -f out/status.json ]; then
             jq -nc \
@@ -388,6 +396,7 @@ jobs:
           CCACHE_COMPRESS: 'true'
         run: |
           set -euo pipefail
+          ccache -z || true
           if ! BUILD_ALIVE2_LLVM=1 LLVM_SRC="${RUNNER_TEMP}/llvm-project" \
             ./scripts/build-alive2-linux.sh /tmp/alive2/bin/alive-tv ||
             [ ! -x /tmp/alive2/bin/alive-tv ]; then

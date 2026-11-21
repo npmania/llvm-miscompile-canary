@@ -1083,7 +1083,9 @@ func formatGroupTitle(incs []*incident) string {
 			tag, verb = "ice", "compiler crash"
 		}
 		title := fmt.Sprintf("[%s] %s %s", tag, cmp.Or(subj, "unknown"), verb)
-		if bad != "" {
+		if culprit != "" {
+			title += " at " + culprit
+		} else if bad != "" {
 			title += " on " + bad
 		}
 		title = cmp.Or(plainTitlePart(title), "[build] unknown failed to build")
@@ -1237,6 +1239,7 @@ func pickPrimary(incs []*incident) *incident {
 			cmp.Compare(boolRank(isICEExcerpt(inc.ErrorExcerpt)), boolRank(isICEExcerpt(best.ErrorExcerpt))),
 			cmp.Compare(boolRank(inlineReducedIR(inc.ReducedIR) != ""), boolRank(inlineReducedIR(best.ReducedIR) != "")),
 			cmp.Compare(boolRank(inc.PassDiff != ""), boolRank(best.PassDiff != "")),
+			cmp.Compare(boolRank(inc.CulpritSHA != ""), boolRank(best.CulpritSHA != "")),
 			cmp.Compare(boolRank(inc.ErrorExcerpt != ""), boolRank(best.ErrorExcerpt != "")),
 		) > 0 {
 			best = inc

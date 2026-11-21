@@ -40,6 +40,7 @@ func checkHTMLNoUnsafeCrossRefs(s string) error {
 }
 
 func TestSanitize(t *testing.T) {
+	t.Parallel()
 	sha64 := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 	bundleURL := "https://github.com/npmania/llvm-miscompile-canary/releases/download/reproducers/reproducer-inc-1.tar.zst"
 	cases := []struct {
@@ -127,6 +128,7 @@ func TestSanitize(t *testing.T) {
 }
 
 func TestCleanIR(t *testing.T) {
+	t.Parallel()
 	noisy := "; ModuleID = '/tmp/work/before.ll'\nsource_filename = \"/tmp/work/foo.c\"\ntarget datalayout = \"e-m:e-i64:64\"\ntarget triple = \"x86_64-unknown-linux-gnu\"\n\ndeclare void @dead() #0\n; Function Attrs: noinline\ndefine i32 @foo(i32 %a) #1 {\n  %s = private constant [8 x i8] c\"tag #1\\00\"\n  %r = add i32 %a, 1, !dbg !10\n  ret i32 %r\n}\n\nattributes #0 = { nounwind }\n^0 = module: (path: \"foo.o\", hash: (1, 2, 3, 4, 5))\n^1 = gv: (name: \"foo\")\n^2 = blockcount: 0\n!llvm.ident = !{!0}\n!0 = !{!\"clang\"}\n!10 = !DILocation(line: 1)\n"
 	ir := cleanIR(noisy)
 	for _, w := range []string{"target triple =", "define i32 @foo(i32 %a) #1 {", "%r = add i32 %a, 1", "attributes #0 ="} {
@@ -302,6 +304,7 @@ func TestCleanIR(t *testing.T) {
 }
 
 func TestIssueTitleAndBody(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		incs []*incident
 		want string
@@ -327,6 +330,7 @@ func TestIssueTitleAndBody(t *testing.T) {
 }
 
 func TestIssueSync(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	if _, err := syncIssues(ctx, issueSyncCfg{Repo: "llvm/llvm-project", DryRun: true, Quiet: true}, nil); err == nil {
 		t.Fatal("expected error targeting llvm/llvm-project")
@@ -542,6 +546,7 @@ func TestIssueSync(t *testing.T) {
 }
 
 func TestSiteGenerate(t *testing.T) {
+	t.Parallel()
 	storeDir, outDir, corpusDir := t.TempDir(), t.TempDir(), t.TempDir()
 	for _, r := range [][6]string{
 		{"zstd", "Databases, Compression & Solvers", "facebook/zstd", "v1.5.6", "c", "fuzzer"},
@@ -819,6 +824,7 @@ func TestSiteGenerate(t *testing.T) {
 }
 
 func TestAggregateAndStoreFixes(t *testing.T) {
+	t.Parallel()
 	st := &state{LastGoodSHA: "good111111111111111111111111111111111111"}
 	openInc := &incident{
 		ID: "open-1", Status: incidentOpen,
@@ -998,11 +1004,13 @@ func TestAggregateAndStoreFixes(t *testing.T) {
 }
 
 func TestWorkflowsAndInitScript(t *testing.T) {
+	t.Parallel()
+	const dynamicCCacheMax = "CCACHE_MAXSIZE: ${{ runner.os == 'macOS' && '2.5G' || '1.5G' }}"
 	checks := map[string][]string{
 		"ci.yml":        {"go build -o lmc .", "validate-corpus -corpus corpus -require 42"},
-		"toolchain.yml": {"workflow_dispatch:", "fail-fast: false", "--target master", "| zstd ", "GH_REPO: ${{ github.repository }}", "git ls-remote --exit-code --heads", `select(.status == "open")`, "grep -Fxq", "--limit 500", "CCACHE_BASEDIR: ${{ github.workspace }}", "CCACHE_MAXSIZE: 1.5G"},
+		"toolchain.yml": {"workflow_dispatch:", "fail-fast: false", "--target master", "| zstd ", "GH_REPO: ${{ github.repository }}", "git ls-remote --exit-code --heads", `select(.status == "open")`, "grep -Fxq", "--limit 500", "CCACHE_BASEDIR: ${{ github.workspace }}", dynamicCCacheMax, "ccache -z || true"},
 		"sweep.yml":     {"corpus-matrix -corpus corpus -include -shards 12", "fail-fast: false", "zstd -dc", "| tar -xf -", "GH_REPO: ${{ github.repository }}", "if: always() && !cancelled()", "LLVM_SUBJ: ${{ steps.meta.outputs.subject }}", "./lmc site -store _data -out _site -corpus corpus", `case ",${PKGS}," in`, "contains(format(',{0},', matrix.packages), ',dav1d,')", "corpus-src-v2-${{ matrix.src_hash }}", "fragments/shard-${PLAT}-${SHARD}.json", "fragment-shard-${{ matrix.platform }}-${{ matrix.shard }}"},
-		"triage.yml":    {"./lmc alive-check", "--target master", "BUILD_ALIVE2_LLVM=1", "GH_REPO: ${{ github.repository }}", "TEST_ID: ${{ matrix.test_id }}", "-print -quit", "Free runner disk space", "Fallback download raw triage artifacts", "group: miscompile-triage", "max-parallel: 4", "bad_sha12:", "ccache-toolchain-${{ matrix.tc_platform }}-${{ matrix.bad_sha12 }}", "reduced_before.ll", ".alive_tv_status", "-timeout 215m", "-commit-timeout 90m", "CCACHE_MAXSIZE: 1.5G", "!cancelled()", "-status-out out/status.json", "record-triage", "triage.log"},
+		"triage.yml":    {"./lmc alive-check", "--target master", "BUILD_ALIVE2_LLVM=1", "GH_REPO: ${{ github.repository }}", "TEST_ID: ${{ matrix.test_id }}", "-print -quit", "Free runner disk space", "Fallback download raw triage artifacts", "group: miscompile-triage", "max-parallel: 4", "bad_sha12:", "ccache-toolchain-${{ matrix.tc_platform }}-${{ matrix.bad_sha12 }}", "reduced_before.ll", ".alive_tv_status", "-timeout 215m", "-commit-timeout 90m", "CCACHE_MAXSIZE: 1.5G", dynamicCCacheMax, "ccache -z || true", "ccache -s || true", "!cancelled()", "-status-out out/status.json", "record-triage", "triage.log"},
 	}
 	for name, wants := range checks {
 		raw, err := os.ReadFile(filepath.Join(".github", "workflows", name))
@@ -1037,8 +1045,8 @@ func TestWorkflowsAndInitScript(t *testing.T) {
 			if strings.Contains(s, "schedule:") {
 				t.Errorf("%s should not use GitHub schedule trigger", name)
 			}
-			if strings.Count(s, "CCACHE_MAXSIZE: 1.5G") != 1 {
-				t.Errorf("%s CCACHE_MAXSIZE: 1.5G count = %d, want 1", name, strings.Count(s, "CCACHE_MAXSIZE: 1.5G"))
+			if strings.Count(s, dynamicCCacheMax) != 1 || strings.Count(s, "CCACHE_MAXSIZE: 1.5G") != 0 {
+				t.Errorf("%s CCACHE_MAXSIZE counts = (%d dynamic, %d static), want (1, 0)", name, strings.Count(s, dynamicCCacheMax), strings.Count(s, "CCACHE_MAXSIZE: 1.5G"))
 			}
 		}
 		if strings.Contains(s, "CCACHE_MAXSIZE: 3G") {
@@ -1048,8 +1056,8 @@ func TestWorkflowsAndInitScript(t *testing.T) {
 			t.Errorf("%s contains stale matrix.package reference", name)
 		}
 		if name == "triage.yml" {
-			if strings.Count(s, "CCACHE_MAXSIZE: 1.5G") != 2 {
-				t.Errorf("%s CCACHE_MAXSIZE: 1.5G count = %d, want 2", name, strings.Count(s, "CCACHE_MAXSIZE: 1.5G"))
+			if strings.Count(s, dynamicCCacheMax) != 1 || strings.Count(s, "CCACHE_MAXSIZE: 1.5G") != 1 {
+				t.Errorf("%s CCACHE_MAXSIZE counts = (%d dynamic, %d static), want (1, 1)", name, strings.Count(s, dynamicCCacheMax), strings.Count(s, "CCACHE_MAXSIZE: 1.5G"))
 			}
 			_, after, ok := strings.Cut(s, "key: ccache-bisect-")
 			if !ok {
@@ -1076,6 +1084,8 @@ func TestWorkflowsAndInitScript(t *testing.T) {
 	cmakeStr := string(cmakeRaw)
 	for _, w := range []string{
 		`set(LLVM_ENABLE_ASSERTIONS ON CACHE BOOL "" FORCE)`,
+		`set(CMAKE_C_COMPILER "${_lmc_clang}" CACHE FILEPATH "")`,
+		`set(CMAKE_CXX_COMPILER "${_lmc_clangxx}" CACHE FILEPATH "")`,
 		`set(LLVM_CCACHE_PARAMS "CCACHE_CPP2=yes CCACHE_NOHASHDIR=yes CCACHE_SLOPPINESS=pch_defines,time_macros" CACHE STRING "" FORCE)`,
 	} {
 		if !strings.Contains(cmakeStr, w) {
@@ -1203,6 +1213,7 @@ func newFakeGitHub(t *testing.T) (*httptest.Server, *sync.Mutex, map[int]*ghIssu
 }
 
 func TestBuildFailLifecycle(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	srv, mu, issues, comments := newFakeGitHub(t)
 
@@ -1487,6 +1498,7 @@ func TestBuildFailLifecycle(t *testing.T) {
 }
 
 func TestHumanIssueCloseReopenAndSuppression(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	srv, mu, issues, _ := newFakeGitHub(t)
 
@@ -1807,6 +1819,7 @@ func TestHumanIssueCloseReopenAndSuppression(t *testing.T) {
 }
 
 func TestBuildFailDedupAndLabelSync(t *testing.T) {
+	t.Parallel()
 	if got := dedupKey(&incident{
 		ID: "b1", Kind: incidentKindBuildFail, GoodSHA: "111111111111abcdef",
 		Affected: []affected{{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2}},
@@ -1982,6 +1995,7 @@ func TestBuildFailDedupAndLabelSync(t *testing.T) {
 }
 
 func TestSiteFailureLogsPage(t *testing.T) {
+	t.Parallel()
 	storeDir, outDir := t.TempDir(), t.TempDir()
 	t1 := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
 	goodOld := "1111111111111111111111111111111111111111"
@@ -2116,6 +2130,7 @@ func TestSiteFailureLogsPage(t *testing.T) {
 }
 
 func TestIssueReproCommandAndPassName(t *testing.T) {
+	t.Parallel()
 	passCases := []struct {
 		pass string
 		want bool
@@ -2166,6 +2181,7 @@ func TestIssueReproCommandAndPassName(t *testing.T) {
 }
 
 func TestStoreConfidenceDiagO0AndLLUBI(t *testing.T) {
+	t.Parallel()
 	if confRank("") != 0 || confRank(confNeedsReview) != 0 || confRank(confLikely) != 1 || confRank(confConfirmed) != 2 {
 		t.Fatalf("unexpected confRank values")
 	}
@@ -2349,6 +2365,7 @@ func TestStoreConfidenceDiagO0AndLLUBI(t *testing.T) {
 }
 
 func TestSiteAndIssueInlineReducedIR(t *testing.T) {
+	t.Parallel()
 	smallIR := "define i32 @f(i32 %x) {\n  ret i32 %x\n}"
 	noisyButClean := smallIR + "\n" + strings.Repeat("!1 = !DILocation(line: 1, column: 1, scope: !2)\n", 400)
 	if got := inlineReducedIR(noisyButClean); got != smallIR {
@@ -2487,6 +2504,7 @@ func TestSiteAndIssueInlineReducedIR(t *testing.T) {
 }
 
 func TestAggregateRegressionSelection(t *testing.T) {
+	t.Parallel()
 	storeDir := t.TempDir()
 	fragsDir := t.TempDir()
 	goodSHA := "1111111111111111111111111111111111111111"
@@ -2753,6 +2771,7 @@ func TestAggregateRegressionSelection(t *testing.T) {
 }
 
 func TestAliveTVVerifiedWording(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
 	verInc := &incident{
 		ID: "inc-alive-ver", Status: incidentOpen, Confidence: confNeedsReview,
@@ -2832,6 +2851,7 @@ func TestAliveTVVerifiedWording(t *testing.T) {
 }
 
 func TestGroupQualifiesForIssueAndDryRunUpdate(t *testing.T) {
+	t.Parallel()
 	if groupQualifiesForIssue(nil) || groupQualifiesForIssue([]*incident{nil}) {
 		t.Fatal("nil incidents should not qualify")
 	}
@@ -2916,6 +2936,126 @@ func TestLinkerBugReportAndSite(t *testing.T) {
 		t.Fatalf("page cross-ref: %v", err)
 	}
 	for _, want := range []string{"<h2>Error Excerpt</h2>", "ModuleNotFoundError", "<h2>Diff</h2>", `class="diff-del"`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("incident page missing %q:\n%s", want, page)
+		}
+	}
+}
+
+func TestBuildFailWithCulpritReportAndSite(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 21, 3, 0, 0, 0, time.UTC)
+	goodSHA := "1111111111111111111111111111111111111111"
+	badSHA := "2222222222222222222222222222222222222222"
+	culpritSHA := "abcdef0123456789abcdef0123456789abcdef01"
+	iceInc := &incident{
+		ID:             "zstd-linux-x86-64-distro-o2-abcdef01",
+		Kind:           incidentKindBuildFail,
+		Title:          "zstd: compiler ICE",
+		Status:         incidentOpen,
+		Confidence:     confNeedsReview,
+		GoodSHA:        goodSHA,
+		BadSHA:         badSHA,
+		CulpritSHA:     culpritSHA,
+		CulpritSubject: sanitizeText("[SelectionDAG] Fold vector shuffle (#251000) by @dev"),
+		CulpritTU:      "lib/compress/zstd_compress.c",
+		ErrorExcerpt:   "LLVM ERROR: Cannot select: t12: v4i32 = vector_shuffle",
+		Affected:       []affected{{Package: "zstd", Version: "1.5.7", Platform: platLinuxX86, Profile: profDistroO2}},
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+
+	if got := dedupKey(iceInc); got != "build:zstd|111111111111" {
+		t.Fatalf("dedupKey = %q, want build:zstd|111111111111", got)
+	}
+	if got := formatGroupTitle([]*incident{iceInc}); got != "[ice] zstd compiler crash at abcdef012345" {
+		t.Fatalf("formatGroupTitle(ice) = %q", got)
+	}
+	plainInc := *iceInc
+	plainInc.ErrorExcerpt = "foo.c:10: error: undeclared identifier"
+	if got := formatGroupTitle([]*incident{&plainInc}); got != "[build] zstd failed to build at abcdef012345" {
+		t.Fatalf("formatGroupTitle(plain) = %q", got)
+	}
+
+	body := formatGroupBody([]*incident{iceInc}, "", defaultSiteURL)
+	if err := checkNoCrossRefs(body); err != nil {
+		t.Fatalf("body cross-ref: %v\n%s", err, body)
+	}
+	for _, want := range []string{
+		"| Kind | compiler ICE |",
+		"| Commit | `abcdef012345` ([SelectionDAG] Fold vector shuffle by dev) |",
+		"| TU | `lib/compress/zstd_compress.c` |",
+		"LLVM ERROR: Cannot select",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("formatGroupBody missing %q:\n%s", want, body)
+		}
+	}
+	for _, forbid := range []string{"| Sanitizers |", "| Conservative |", "alive-tv", "llubi"} {
+		if strings.Contains(body, forbid) {
+			t.Errorf("formatGroupBody contains %q:\n%s", forbid, body)
+		}
+	}
+
+	storeDir, outDir := t.TempDir(), t.TempDir()
+	baseInc := &incident{
+		ID:           "20261121-zstd-build-222222222222",
+		Kind:         incidentKindBuildFail,
+		Title:        "zstd: compiler ICE",
+		Status:       incidentOpen,
+		Confidence:   confNeedsReview,
+		GoodSHA:      goodSHA,
+		BadSHA:       badSHA,
+		ErrorExcerpt: "LLVM ERROR: Cannot select: t12",
+		Affected:     []affected{{Package: "zstd", Version: "1.5.7", Platform: platLinuxX86, Profile: profDistroO2}},
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	if _, err := mergeIncident(storeDir, baseInc); err != nil {
+		t.Fatal(err)
+	}
+	merged, err := mergeIncident(storeDir, iceInc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if merged.ID != baseInc.ID || merged.CulpritSHA != culpritSHA || merged.CulpritTU != "lib/compress/zstd_compress.c" {
+		t.Fatalf("mergeIncident did not enrich existing build_fail: %+v", merged)
+	}
+	if err := generateSite(storeDir, outDir, ""); err != nil {
+		t.Fatalf("generateSite: %v", err)
+	}
+	idxRaw, err := os.ReadFile(filepath.Join(outDir, "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := string(idxRaw)
+	if err := checkHTMLNoUnsafeCrossRefs(idx); err != nil {
+		t.Fatalf("index cross-ref: %v", err)
+	}
+	for _, want := range []string{
+		`href="https://github.com/llvm/llvm-project/commit/` + culpritSHA + `"`,
+		">abcdef012345<",
+		">build (ice)<",
+		">lib/compress/zstd_compress.c<",
+	} {
+		if !strings.Contains(idx, want) {
+			t.Errorf("index.html missing %q", want)
+		}
+	}
+	pageRaw, err := os.ReadFile(filepath.Join(outDir, "incidents", merged.ID, "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := string(pageRaw)
+	if err := checkHTMLNoUnsafeCrossRefs(page); err != nil {
+		t.Fatalf("page cross-ref: %v", err)
+	}
+	for _, want := range []string{
+		"<h2>Build Error</h2>",
+		"<code>abcdef012345</code>",
+		"Fold vector shuffle",
+		"<code>lib/compress/zstd_compress.c</code>",
+	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("incident page missing %q:\n%s", want, page)
 		}

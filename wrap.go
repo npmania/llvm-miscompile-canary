@@ -63,6 +63,7 @@ type compileRec struct {
 	RandomSeed       string    `json:"random_seed,omitempty"`
 	PreprocessedPath string    `json:"preprocessed_path,omitempty"`
 	BitcodePath      string    `json:"bitcode_path,omitempty"`
+	ExitCode         int       `json:"exit_code,omitempty"`
 	Timestamp        time.Time `json:"timestamp"`
 }
 
@@ -77,6 +78,7 @@ type linkRec struct {
 	FullArgs     []string  `json:"full_args"`
 	IsShared     bool      `json:"is_shared,omitempty"`
 	LTOTempsDir  string    `json:"lto_temps_dir,omitempty"`
+	ExitCode     int       `json:"exit_code,omitempty"`
 	Timestamp    time.Time `json:"timestamp"`
 }
 
@@ -215,12 +217,12 @@ func runWrapper(ctx context.Context, argv0 string, args []string, cwd string, en
 
 	childEnv := mergeEnv(env, plan.extraEnv)
 	code, runErr := execCompiler(ctx, plan.compiler, plan.fullArgs, cwd, childEnv, stdin, stdout, stderr)
-	if runErr != nil || code != 0 || plan.mode == "probe" {
+	if runErr != nil || plan.mode == "probe" {
 		return code, runErr
 	}
 
 	var preprocPath, bcPath string
-	if plan.captureMatch && len(plan.sources) > 0 {
+	if code == 0 && plan.captureMatch && len(plan.sources) > 0 {
 		preprocPath, bcPath, err = runTUCapture(ctx, plan, childEnv)
 		if err != nil {
 			return 1, fmt.Errorf("capture TU %q: %w", firstNonEmpty(plan.captureSrc, plan.sources[0]), err)
@@ -228,55 +230,65 @@ func runWrapper(ctx context.Context, argv0 string, args []string, cwd string, en
 	}
 
 	if cfg.ManifestDir != "" {
-		now := time.Now().UTC()
-		snapFull := snapshotManifestFiles(cfg.ManifestDir, cwd, plan.fullArgs)
-		if plan.mode == "compile" || plan.mode == "compile_link" {
-			if plan.mode == "compile" && plan.explicitOut == "" && len(plan.sources) > 1 {
-				baseArgs := stripFlags(snapFull, stripSources, cwd, plan.sources...)
-				for _, src := range plan.sources {
-					base := filepath.Base(src)
-					outPath := resolvePath(cwd, strings.TrimSuffix(base, filepath.Ext(base))+".o")
-					srcArgs := append(slices.Clone(baseArgs), src)
-					pPath, bPath := "", ""
-					if src == plan.captureSrc {
-						pPath, bPath = preprocPath, bcPath
-					}
-					if err := appendManifest(cfg.ManifestDir, compileManifestFile, compileRec{
-						ID: plan.randomSeed, CWD: cwd, Compiler: plan.compiler, IsCXX: isCXX,
-						Source: src, Sources: []string{src}, Output: outPath,
-						RawArgs: slices.Clone(plan.rawArgs), FullArgs: srcArgs,
-						RandomSeed: plan.randomSeed, PreprocessedPath: pPath, BitcodePath: bPath, Timestamp: now,
-					}); err != nil {
-						return 1, err
-					}
+		if err := recordWrapManifest(cfg.ManifestDir, cwd, isCXX, plan, code, preprocPath, bcPath); err != nil && code == 0 {
+			return 1, err
+		}
+	}
+	return code, nil
+}
+
+func recordWrapManifest(manifestDir, cwd string, isCXX bool, plan *wrapPlan, exitCode int, preprocPath, bcPath string) error {
+	now := time.Now().UTC()
+	snapFull := snapshotManifestFiles(manifestDir, cwd, plan.fullArgs)
+	if plan.mode == "compile" || plan.mode == "compile_link" {
+		if plan.mode == "compile" && plan.explicitOut == "" && len(plan.sources) > 1 {
+			baseArgs := stripFlags(snapFull, stripSources, cwd, plan.sources...)
+			for _, src := range plan.sources {
+				base := filepath.Base(src)
+				outPath := resolvePath(cwd, strings.TrimSuffix(base, filepath.Ext(base))+".o")
+				srcArgs := append(slices.Clone(baseArgs), src)
+				pPath, bPath := "", ""
+				if src == plan.captureSrc {
+					pPath, bPath = preprocPath, bcPath
 				}
-			} else {
-				primary := ""
-				if len(plan.sources) > 0 {
-					primary = plan.sources[0]
-				}
-				if err := appendManifest(cfg.ManifestDir, compileManifestFile, compileRec{
+				if err := appendManifest(manifestDir, compileManifestFile, compileRec{
 					ID: plan.randomSeed, CWD: cwd, Compiler: plan.compiler, IsCXX: isCXX,
-					Source: primary, Sources: slices.Clone(plan.sources), Output: plan.output,
-					RawArgs: slices.Clone(plan.rawArgs), FullArgs: snapFull,
-					RandomSeed: plan.randomSeed, PreprocessedPath: preprocPath, BitcodePath: bcPath, Timestamp: now,
+					Source: src, Sources: []string{src}, Output: outPath,
+					RawArgs: slices.Clone(plan.rawArgs), FullArgs: srcArgs,
+					RandomSeed: plan.randomSeed, PreprocessedPath: pPath, BitcodePath: bPath,
+					ExitCode: exitCode, Timestamp: now,
 				}); err != nil {
-					return 1, err
+					return err
 				}
 			}
-		}
-		if plan.mode == "link" || plan.mode == "compile_link" {
-			if err := appendManifest(cfg.ManifestDir, linkManifestFile, linkRec{
-				CWD: cwd, Compiler: plan.compiler, IsCXX: isCXX, Output: plan.output,
-				ObjectFiles: slices.Clone(plan.objectFiles), ArchiveFiles: slices.Clone(plan.archiveFiles),
+		} else {
+			primary := ""
+			if len(plan.sources) > 0 {
+				primary = plan.sources[0]
+			}
+			if err := appendManifest(manifestDir, compileManifestFile, compileRec{
+				ID: plan.randomSeed, CWD: cwd, Compiler: plan.compiler, IsCXX: isCXX,
+				Source: primary, Sources: slices.Clone(plan.sources), Output: plan.output,
 				RawArgs: slices.Clone(plan.rawArgs), FullArgs: snapFull,
-				IsShared: plan.isShared, LTOTempsDir: plan.ltoTempsDir, Timestamp: now,
+				RandomSeed: plan.randomSeed, PreprocessedPath: preprocPath, BitcodePath: bcPath,
+				ExitCode: exitCode, Timestamp: now,
 			}); err != nil {
-				return 1, err
+				return err
 			}
 		}
 	}
-	return 0, nil
+	if plan.mode == "link" || plan.mode == "compile_link" {
+		if err := appendManifest(manifestDir, linkManifestFile, linkRec{
+			CWD: cwd, Compiler: plan.compiler, IsCXX: isCXX, Output: plan.output,
+			ObjectFiles: slices.Clone(plan.objectFiles), ArchiveFiles: slices.Clone(plan.archiveFiles),
+			RawArgs: slices.Clone(plan.rawArgs), FullArgs: snapFull,
+			IsShared: plan.isShared, LTOTempsDir: plan.ltoTempsDir,
+			ExitCode: exitCode, Timestamp: now,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func planWrap(cfg wrapConfig, isCXX bool, cwd string, args []string) (*wrapPlan, error) {

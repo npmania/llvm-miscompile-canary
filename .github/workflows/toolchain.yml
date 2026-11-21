@@ -160,9 +160,11 @@ jobs:
         env:
           CCACHE_DIR: ${{ runner.temp }}/ccache
           CCACHE_BASEDIR: ${{ github.workspace }}
-          CCACHE_MAXSIZE: 1.5G
+          CCACHE_MAXSIZE: ${{ runner.os == 'macOS' && '2.5G' || '1.5G' }}
           CCACHE_COMPRESS: 'true'
         run: |
+          ccache -z || true
+
           cmake -G Ninja \
             -S llvm-project/llvm \
             -B build \

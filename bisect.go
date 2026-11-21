@@ -155,10 +155,12 @@ func bisectObjects(ctx context.Context, o objectBisectOpts) (*objectBisectResult
 	if err != nil {
 		return nil, fmt.Errorf("read bad compile manifest: %w", err)
 	}
+	badComp = slices.DeleteFunc(badComp, func(r compileRec) bool { return r.ExitCode != 0 })
 	badLinks, err := readLinkRecs(o.BadManifestDir)
 	if err != nil {
 		return nil, fmt.Errorf("read bad link manifest: %w", err)
 	}
+	badLinks = slices.DeleteFunc(badLinks, func(r linkRec) bool { return r.ExitCode != 0 })
 
 	var links []linkRec
 	linkOrder := make(map[string]int)
@@ -2263,12 +2265,19 @@ func bisectCommit(ctx context.Context, o commitBisectOpts) (string, string, erro
 	return sha, subj, nil
 }
 
+func driverForClangBin(clangBin string, isCXX bool) string {
+	if isCXX {
+		if cxx := filepath.Join(filepath.Dir(clangBin), "clang++"); fileExists(cxx) {
+			return cxx
+		}
+	}
+	return clangBin
+}
+
 func compileSingleTUWithClang(ctx context.Context, clangBin string, spec platformSpec, sdkRoot string, culprit *compiledObj, outObj string) error {
 	driver := clangBin
 	if culprit.IsCXX && len(culprit.Args) > 0 {
-		if cxx := filepath.Join(filepath.Dir(clangBin), "clang++"); fileExists(cxx) {
-			driver = cxx
-		}
+		driver = driverForClangBin(clangBin, true)
 	}
 	var args []string
 	if len(culprit.Args) > 0 {
@@ -2295,6 +2304,87 @@ func compileSingleTUWithClang(ctx context.Context, clangBin string, spec platfor
 	return nil
 }
 
+func buildFailCompileArgs(rec compileRec, spec platformSpec, sdkRoot, outPath string) ([]string, []string) {
+	expanded := expandResponseFiles(rec.CWD, rec.FullArgs)
+	var hasC, hasS, hasEmitLLVM bool
+	for i := 0; i < len(expanded); i++ {
+		a := expanded[i]
+		if a == "--" {
+			break
+		}
+		if twoArgClangFlags[a] || a == "-x" || a == "-o" {
+			i++
+			continue
+		}
+		switch a {
+		case "-c":
+			hasC = true
+		case "-S":
+			hasS = true
+		case "-emit-llvm":
+			hasEmitLLVM = true
+		}
+	}
+	args := bisectCompileArgs(expanded, rec.CWD, true)
+	if !hasC && !hasS && !hasEmitLLVM {
+		args = stripLinkLibs(args)
+	}
+	modeFlags := []string{"-c"}
+	if hasS && !hasC {
+		modeFlags = []string{"-S"}
+	}
+	if hasEmitLLVM {
+		modeFlags = append(modeFlags, "-emit-llvm")
+	}
+	args = appendBeforeDashDash(args, append(modeFlags, "-o", outPath))
+	extraEnv, args := applySDKRoot(&toolchain{Spec: spec, SDKRoot: sdkRoot}, args)
+	return extraEnv, args
+}
+
+func runBuildFailCompile(ctx context.Context, driver string, isCXX bool, spec platformSpec, sdkRoot string, rec compileRec, outPath string) (string, error) {
+	extraEnv, args := buildFailCompileArgs(rec, spec, sdkRoot, outPath)
+	if isCXX && filepath.Base(driver) == "clang" {
+		args = append([]string{"--driver-mode=g++"}, args...)
+	}
+	return runToolInDirEnv(ctx, driver, args, rec.CWD, extraEnv)
+}
+
+func runBuildFailLink(ctx context.Context, driverTC *toolchain, driverOverride, linkerPath, goodBuild, badBuild string, mapToGood bool, rec linkRec, scratchDir, tag, outBin string) (string, error) {
+	var mapInput func(string) (string, bool)
+	if mapToGood && goodBuild != "" && badBuild != "" {
+		mapInput = func(canon string) (string, bool) {
+			rel, ok := relWithinDir(badBuild, canon)
+			if !ok {
+				return "", false
+			}
+			cand := filepath.Join(goodBuild, rel)
+			switch strings.ToLower(filepath.Ext(cand)) {
+			case ".o", ".lo", ".obj", ".bc", ".a":
+				if fileExists(cand) {
+					return cand, true
+				}
+			}
+			return "", false
+		}
+	}
+	args, err := rewriteLinkArgs(rec.FullArgs, linkRewriteOpts{
+		cwd: rec.CWD, scratchDir: scratchDir, tag: tag,
+		stripOut: true, newLinker: linkerPath, mapObj: mapInput, mapAr: mapInput,
+	})
+	if err != nil {
+		return "", err
+	}
+	args = appendBeforeDashDash(args, []string{"-o", outBin})
+	extraEnv, args := applySDKRoot(driverTC, args)
+	driver := driverOverride
+	if driver == "" {
+		driver = driverFor(driverTC, rec.IsCXX)
+	} else if rec.IsCXX && filepath.Base(driver) == "clang" {
+		args = append([]string{"--driver-mode=g++"}, args...)
+	}
+	return runToolInDirEnv(ctx, driver, args, rec.CWD, extraEnv)
+}
+
 func bisectLLVMTargets(spec platformSpec, hostOS, hostArch string) string {
 	if spec.ID == platLinuxRISCV64 && hostOS == "linux" && hostArch == "amd64" {
 		return "X86;RISCV"
@@ -2307,12 +2397,34 @@ func buildClangInWorktree(ctx context.Context, wtDir, buildDir string, spec plat
 }
 
 func buildProjectToolInWorktree(ctx context.Context, wtDir, buildDir string, spec platformSpec, jobs int, project, target, binName string) (string, error) {
+	return buildProjectTool(ctx, wtDir, buildDir, spec, jobs, project, target, binName, os.Environ(), exec.LookPath)
+}
+
+func buildProjectTool(ctx context.Context, wtDir, buildDir string, spec platformSpec, jobs int, project, target, binName string, env []string, lookPath func(string) (string, error)) (string, error) {
 	if jobs <= 0 {
 		jobs = runtime.NumCPU()
 	}
 	llvmDir := filepath.Join(wtDir, "llvm")
-	baseEnv := stripEnv(os.Environ(), "CCACHE_DISABLE", "SCCACHE_DISABLE")
+	var clangPath, clangXXPath string
+	useClang := false
+	if !spec.IsDarwin {
+		if c, err1 := lookPath("clang"); err1 == nil {
+			if cxx, err2 := lookPath("clang++"); err2 == nil {
+				clangPath, clangXXPath, useClang = c, cxx, true
+			}
+		}
+	}
+	baseEnv := stripEnv(env, "CCACHE_DISABLE", "SCCACHE_DISABLE")
+	if useClang {
+		baseEnv = stripEnv(baseEnv, "CC", "CXX")
+	}
 	extraEnv := []string{"CCACHE_BASEDIR=" + evalSymlinksExisting(filepath.Dir(wtDir))}
+	resolveBin := func(name string) string {
+		if p, err := lookPath(name); err == nil {
+			return p
+		}
+		return name
+	}
 	configure := func() error {
 		if err := os.MkdirAll(buildDir, 0o755); err != nil {
 			return err
@@ -2327,18 +2439,21 @@ func buildProjectToolInWorktree(ctx context.Context, wtDir, buildDir string, spe
 		if project == "clang" {
 			args = append(args, "-DCLANG_ENABLE_CIR=OFF", "-DCLANG_ENABLE_STATIC_ANALYZER=OFF")
 		}
-		if _, err := exec.LookPath("ccache"); err == nil {
+		if _, err := lookPath("ccache"); err == nil {
 			args = append(args,
 				"-DLLVM_CCACHE_BUILD=ON",
 				"-DLLVM_CCACHE_PARAMS=CCACHE_CPP2=yes CCACHE_NOHASHDIR=yes CCACHE_SLOPPINESS=pch_defines,time_macros",
 			)
 		}
 		if !spec.IsDarwin {
-			if _, err := exec.LookPath("ld.lld"); err == nil {
+			if useClang {
+				args = append(args, "-DCMAKE_C_COMPILER=clang", "-DCMAKE_CXX_COMPILER=clang++")
+			}
+			if _, err := lookPath("ld.lld"); err == nil {
 				args = append(args, "-DLLVM_USE_LINKER=lld")
 			}
 		}
-		if out, err := runToolInDirBaseEnv(ctx, "cmake", args, "", baseEnv, extraEnv); err != nil {
+		if out, err := runToolInDirBaseEnv(ctx, resolveBin("cmake"), args, "", baseEnv, extraEnv); err != nil {
 			return fmt.Errorf("cmake configure %s: %w\n%s", project, err, tailText(out, 4096))
 		}
 		return nil
@@ -2346,9 +2461,13 @@ func buildProjectToolInWorktree(ctx context.Context, wtDir, buildDir string, spe
 
 	needCfg := !fileExists(filepath.Join(buildDir, "build.ninja"))
 	if !needCfg {
-		if raw, err := os.ReadFile(filepath.Join(buildDir, "CMakeCache.txt")); err != nil ||
-			!strings.Contains(string(raw), llvmDir) ||
-			!strings.Contains(string(raw), "LLVM_ENABLE_PROJECTS:STRING="+project) {
+		raw, err := os.ReadFile(filepath.Join(buildDir, "CMakeCache.txt"))
+		cache := string(raw)
+		if err != nil ||
+			!strings.Contains(cache, llvmDir) ||
+			!strings.Contains(cache, "LLVM_ENABLE_PROJECTS:STRING="+project) ||
+			(useClang && (!cmakeCacheMatchesCompiler(cache, "CMAKE_C_COMPILER", "clang", clangPath) ||
+				!cmakeCacheMatchesCompiler(cache, "CMAKE_CXX_COMPILER", "clang++", clangXXPath))) {
 			needCfg = true
 		}
 	}
@@ -2358,13 +2477,13 @@ func buildProjectToolInWorktree(ctx context.Context, wtDir, buildDir string, spe
 			return "", err
 		}
 	}
-	out, err := runToolInDirBaseEnv(ctx, "ninja", []string{"-C", buildDir, "-j", strconv.Itoa(jobs), target}, "", baseEnv, extraEnv)
+	out, err := runToolInDirBaseEnv(ctx, resolveBin("ninja"), []string{"-C", buildDir, "-j", strconv.Itoa(jobs), target}, "", baseEnv, extraEnv)
 	if err != nil && ctx.Err() == nil && !needCfg && isStaleNinjaError(out) {
 		_ = os.RemoveAll(buildDir)
 		if cfgErr := configure(); cfgErr != nil {
 			return "", cfgErr
 		}
-		out, err = runToolInDirBaseEnv(ctx, "ninja", []string{"-C", buildDir, "-j", strconv.Itoa(jobs), target}, "", baseEnv, extraEnv)
+		out, err = runToolInDirBaseEnv(ctx, resolveBin("ninja"), []string{"-C", buildDir, "-j", strconv.Itoa(jobs), target}, "", baseEnv, extraEnv)
 	}
 	if err != nil {
 		return "", fmt.Errorf("ninja %s: %w\n%s", target, err, tailText(out, 4096))
@@ -2379,6 +2498,30 @@ func buildProjectToolInWorktree(ctx context.Context, wtDir, buildDir string, spe
 		}
 	}
 	return toolBin, nil
+}
+
+func cmakeCacheValue(raw, key string) string {
+	prefix := key + ":"
+	for _, line := range strings.Split(raw, "\n") {
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		if _, val, ok := strings.Cut(line, "="); ok {
+			return strings.TrimSpace(val)
+		}
+	}
+	return ""
+}
+
+func cmakeCacheMatchesCompiler(raw, key, wantName, wantPath string) bool {
+	got := cmakeCacheValue(raw, key)
+	if got == "" {
+		return false
+	}
+	if got == wantName || got == wantPath {
+		return true
+	}
+	return wantPath != "" && evalSymlinksExisting(got) == evalSymlinksExisting(wantPath)
 }
 
 func isStaleNinjaError(out string) bool {
@@ -2445,11 +2588,23 @@ func stripLinkLibs(args []string) []string {
 	var out []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
+		if a == "--" {
+			out = append(out, args[i:]...)
+			break
+		}
 		if a == "-l" || a == "-L" || a == "-force_load" || a == "-filelist" {
 			i++
 			continue
 		}
 		if strings.HasPrefix(a, "-l") || strings.HasPrefix(a, "-L") {
+			continue
+		}
+		if twoArgClangFlags[a] || a == "-x" {
+			out = append(out, a)
+			if i+1 < len(args) {
+				i++
+				out = append(out, args[i])
+			}
 			continue
 		}
 		if !strings.HasPrefix(a, "-") {

@@ -42,6 +42,7 @@ func TestMain(m *testing.M) {
 }
 
 func TestPlatformAndFlags(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		plat   string
 		prof   string
@@ -180,6 +181,7 @@ func TestPlatformAndFlags(t *testing.T) {
 }
 
 func TestResolveToolchain(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	binDir := filepath.Join(dir, "bin")
 	auxDir := filepath.Join(dir, "aux")
@@ -221,6 +223,7 @@ func TestResolveToolchain(t *testing.T) {
 }
 
 func TestWrapperProbeAndPlan(t *testing.T) {
+	t.Parallel()
 	if isCXX, ok := isWrapperArgv0("/tmp/bin/clang++"); !ok || !isCXX {
 		t.Fatalf("expected clang++ wrapper, got isCXX=%v ok=%v", isCXX, ok)
 	}
@@ -354,6 +357,7 @@ func TestWrapperProbeAndPlan(t *testing.T) {
 }
 
 func TestWrapperCaptureAndStripFlags(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	fakeCC := filepath.Join(dir, "fake-clang")
 	script := `#!/bin/sh
@@ -441,9 +445,34 @@ exit 0
 		slices.Contains(mRecs[0].FullArgs, "m2.c") || slices.Contains(mRecs[1].FullArgs, "m1.c") {
 		t.Fatalf("unexpected multi-source compile recs: %+v", mRecs)
 	}
+
+	failCC := filepath.Join(dir, "fail-clang")
+	if err := os.WriteFile(failCC, []byte("#!/bin/sh\nexit 17\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	failMan := filepath.Join(dir, "fail-manifest")
+	failCfg := wrapConfig{RealCC: failCC, RealCXX: failCC, Platform: platLinuxX86, Profile: profDistroO2, ManifestDir: failMan, CaptureTU: "bad.c"}
+	if code, err := runWrapper(context.Background(), "clang", []string{"-c", "bad.c", "-o", filepath.Join(dir, "bad.o")}, dir, os.Environ(), failCfg, nil, &stdout, &stderr); err != nil || code != 17 {
+		t.Fatalf("failed compile runWrapper code=%d err=%v, want 17/nil", code, err)
+	}
+	if code, err := runWrapper(context.Background(), "clang", []string{filepath.Join(dir, "bad.o"), "-o", filepath.Join(dir, "app")}, dir, os.Environ(), failCfg, nil, &stdout, &stderr); err != nil || code != 17 {
+		t.Fatalf("failed link runWrapper code=%d err=%v, want 17/nil", code, err)
+	}
+	if code, err := runWrapper(context.Background(), "clang", []string{"-c", "conftest.c", "-o", filepath.Join(dir, "conftest.o")}, dir, os.Environ(), failCfg, nil, &stdout, &stderr); err != nil || code != 17 {
+		t.Fatalf("failed probe runWrapper code=%d err=%v, want 17/nil", code, err)
+	}
+	fComps, err := readCompileRecs(failMan)
+	if err != nil || len(fComps) != 1 || fComps[0].ExitCode != 17 || fComps[0].PreprocessedPath != "" {
+		t.Fatalf("failed compile recs = %+v, err=%v", fComps, err)
+	}
+	fLinks, err := readLinkRecs(failMan)
+	if err != nil || len(fLinks) != 1 || fLinks[0].ExitCode != 17 {
+		t.Fatalf("failed link recs = %+v, err=%v", fLinks, err)
+	}
 }
 
 func TestStoreRoundTripAndMerge(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	st, err := loadState(dir)
 	if err != nil {
@@ -562,6 +591,7 @@ func TestStoreRoundTripAndMerge(t *testing.T) {
 }
 
 func TestCorpusFetchUnpackAndValidate(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	tbPath, sum := makeTestTarGz(t, dir, map[string]string{
 		"demo-1.0/hello.txt": "hello\n",
@@ -626,6 +656,7 @@ ctest: {}
 }
 
 func TestCorpusRunnerCMakeAndCTest(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("cmake"); err != nil {
 		t.Skip("cmake not in PATH")
 	}
@@ -705,6 +736,7 @@ int main(int argc, char **argv) { return (argc > 1 && strcmp(argv[1], "ok") == 0
 }
 
 func TestReadCTestFailuresFallback(t *testing.T) {
+	t.Parallel()
 	out := `Test project /tmp/x
     Start 1: ok_case
     Start 2: disabled_case
@@ -728,6 +760,7 @@ func TestReadCTestFailuresFallback(t *testing.T) {
 }
 
 func TestCLISubcommands(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	corpusDir := filepath.Join(dir, "corpus")
 	for _, tc := range []struct {
@@ -887,6 +920,7 @@ func TestCLISubcommands(t *testing.T) {
 }
 
 func TestCorpusMatrixSharding(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	synDir := filepath.Join(dir, "corpus")
 	type spec struct {
@@ -1159,6 +1193,7 @@ func TestCorpusMatrixSharding(t *testing.T) {
 }
 
 func TestSweepCancelAndIncrementalFlush(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	tcDir := filepath.Join(dir, "tc")
 	if err := os.MkdirAll(tcDir, 0o755); err != nil {
@@ -1269,6 +1304,7 @@ func TestSweepCancelAndIncrementalFlush(t *testing.T) {
 }
 
 func TestICEExcerptAndDetect(t *testing.T) {
+	t.Parallel()
 	if !detectICE("UNREACHABLE executed at /src/llvm/lib/CodeGen/SelectionDAG.cpp:42!") {
 		t.Fatal("detectICE missed UNREACHABLE executed at")
 	}

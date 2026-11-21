@@ -873,7 +873,8 @@ func cmdTriage(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		return nil
 	}
 	if res.CommitBisectErr != "" {
-		fmt.Fprintf(stderr, "[triage] commit bisect skipped/failed (continuing with pass bisect): %s\n", res.CommitBisectErr)
+		fallback := pick(res.BuildFailed, "continuing with build_fail", "continuing with pass bisect")
+		fmt.Fprintf(stderr, "[triage] commit bisect skipped/failed (%s): %s\n", fallback, res.CommitBisectErr)
 	}
 
 	inc := res.Incident

@@ -156,7 +156,7 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 		return nil, fmt.Errorf("bad build: %w", err)
 	}
 	if !badOut.Passed {
-		_, goodOut, gErr := buildProfile("good-build", o.Profile, o.GoodTC, nil, nil, false)
+		goodWS, goodOut, gErr := buildProfile("good-build", o.Profile, o.GoodTC, nil, nil, false)
 		if gErr != nil {
 			return nil, fmt.Errorf("good build: %w", gErr)
 		}
@@ -170,25 +170,32 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 				Detail:      tailText(badOut.Output, 800),
 			}, nil
 		}
+		culpritSHA, culpritSubj, culpritTU, commitErr, cbErr := runBuildFailCommitBisect(ctx, o, absWork, badWS, goodWS)
+		if cbErr != nil {
+			return nil, cbErr
+		}
 		now := time.Now().UTC()
 		excerpt := clipCode(sanitizeCode(extractICEExcerpt(badOut.Output, 8000)), 8000)
 		if isICE && !isICEExcerpt(excerpt) {
 			excerpt = "[compiler ICE] " + excerpt
 		}
 		inc := &incident{
-			ID:           buildIncidentID(o.Recipe.Name, o.Spec.ID, o.Profile, "build", o.BadSHA, ""),
-			Kind:         incidentKindBuildFail,
-			Title:        sanitizeText(o.Recipe.Name + ": " + pick(isICE, "compiler ICE", "build failure")),
-			Status:       incidentOpen,
-			Confidence:   confNeedsReview,
-			GoodSHA:      o.GoodSHA,
-			BadSHA:       o.BadSHA,
-			ErrorExcerpt: excerpt,
-			Affected:     []affected{{Package: o.Recipe.Name, Version: o.Recipe.Version, Platform: o.Spec.ID, Profile: o.Profile}},
-			CreatedAt:    now,
-			UpdatedAt:    now,
+			ID:             buildIncidentID(o.Recipe.Name, o.Spec.ID, o.Profile, "build", o.BadSHA, culpritSHA),
+			Kind:           incidentKindBuildFail,
+			Title:          sanitizeText(o.Recipe.Name + ": " + pick(isICE, "compiler ICE", "build failure")),
+			Status:         incidentOpen,
+			Confidence:     confNeedsReview,
+			GoodSHA:        o.GoodSHA,
+			BadSHA:         o.BadSHA,
+			CulpritSHA:     culpritSHA,
+			CulpritSubject: culpritSubj,
+			CulpritTU:      culpritTU,
+			ErrorExcerpt:   excerpt,
+			Affected:       []affected{{Package: o.Recipe.Name, Version: o.Recipe.Version, Platform: o.Spec.ID, Profile: o.Profile}},
+			CreatedAt:      now,
+			UpdatedAt:      now,
 		}
-		return &triageResult{Incident: inc, BuildFailed: true, IsICE: isICE}, nil
+		return &triageResult{Incident: inc, BuildFailed: true, IsICE: isICE, CommitBisectErr: commitErr}, nil
 	}
 
 	var testFailOut string
@@ -275,23 +282,24 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 		_ = os.RemoveAll(filepath.Join(absWork, "asan-ubsan-host"))
 		return nil, err
 	}
+	sanPassed := false
 	if !sanOut.Passed {
 		_ = os.RemoveAll(filepath.Join(absWork, "asan-ubsan"))
 		_ = os.RemoveAll(filepath.Join(absWork, "asan-ubsan-host"))
 		if hasSanitizerReport(sanOut.Output) {
 			return &triageResult{Dropped: true, DropReason: "upstream_ub"}, nil
 		}
-		return nil, fmt.Errorf("asan/ubsan build failed without sanitizer trap (exit %d): %s", sanOut.ExitCode, tailText(sanOut.Output, 1500))
-	}
-	sanTest := o.Runner.testOne(ctx, o.Recipe, sanWS, testID, sanEnv, o.TestTimeout)
-	sanPassed := sanTest.Passed
-	_ = os.RemoveAll(filepath.Join(absWork, "asan-ubsan"))
-	_ = os.RemoveAll(filepath.Join(absWork, "asan-ubsan-host"))
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if !sanPassed && hasSanitizerReport(sanTest.Output) {
-		return &triageResult{Dropped: true, DropReason: "upstream_ub"}, nil
+	} else {
+		sanTest := o.Runner.testOne(ctx, o.Recipe, sanWS, testID, sanEnv, o.TestTimeout)
+		sanPassed = sanTest.Passed
+		_ = os.RemoveAll(filepath.Join(absWork, "asan-ubsan"))
+		_ = os.RemoveAll(filepath.Join(absWork, "asan-ubsan-host"))
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if !sanPassed && hasSanitizerReport(sanTest.Output) {
+			return &triageResult{Dropped: true, DropReason: "upstream_ub"}, nil
+		}
 	}
 
 	runObjTest := func(runCtx context.Context) (bool, string, error) {
@@ -449,6 +457,18 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 	return &triageResult{Incident: inc, BundlePath: bundlePath, CommitBisectErr: commitErr}, nil
 }
 
+func lldBuildFn(o triageOpts) func(context.Context, string, string, string) (string, error) {
+	linkerBinName := "ld.lld"
+	if o.BadTC != nil && o.BadTC.Linker != "" {
+		linkerBinName = filepath.Base(o.BadTC.Linker)
+	} else if o.Spec.IsDarwin {
+		linkerBinName = "ld64.lld"
+	}
+	return func(bctx context.Context, wt, bd, _ string) (string, error) {
+		return buildProjectToolInWorktree(bctx, wt, bd, o.Spec, o.Jobs, "lld", "lld", linkerBinName)
+	}
+}
+
 func runTriageCommitBisect(ctx context.Context, o triageOpts, absWork string, objRes *objectBisectResult) (culpritSHA, culpritSubj, commitErr string, err error) {
 	if strings.TrimSpace(o.LLVMSrcDir) == "" || o.GoodSHA == "" || o.BadSHA == "" || objRes == nil || (!objRes.IsLinkerBug && objRes.Culprit == nil) {
 		return "", "", "", nil
@@ -469,16 +489,8 @@ func runTriageCommitBisect(ctx context.Context, o triageOpts, absWork string, ob
 	relinkFn := objRes.relinkSingle
 	if objRes.IsLinkerBug {
 		relinkFn = objRes.relinkLinker
-		linkerBinName := "ld.lld"
-		if o.BadTC != nil && o.BadTC.Linker != "" {
-			linkerBinName = filepath.Base(o.BadTC.Linker)
-		} else if o.Spec.IsDarwin {
-			linkerBinName = "ld64.lld"
-		}
 		if buildFn == nil {
-			buildFn = func(bctx context.Context, wt, bd, _ string) (string, error) {
-				return buildProjectToolInWorktree(bctx, wt, bd, o.Spec, o.Jobs, "lld", "lld", linkerBinName)
-			}
+			buildFn = lldBuildFn(o)
 		}
 		if testFn == nil && objRes.relinkLinker != nil {
 			testFn = func(tctx context.Context, lldBin, _ string) (bool, string, error) {
@@ -525,6 +537,275 @@ func runTriageCommitBisect(ctx context.Context, o triageOpts, absWork string, ob
 		return "", "", err.Error(), nil
 	}
 	return sha, sanitizeText(subj), "", nil
+}
+
+func runBuildFailCommitBisect(ctx context.Context, o triageOpts, absWork string, badWS, goodWS *workspace) (culpritSHA, culpritSubj, culpritTU, commitErr string, err error) {
+	if strings.TrimSpace(o.LLVMSrcDir) == "" || o.GoodSHA == "" || o.BadSHA == "" || badWS == nil {
+		return "", "", "", "", nil
+	}
+	if err := ctx.Err(); err != nil {
+		return "", "", "", "", err
+	}
+	commitDur, ok := commitBisectBudget(ctx, o.CommitTimeout)
+	if !ok {
+		dl, _ := ctx.Deadline()
+		return "", "", "", fmt.Sprintf("skipped: insufficient remaining time (%s) before triage deadline", max(0, time.Until(dl)).Round(time.Second)), nil
+	}
+	commitCtx, cancel := context.WithTimeout(ctx, commitDur)
+	defer cancel()
+
+	probeDir := filepath.Join(absWork, "build-fail-probe")
+	if err := os.MkdirAll(probeDir, 0o755); err != nil {
+		return "", "", "", err.Error(), nil
+	}
+	defer os.RemoveAll(probeDir)
+
+	buildFn, testFn := o.buildClang, o.testClang
+	if testFn == nil {
+		var isLinker bool
+		culpritTU, isLinker, testFn = isolateBuildFailCmd(commitCtx, o, badWS, goodWS, probeDir)
+		if commitCtx.Err() != nil {
+			if ctx.Err() != nil {
+				return "", "", "", "", ctx.Err()
+			}
+			return "", "", culpritTU, commitCtx.Err().Error(), nil
+		}
+		if testFn == nil {
+			return "", "", "", "could not isolate reproducible failing compile or link command", nil
+		}
+		if isLinker && buildFn == nil {
+			buildFn = lldBuildFn(o)
+		}
+	}
+
+	var sdkRoot string
+	if o.BadTC != nil {
+		sdkRoot = o.BadTC.SDKRoot
+	}
+	sha, subj, bErr := bisectCommit(commitCtx, commitBisectOpts{
+		LLVMSrcDir: o.LLVMSrcDir, GoodSHA: o.GoodSHA, BadSHA: o.BadSHA,
+		WorkDir: filepath.Join(absWork, "commit-bisect"), Spec: o.Spec, Jobs: o.Jobs,
+		SDKRoot: sdkRoot, buildClang: buildFn, testClang: testFn,
+	})
+	if bErr != nil {
+		if ctx.Err() != nil {
+			return "", "", "", "", ctx.Err()
+		}
+		return "", "", culpritTU, bErr.Error(), nil
+	}
+	return sha, sanitizeText(subj), culpritTU, "", nil
+}
+
+func expandFailedCompileRec(rec compileRec) []compileRec {
+	if len(rec.Sources) <= 1 {
+		if rec.Source == "" && len(rec.Sources) == 1 {
+			rec.Source = rec.Sources[0]
+		}
+		return []compileRec{rec}
+	}
+	base := stripFlags(rec.FullArgs, stripSources, rec.CWD, rec.Sources...)
+	out := make([]compileRec, 0, len(rec.Sources))
+	for _, src := range rec.Sources {
+		c := rec
+		c.Source = src
+		c.Sources = []string{src}
+		c.FullArgs = append(slices.Clone(base), src)
+		out = append(out, c)
+	}
+	return out
+}
+
+func isolateBuildFailCmd(ctx context.Context, o triageOpts, badWS, goodWS *workspace, probeDir string) (culpritTU string, isLinker bool, testFn func(context.Context, string, string) (bool, string, error)) {
+	if badWS == nil || badWS.ManifestDir == "" || o.BadTC == nil || o.GoodTC == nil {
+		return "", false, nil
+	}
+	const maxProbes = 16
+	dirExists := func(d string) bool {
+		if d == "" {
+			return true
+		}
+		info, err := os.Stat(d)
+		return err == nil && info.IsDir()
+	}
+	isExitFail := func(err error) bool {
+		var exitErr *exec.ExitError
+		return errors.As(err, &exitErr)
+	}
+	makeTestFn := func(prefix, ext string, run func(tctx context.Context, bin, sha, outPath string) (string, error)) func(context.Context, string, string) (bool, string, error) {
+		return func(tctx context.Context, bin, sha string) (bool, string, error) {
+			outPath := filepath.Join(probeDir, prefix+shortSHA(sha)+ext)
+			defer os.Remove(outPath)
+			out, runErr := run(tctx, bin, sha, outPath)
+			if tctx.Err() != nil {
+				return false, out, tctx.Err()
+			}
+			if runErr == nil {
+				return true, out, nil
+			}
+			if isExitFail(runErr) {
+				return false, out, nil
+			}
+			return false, out, runErr
+		}
+	}
+
+	if compRecs, err := readCompileRecs(badWS.ManifestDir); err == nil {
+		seen := make(map[string]bool)
+		probes := 0
+		for i := len(compRecs) - 1; i >= 0 && probes < maxProbes; i-- {
+			if ctx.Err() != nil {
+				return "", false, nil
+			}
+			rec := compRecs[i]
+			if rec.ExitCode == 0 || !dirExists(rec.CWD) {
+				continue
+			}
+			cands := expandFailedCompileRec(rec)
+			for j := len(cands) - 1; j >= 0 && probes < maxProbes; j-- {
+				cand := cands[j]
+				src := resolvePath(cand.CWD, cand.Source)
+				if cand.Source == "" || !fileExists(src) {
+					continue
+				}
+				key := cand.CWD + "\x00" + src + "\x00" + cand.Output
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				probes++
+
+				badOut := filepath.Join(probeDir, fmt.Sprintf("comp_bad_%d.o", probes))
+				goodOut := filepath.Join(probeDir, fmt.Sprintf("comp_good_%d.o", probes))
+				_, bErr := runBuildFailCompile(ctx, driverFor(o.BadTC, cand.IsCXX), cand.IsCXX, o.Spec, o.BadTC.SDKRoot, cand, badOut)
+				_ = os.Remove(badOut)
+				if ctx.Err() != nil {
+					return "", false, nil
+				}
+				if !isExitFail(bErr) {
+					continue
+				}
+				_, gErr := runBuildFailCompile(ctx, driverFor(o.GoodTC, cand.IsCXX), cand.IsCXX, o.Spec, o.GoodTC.SDKRoot, cand, goodOut)
+				_ = os.Remove(goodOut)
+				if ctx.Err() != nil {
+					return "", false, nil
+				}
+				if gErr != nil {
+					continue
+				}
+				tu := formatCulpritTU(badWS.SrcDir, badWS.BuildDir, &compiledObj{SourceFile: src, BadObj: cand.Output})
+				sdkRoot := o.BadTC.SDKRoot
+				isolated := cand
+				return tu, false, makeTestFn("bisect_", ".o", func(tctx context.Context, clangBin, _, outPath string) (string, error) {
+					return runBuildFailCompile(tctx, driverForClangBin(clangBin, isolated.IsCXX), isolated.IsCXX, o.Spec, sdkRoot, isolated, outPath)
+				})
+			}
+		}
+	}
+
+	if o.BadTC.Linker == "" || o.GoodTC.Linker == "" {
+		return "", false, nil
+	}
+	if linkRecs, err := readLinkRecs(badWS.ManifestDir); err == nil {
+		goodBuild := ""
+		if goodWS != nil {
+			goodBuild = evalSymlinksExisting(goodWS.BuildDir)
+		}
+		badBuild := evalSymlinksExisting(badWS.BuildDir)
+		seen := make(map[string]bool)
+		probes := 0
+		for i := len(linkRecs) - 1; i >= 0 && probes < maxProbes; i-- {
+			if ctx.Err() != nil {
+				return "", false, nil
+			}
+			rec := linkRecs[i]
+			if rec.ExitCode == 0 || !dirExists(rec.CWD) {
+				continue
+			}
+			key := rec.CWD + "\x00" + rec.Output
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			probes++
+
+			tryModes := []bool{false}
+			if goodBuild != "" {
+				tryModes = []bool{true, false}
+			}
+			for _, mapToGood := range tryModes {
+				badBin := filepath.Join(probeDir, fmt.Sprintf("link_bad_%d_%v", probes, mapToGood))
+				goodBin := filepath.Join(probeDir, fmt.Sprintf("link_good_%d_%v", probes, mapToGood))
+				tag := fmt.Sprintf("bf_%d_%v", probes, mapToGood)
+
+				driverTC := o.GoodTC
+				if mapToGood {
+					_, bErr := runBuildFailLink(ctx, o.GoodTC, "", o.BadTC.Linker, goodBuild, badBuild, true, rec, probeDir, tag+"_b", badBin)
+					_ = os.Remove(badBin)
+					if ctx.Err() != nil {
+						return "", false, nil
+					}
+					if !isExitFail(bErr) {
+						continue
+					}
+					_, gErr := runBuildFailLink(ctx, o.GoodTC, "", o.GoodTC.Linker, goodBuild, badBuild, true, rec, probeDir, tag+"_g", goodBin)
+					_ = os.Remove(goodBin)
+					if ctx.Err() != nil {
+						return "", false, nil
+					}
+					if gErr != nil {
+						continue
+					}
+				} else {
+					_, bErr := runBuildFailLink(ctx, o.BadTC, "", o.BadTC.Linker, goodBuild, badBuild, false, rec, probeDir, tag+"_b", badBin)
+					_ = os.Remove(badBin)
+					if ctx.Err() != nil {
+						return "", false, nil
+					}
+					if !isExitFail(bErr) {
+						continue
+					}
+					_, gErr := runBuildFailLink(ctx, o.GoodTC, "", o.GoodTC.Linker, goodBuild, badBuild, false, rec, probeDir, tag+"_g", goodBin)
+					_ = os.Remove(goodBin)
+					if ctx.Err() != nil {
+						return "", false, nil
+					}
+					if gErr != nil {
+						continue
+					}
+					_, gbErr := runBuildFailLink(ctx, o.GoodTC, "", o.BadTC.Linker, goodBuild, badBuild, false, rec, probeDir, tag+"_gb", badBin)
+					_ = os.Remove(badBin)
+					if ctx.Err() != nil {
+						return "", false, nil
+					}
+					if isExitFail(gbErr) {
+						driverTC = o.GoodTC
+					} else {
+						_, bgErr := runBuildFailLink(ctx, o.BadTC, "", o.GoodTC.Linker, goodBuild, badBuild, false, rec, probeDir, tag+"_bg", badBin)
+						_ = os.Remove(badBin)
+						if ctx.Err() != nil {
+							return "", false, nil
+						}
+						if isExitFail(bgErr) {
+							isolated := rec
+							linkerPath := o.GoodTC.Linker
+							return "", false, makeTestFn("bisect_drv_", "", func(tctx context.Context, clangBin, sha, outPath string) (string, error) {
+								return runBuildFailLink(tctx, o.BadTC, driverForClangBin(clangBin, isolated.IsCXX), linkerPath, goodBuild, badBuild, false, isolated, probeDir, "drv_"+shortSHA(sha), outPath)
+							})
+						}
+						driverTC = o.BadTC
+					}
+				}
+
+				isolated := rec
+				useMap := mapToGood
+				drv := driverTC
+				return "", true, makeTestFn("bisect_ld_", "", func(tctx context.Context, lldBin, sha, outPath string) (string, error) {
+					return runBuildFailLink(tctx, drv, "", lldBin, goodBuild, badBuild, useMap, isolated, probeDir, "ld_"+shortSHA(sha), outPath)
+				})
+			}
+		}
+	}
+	return "", false, nil
 }
 
 func classifyConfidence(spec platformSpec, sanPassed, consIndep bool, diagO0 string, aliveRes formalResult) (bool, string) {
