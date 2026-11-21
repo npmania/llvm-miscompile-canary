@@ -22,7 +22,7 @@
     </table>
 
     {{- if .ErrorExcerpt}}
-    <h2>Build Error</h2>
+    <h2>{{.ErrorHeading}}</h2>
     <pre><code>{{.ErrorExcerpt}}</code></pre>
     {{- end}}
 

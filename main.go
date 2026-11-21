@@ -64,6 +64,8 @@ func runCLI(ctx context.Context, argv []string, stdout, stderr io.Writer) int {
 		err = cmdAggregate(args, stdout, stderr)
 	case "triage":
 		err = cmdTriage(ctx, args, stdout, stderr)
+	case "record-triage":
+		err = cmdRecordTriage(args, stdout, stderr)
 	case "merge-incident":
 		err = cmdMergeIncident(args, stdout, stderr)
 	case "alive-check":
@@ -103,6 +105,7 @@ subcommands:
   sweep            build and test corpus packages across profiles
   aggregate        merge sweep fragments, update state, and render site
   triage           bisect and reduce a failing package test
+  record-triage    record a triage outcome into store state
   merge-incident   merge an incident JSON file into the store
   alive-check      run alive-tv on before/after IR and update an incident
   reduce-check     internal llvm-reduce interestingness check
@@ -251,6 +254,7 @@ func cmdBuild(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	prof := fs.String("prof", profDistroO2, "optimization profile")
 	tcBin := fs.String("tc", "", "LLVM toolchain bin dir")
 	aux := fs.String("aux", "", "comma-separated extra LLVM tool dirs")
+	sdkRoot := fs.String("sdkroot", "", "explicit Darwin SDK root")
 	dir := fs.String("dir", "", "build workspace dir")
 	cache := fs.String("cache", ".cache", "tarball cache dir")
 	saveLTO := fs.Bool("save-lto", false, "preserve ThinLTO temps")
@@ -264,7 +268,7 @@ func cmdBuild(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	if !validProfile(*prof) {
 		return fmt.Errorf("invalid -prof %q", *prof)
 	}
-	tc, err := resolveToolchain(*plat, *tcBin, *aux, "", "", "")
+	tc, err := resolveToolchain(*plat, *tcBin, *aux, "", "", *sdkRoot)
 	if err != nil {
 		return err
 	}
@@ -303,6 +307,7 @@ func cmdTest(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	prof := fs.String("prof", profDistroO2, "optimization profile")
 	tcBin := fs.String("tc", "", "LLVM toolchain bin dir")
 	aux := fs.String("aux", "", "comma-separated extra LLVM tool dirs")
+	sdkRoot := fs.String("sdkroot", "", "explicit Darwin SDK root")
 	dir := fs.String("dir", "", "workspace dir from build")
 	testID := fs.String("test", "", "single test ID")
 	smoke := fs.Bool("smoke", false, "run smoke_test only")
@@ -316,7 +321,7 @@ func cmdTest(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	if !validProfile(*prof) {
 		return fmt.Errorf("invalid -prof %q", *prof)
 	}
-	tc, err := resolveToolchain(*plat, *tcBin, *aux, "", "", "")
+	tc, err := resolveToolchain(*plat, *tcBin, *aux, "", "", *sdkRoot)
 	if err != nil {
 		return err
 	}
@@ -362,6 +367,7 @@ func cmdSweep(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	profCSV := fs.String("prof", profDistroO2+","+profReleaseLTO, "comma-separated profiles")
 	tcBin := fs.String("tc", "", "LLVM toolchain bin dir")
 	aux := fs.String("aux", "", "comma-separated extra LLVM tool dirs")
+	sdkRoot := fs.String("sdkroot", "", "explicit Darwin SDK root")
 	sha := fs.String("sha", "", "LLVM commit SHA")
 	dir := fs.String("dir", filepath.Join("work", "sweep"), "sweep work dir")
 	cache := fs.String("cache", ".cache", "tarball cache dir")
@@ -377,7 +383,7 @@ func cmdSweep(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	if err != nil {
 		return err
 	}
-	tc, err := resolveToolchain(*plat, *tcBin, *aux, "", "", "")
+	tc, err := resolveToolchain(*plat, *tcBin, *aux, "", "", *sdkRoot)
 	if err != nil {
 		return err
 	}
@@ -628,7 +634,11 @@ func cmdAggregate(args []string, stdout, stderr io.Writer) error {
 	}
 	isCovered := func(pkg, plat, prof, curGood string) bool {
 		k := targetKey(pkg, plat, prof)
-		return openCovered[k] || closedGoods[k][curGood]
+		if openCovered[k] || closedGoods[k][curGood] {
+			return true
+		}
+		tr, ok := st.LastTriage[k]
+		return ok && (tr.Outcome == "not_regression" || tr.Outcome == "upstream_ub") && tr.GoodSHA == curGood
 	}
 
 	bestRegByPkg := make(map[string]regCandidate)
@@ -789,6 +799,7 @@ func cmdTriage(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	goodTCBin := fs.String("good-tc", "", "last-known-good LLVM bin dir")
 	badTCBin := fs.String("bad-tc", "", "failing LLVM bin dir")
 	aux := fs.String("aux", "", "comma-separated extra LLVM tool dirs")
+	sdkRoot := fs.String("sdkroot", "", "explicit Darwin SDK root")
 	aliveTV := fs.String("alive-tv", "", "explicit alive-tv binary")
 	goodSHA := fs.String("good", "good", "good LLVM SHA")
 	badSHA := fs.String("bad", "bad", "bad LLVM SHA")
@@ -799,6 +810,7 @@ func cmdTriage(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	bundleURL := fs.String("bundle-url", "", "optional bundle URL")
 	storeDir := fs.String("store", "", "optional store dir")
 	outPath := fs.String("out", "", "optional incident JSON output path")
+	statusOut := fs.String("status-out", "", "optional triage status JSON output path")
 	timeout := fs.Duration("timeout", 0, "overall triage timeout (0 = unlimited)")
 	commitTimeout := fs.Duration("commit-timeout", defaultCommitTimeout, "commit bisection timeout")
 	jobs := fs.Int("jobs", 0, "parallel jobs")
@@ -811,18 +823,27 @@ func cmdTriage(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if !validProfile(*prof) {
 		return fmt.Errorf("invalid -prof %q", *prof)
 	}
-	goodTC, err := resolveToolchain(*plat, *goodTCBin, *aux, "", "", "")
-	if err != nil {
-		return fmt.Errorf("good toolchain: %w", err)
-	}
-	badTC, err := resolveToolchain(*plat, *badTCBin, *aux, "", *aliveTV, "")
-	if err != nil {
-		return fmt.Errorf("bad toolchain: %w", err)
-	}
-	rec, err := loadRecipe(filepath.Join(*corpusDir, *pkg))
-	if err != nil {
+	target := targetKey(strings.TrimSpace(*pkg), strings.TrimSpace(*plat), *prof)
+	failWithStatus := func(err error) error {
+		if *statusOut != "" && strings.TrimSpace(*pkg) != "" {
+			_ = writeTriageStatus(*statusOut, target, *goodSHA, *badSHA, "triage_error", tailText(err.Error(), 800))
+		}
 		return err
 	}
+	goodTC, err := resolveToolchain(*plat, *goodTCBin, *aux, "", "", *sdkRoot)
+	if err != nil {
+		return failWithStatus(fmt.Errorf("good toolchain: %w", err))
+	}
+	badTC, err := resolveToolchain(*plat, *badTCBin, *aux, "", *aliveTV, *sdkRoot)
+	if err != nil {
+		return failWithStatus(fmt.Errorf("bad toolchain: %w", err))
+	}
+	target = targetKey(strings.TrimSpace(*pkg), badTC.Spec.ID, *prof)
+	rec, err := loadRecipe(filepath.Join(*corpusDir, *pkg))
+	if err != nil {
+		return failWithStatus(err)
+	}
+	target = targetKey(rec.Name, badTC.Spec.ID, *prof)
 	if *timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, *timeout)
@@ -836,11 +857,16 @@ func cmdTriage(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		CommitTimeout: *commitTimeout, Jobs: *jobs,
 	})
 	if err != nil {
-		return err
+		return failWithStatus(err)
 	}
 	if res.Dropped {
+		if *statusOut != "" {
+			if err := writeTriageStatus(*statusOut, target, *goodSHA, *badSHA, cmp.Or(res.DropReason, "dropped"), res.Detail); err != nil {
+				return err
+			}
+		}
 		if res.BuildFailed {
-			fmt.Fprintf(stdout, "[triage] dropped %s (%s/%s): build_fail (ice=%v)\n", rec.Name, badTC.Spec.ID, *prof, res.IsICE)
+			fmt.Fprintf(stdout, "[triage] dropped %s (%s/%s): build_fail (%s, ice=%v)\n", rec.Name, badTC.Spec.ID, *prof, cmp.Or(res.DropReason, "dropped"), res.IsICE)
 		} else {
 			fmt.Fprintf(stdout, "[triage] dropped %s (%s/%s): %s\n", rec.Name, badTC.Spec.ID, *prof, res.DropReason)
 		}
@@ -853,16 +879,70 @@ func cmdTriage(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	inc := res.Incident
 	if *storeDir != "" {
 		if inc, err = mergeIncident(*storeDir, inc); err != nil {
-			return err
+			return failWithStatus(err)
 		}
 	}
 	if *outPath != "" {
 		if err := writeJSONAtomic(*outPath, inc); err != nil {
+			return failWithStatus(err)
+		}
+	}
+	if *statusOut != "" {
+		outcome := pick(inc.isBuildFail(), "build_fail", "incident")
+		if err := writeTriageStatus(*statusOut, target, *goodSHA, *badSHA, outcome, cmp.Or(inc.ID, res.CommitBisectErr)); err != nil {
 			return err
 		}
 	}
 	fmt.Fprintf(stdout, "[triage] incident=%s confidence=%s tu=%s pass=%s func=%s culprit_sha=%s bundle=%s\n",
 		inc.ID, inc.Confidence, inc.CulpritTU, inc.CulpritPass, inc.CulpritFunc, inc.CulpritSHA, res.BundlePath)
+	return nil
+}
+
+func writeTriageStatus(path, target, goodSHA, badSHA, outcome, detail string) error {
+	return writeJSONAtomic(path, triageRecord{
+		Target:    target,
+		GoodSHA:   goodSHA,
+		BadSHA:    badSHA,
+		Outcome:   outcome,
+		Detail:    detail,
+		UpdatedAt: time.Now().UTC(),
+	})
+}
+
+func cmdRecordTriage(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("record-triage", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	storeDir := fs.String("store", "", "store dir")
+	statusPath := fs.String("status", "", "triage status JSON path")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*storeDir) == "" || strings.TrimSpace(*statusPath) == "" {
+		return errors.New("-store and -status are required")
+	}
+	var rec triageRecord
+	if err := readJSON(*statusPath, &rec); err != nil {
+		return err
+	}
+	if strings.TrimSpace(rec.Target) == "" || strings.TrimSpace(rec.Outcome) == "" {
+		return errors.New("triage status missing target or outcome")
+	}
+	if rec.UpdatedAt.IsZero() {
+		rec.UpdatedAt = time.Now().UTC()
+	}
+	st, err := loadState(*storeDir)
+	if err != nil {
+		return err
+	}
+	if st.LastTriage == nil {
+		st.LastTriage = make(map[string]triageRecord)
+	}
+	st.LastTriage[rec.Target] = rec
+	st.UpdatedAt = time.Now().UTC()
+	if err := saveState(*storeDir, st); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "recorded triage %s -> %s\n", rec.Target, rec.Outcome)
 	return nil
 }
 

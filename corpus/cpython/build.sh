@@ -44,3 +44,9 @@ fi
 
 "$SRC_DIR/configure" "$@"
 make -C "$BUILD_DIR" -j "$JOBS"
+for f in "$BUILD_DIR"/Modules/*_failed*.so; do
+  [ -e "$f" ] || continue
+  b=${f##*/}
+  mv "$f" "$BUILD_DIR/Modules/${b%%_failed*}${b#*_failed}"
+done
+make -C "$BUILD_DIR" sharedmods

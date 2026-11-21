@@ -80,6 +80,7 @@ type incident struct {
 	CulpritPass                 string     `json:"culprit_pass,omitempty"`
 	CulpritPassIndex            int        `json:"culprit_pass_index,omitempty"`
 	IsCodeGenPass               bool       `json:"is_codegen_pass,omitempty"`
+	IsLinkerBug                 bool       `json:"is_linker_bug,omitempty"`
 	CulpritFunc                 string     `json:"culprit_func,omitempty"`
 	DiagO0Status                string     `json:"diag_o0_status,omitempty"`
 	ASanUBSanClean              bool       `json:"asan_ubsan_clean"`
@@ -89,6 +90,7 @@ type incident struct {
 	LLUBIStatus                 string     `json:"llubi_status,omitempty"`
 	LLUBIOutput                 string     `json:"llubi_output,omitempty"`
 	ReducedIR                   string     `json:"reduced_ir,omitempty"`
+	HasReducedIR                bool       `json:"has_reduced_ir,omitempty"`
 	StandaloneReproCmd          string     `json:"standalone_repro_cmd,omitempty"`
 	PassDiff                    string     `json:"pass_diff,omitempty"`
 	ErrorExcerpt                string     `json:"error_excerpt,omitempty"`
@@ -102,15 +104,25 @@ type incident struct {
 	ResolvedAt                  *time.Time `json:"resolved_at,omitempty"`
 }
 
+type triageRecord struct {
+	Target    string    `json:"target"`
+	GoodSHA   string    `json:"good_sha,omitempty"`
+	BadSHA    string    `json:"bad_sha,omitempty"`
+	Outcome   string    `json:"outcome"`
+	Detail    string    `json:"detail,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 type state struct {
-	LastSweepSHA       string            `json:"last_sweep_sha,omitempty"`
-	LastSweepID        string            `json:"last_sweep_id,omitempty"`
-	LastSweepAt        *time.Time        `json:"last_sweep_at,omitempty"`
-	LastGoodSHA        string            `json:"last_good_sha,omitempty"`
-	LastGoodByTarget   map[string]string `json:"last_good_by_target,omitempty"`
-	ActiveIncidentIDs  []string          `json:"active_incident_ids,omitempty"`
-	RetainedToolchains []string          `json:"retained_toolchains,omitempty"`
-	UpdatedAt          time.Time         `json:"updated_at"`
+	LastSweepSHA       string                  `json:"last_sweep_sha,omitempty"`
+	LastSweepID        string                  `json:"last_sweep_id,omitempty"`
+	LastSweepAt        *time.Time              `json:"last_sweep_at,omitempty"`
+	LastGoodSHA        string                  `json:"last_good_sha,omitempty"`
+	LastGoodByTarget   map[string]string       `json:"last_good_by_target,omitempty"`
+	LastTriage         map[string]triageRecord `json:"last_triage,omitempty"`
+	ActiveIncidentIDs  []string                `json:"active_incident_ids,omitempty"`
+	RetainedToolchains []string                `json:"retained_toolchains,omitempty"`
+	UpdatedAt          time.Time               `json:"updated_at"`
 }
 
 func targetKey(pkg, plat, prof string) string { return pkg + "|" + plat + "|" + prof }
@@ -306,8 +318,10 @@ func recordSweep(st *state, rec sweep, incidents []*incident) {
 
 	anyFail := false
 	for _, r := range rec.Results {
+		key := targetKey(r.Package, r.Platform, r.Profile)
 		if r.Status == statusPass {
-			st.LastGoodByTarget[targetKey(r.Package, r.Platform, r.Profile)] = rec.LLVMCommit
+			st.LastGoodByTarget[key] = rec.LLVMCommit
+			delete(st.LastTriage, key)
 		} else {
 			anyFail = true
 		}
@@ -505,10 +519,16 @@ func mergeIncident(dir string, inc *incident) (*incident, error) {
 		} else if !ex.IsCodeGenPass && inc.IsCodeGenPass && ex.CulpritPass == inc.CulpritPass {
 			ex.IsCodeGenPass = true
 		}
+		if inc.IsLinkerBug {
+			ex.IsLinkerBug = true
+		}
 		setIfEmpty(&ex.CulpritFunc, inc.CulpritFunc)
 		setIfEmpty(&ex.CulpritTU, inc.CulpritTU)
 		if inlineReducedIR(ex.ReducedIR) == "" && inlineReducedIR(inc.ReducedIR) != "" {
 			ex.ReducedIR = inc.ReducedIR
+		}
+		if inc.HasReducedIR {
+			ex.HasReducedIR = true
 		}
 		setIfEmpty(&ex.PassDiff, inc.PassDiff)
 		setIfEmpty(&ex.BundleURL, inc.BundleURL)

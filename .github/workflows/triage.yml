@@ -242,6 +242,7 @@ jobs:
             extra_args+=(-test "${TEST_ID}")
           fi
 
+          set +e
           ./lmc triage \
             -corpus corpus \
             -pkg "${PKG}" \
@@ -257,9 +258,25 @@ jobs:
             -bundle out/dist \
             -store out/store \
             -out out/incident.json \
+            -status-out out/status.json \
             -timeout 215m \
             -commit-timeout 90m \
-            "${extra_args[@]}"
+            "${extra_args[@]}" 2>&1 | tee out/triage.log
+          rc=${PIPESTATUS[0]}
+          set -e
+
+          if [ "${rc}" -ne 0 ] && [ ! -f out/status.json ]; then
+            jq -nc \
+              --arg target "${PKG}|${PLAT}|${PROF}" \
+              --arg good "${GOOD_SHA}" \
+              --arg bad "${BAD_SHA}" \
+              --arg detail "$(tail -c 800 out/triage.log 2>/dev/null || true)" \
+              '{target: $target, good_sha: $good, bad_sha: $bad, outcome: "error", detail: $detail}' > out/status.json
+          fi
+
+          if [ "${rc}" -ne 0 ]; then
+            exit "${rc}"
+          fi
 
           alive_status=""
           if [ -f out/incident.json ]; then
@@ -293,7 +310,7 @@ jobs:
   alive2-verify:
     name: alive-tv
     needs: [prepare, triage]
-    if: always() && needs.prepare.outputs.has_entries == 'true'
+    if: always() && !cancelled() && needs.prepare.outputs.has_entries == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -387,11 +404,13 @@ jobs:
             after="${dir}/ir/after.ll"
             [ -f "${inc}" ] && [ -f "${before}" ] && [ -f "${after}" ] || continue
 
-            ./lmc alive-check \
+            if ! ./lmc alive-check \
               -alive-tv /tmp/alive2/bin/alive-tv \
               -before "${before}" \
               -after "${after}" \
-              -inc "${inc}"
+              -inc "${inc}"; then
+              echo "::warning::alive-check failed for ${dir}"
+            fi
           done
 
       - name: Upload verified triage bundle
@@ -406,7 +425,7 @@ jobs:
   publish:
     name: Upload Reproducers, Update Dashboard & Sync GitHub Issues
     needs: [prepare, triage, alive2-verify]
-    if: always() && needs.prepare.outputs.has_entries == 'true'
+    if: always() && !cancelled() && needs.prepare.outputs.has_entries == 'true'
     runs-on: ubuntu-24.04
     concurrency:
       group: data-gh-pages-write
@@ -439,14 +458,14 @@ jobs:
         id: check_verified
         run: |
           mkdir -p verified
-          if [ -n "$(find verified -name 'incident.json' -print -quit)" ]; then
-            echo "has_incidents=true" >> "$GITHUB_OUTPUT"
+          if [ -n "$(find verified \( -name 'incident.json' -o -name 'status.json' \) -print -quit)" ]; then
+            echo "has_artifacts=true" >> "$GITHUB_OUTPUT"
           else
-            echo "has_incidents=false" >> "$GITHUB_OUTPUT"
+            echo "has_artifacts=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Fallback download raw triage artifacts
-        if: steps.check_verified.outputs.has_incidents != 'true'
+        if: steps.check_verified.outputs.has_artifacts != 'true'
         continue-on-error: true
         uses: actions/download-artifact@v8
         with:
@@ -461,12 +480,17 @@ jobs:
           mkdir -p _data/incidents _data/sweeps
           ./scripts/sync-branch.sh checkout gh-pages _site
 
-      - name: Upload reproducer-<id>.tar.zst bundles & merge incidents
+      - name: Record triage outcomes, upload bundles & merge incidents
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           mkdir -p verified
+          for stf in verified/triage-*/status.json; do
+            [ -f "${stf}" ] || continue
+            ./lmc record-triage -store _data -status "${stf}"
+          done
+
           if [ -z "$(find verified -name 'incident.json' -print -quit)" ]; then
             exit 0
           fi

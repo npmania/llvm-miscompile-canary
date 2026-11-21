@@ -132,7 +132,12 @@ type objectBisectOpts struct {
 type objectBisectResult struct {
 	Culprit       *compiledObj
 	UsedNativeLTO bool
+	IsLinkerBug   bool
+	LinkerName    string
+	TargetLink    *linkRec
+	decomp        *linkDecomp
 	relinkSingle  func(context.Context, string) (bool, string, error)
+	relinkLinker  func(context.Context, string) (bool, string, error)
 	buildRelink   func(string) (reduceRelink, error)
 }
 
@@ -156,9 +161,14 @@ func bisectObjects(ctx context.Context, o objectBisectOpts) (*objectBisectResult
 
 	var links []linkRec
 	linkOrder := make(map[string]int)
+	skippedMissing := 0
 	for _, bl := range badLinks {
 		rel, ok := relWithinDir(badBuild, bl.Output)
-		if !ok || !fileExists(bl.Output) {
+		if !ok {
+			continue
+		}
+		if !fileExists(bl.Output) {
+			skippedMissing++
 			continue
 		}
 		if idx, seen := linkOrder[rel]; seen {
@@ -169,6 +179,9 @@ func bisectObjects(ctx context.Context, o objectBisectOpts) (*objectBisectResult
 		}
 	}
 	if len(links) == 0 {
+		if skippedMissing > 0 {
+			return nil, fmt.Errorf("no link records found in wrapper manifests (%d manifest outputs missing on disk)", skippedMissing)
+		}
 		return nil, errors.New("no link records found in wrapper manifests")
 	}
 
@@ -217,6 +230,9 @@ func bisectObjects(ctx context.Context, o objectBisectOpts) (*objectBisectResult
 		if !allGood {
 			for _, li := range relinkable {
 				_ = setLink(li, true)
+			}
+			if skippedMissing > 0 {
+				return nil, fmt.Errorf("relinking %d/%d binaries with good toolchain still failed test (%d manifest outputs missing on disk)", len(relinkable), len(links), skippedMissing)
 			}
 			return nil, fmt.Errorf("relinking %d/%d binaries with good toolchain still failed test", len(relinkable), len(links))
 		}
@@ -282,11 +298,17 @@ func bisectObjects(ctx context.Context, o objectBisectOpts) (*objectBisectResult
 		}
 		return runTest()
 	}
-	goodPass, err := testPick(func(i int) string { return d.units[i].GoodObj })
+	pickGood := func(i int) string { return d.units[i].GoodObj }
+	goodPass, err := testPick(pickGood)
 	if err != nil {
 		return nil, fmt.Errorf("relink %s with all good objects: %w", targetLink.Output, err)
 	}
 	if !goodPass {
+		if res, ok, lErr := detectLinkerBug(ctx, o, d, targetLink, runTest, pickGood); lErr != nil {
+			return nil, lErr
+		} else if ok {
+			return res, nil
+		}
 		if o.Profile == profReleaseLTO {
 			if res, ok := tryThinLTONativeBisect(ctx, o, goodBuild, badBuild, targetLink, badComp); ok {
 				return res, nil
@@ -346,6 +368,43 @@ func bisectObjects(ctx context.Context, o objectBisectOpts) (*objectBisectResult
 	return finish(cIdx, pIdx), nil
 }
 
+func detectLinkerBug(ctx context.Context, o objectBisectOpts, d *linkDecomp, targetLink linkRec, runTest func() (bool, error), pickGood func(int) string) (*objectBisectResult, bool, error) {
+	if o.GoodTC.Linker == "" || o.BadTC.Linker == "" {
+		return nil, false, nil
+	}
+	if err := d.relinkWith(ctx, o.GoodTC, o.GoodTC.Linker, pickGood); err != nil {
+		return nil, false, nil
+	}
+	goodLDPass, err := runTest()
+	if err != nil || !goodLDPass {
+		return nil, false, err
+	}
+	if err := d.relinkWith(ctx, o.GoodTC, o.BadTC.Linker, pickGood); err != nil {
+		return nil, false, nil
+	}
+	badLDPass, err := runTest()
+	if err != nil || badLDPass {
+		return nil, false, err
+	}
+	linkerName := filepath.Base(o.BadTC.Linker)
+	if o.Profile == profReleaseLTO {
+		linkerName += " (ThinLTO)"
+	}
+	tlCopy := targetLink
+	return &objectBisectResult{
+		IsLinkerBug: true,
+		LinkerName:  linkerName,
+		TargetLink:  &tlCopy,
+		decomp:      d,
+		relinkLinker: func(rctx context.Context, lldBin string) (bool, string, error) {
+			if err := d.relinkWith(rctx, o.GoodTC, lldBin, pickGood); err != nil {
+				return false, "", err
+			}
+			return o.Test(rctx)
+		},
+	}, true, nil
+}
+
 func relinkMapped(ctx context.Context, tc *toolchain, goodBuild, badBuild string, rec linkRec, scratchDir, tag string) error {
 	mapInput := func(canon string) (string, bool) {
 		rel, ok := relWithinDir(badBuild, canon)
@@ -368,10 +427,28 @@ func relinkMapped(ctx context.Context, tc *toolchain, goodBuild, badBuild string
 	if err != nil {
 		return fmt.Errorf("rewrite link args for %s: %w", rec.Output, err)
 	}
-	if out, err := runToolInDir(ctx, driverFor(tc, rec.IsCXX), args, rec.CWD); err != nil {
+	extraEnv, args := applySDKRoot(tc, args)
+	if out, err := runToolInDirEnv(ctx, driverFor(tc, rec.IsCXX), args, rec.CWD, extraEnv); err != nil {
 		return fmt.Errorf("relink %s: %w\n%s", rec.Output, err, out)
 	}
 	return nil
+}
+
+func applySDKRoot(tc *toolchain, args []string) ([]string, []string) {
+	if tc == nil || tc.SDKRoot == "" {
+		return nil, args
+	}
+	extraEnv := []string{"SDKROOT=" + tc.SDKRoot}
+	if tc.Spec.IsDarwin && !hasSysrootFlag(args) {
+		args = append(args, "-isysroot", tc.SDKRoot)
+	}
+	return extraEnv, args
+}
+
+func hasSysrootFlag(args []string) bool {
+	return slices.ContainsFunc(args, func(a string) bool {
+		return a == "-isysroot" || a == "--sysroot" || strings.HasPrefix(a, "-isysroot=") || strings.HasPrefix(a, "--sysroot=")
+	})
 }
 
 func splitDirectCompileLink(ctx context.Context, o objectBisectOpts, goodBuild, badBuild string, rec linkRec, badComp []compileRec) (linkRec, []compileRec, bool, error) {
@@ -434,6 +511,7 @@ func splitDirectCompileLink(ctx context.Context, o objectBisectOpts, goodBuild, 
 
 type archiveGroup struct {
 	badPath   string
+	goodPath  string
 	memberIdx []int
 }
 
@@ -498,7 +576,7 @@ func expandLinkUnits(o objectBisectOpts, goodBuild, badBuild string, rec linkRec
 			continue
 		}
 		pair := pairArchiveMembers(gMem, bMem)
-		grp := archiveGroup{badPath: badAr, memberIdx: make([]int, len(bMem))}
+		grp := archiveGroup{badPath: badAr, goodPath: goodAr, memberIdx: make([]int, len(bMem))}
 		for m := range bMem {
 			cr := byHash[bMem[m].sha256]
 			if cr.Output == "" {
@@ -581,9 +659,9 @@ func (d *linkDecomp) pick(cIdx, pIdx int, cand string) func(int) string {
 	}
 }
 
-func (d *linkDecomp) buildArgs(pick func(int) string, builtAr map[string]string, tag string) ([]string, error) {
+func (d *linkDecomp) buildArgs(pick func(int) string, builtAr map[string]string, linkerPath, tag string) ([]string, error) {
 	return rewriteLinkArgs(d.targetLink.FullArgs, linkRewriteOpts{
-		cwd: d.targetLink.CWD, scratchDir: d.scratchDir, tag: tag,
+		cwd: d.targetLink.CWD, scratchDir: d.scratchDir, tag: tag, newLinker: linkerPath,
 		mapObj: func(canon string) (string, bool) {
 			if uIdx, ok := d.directIdx[canon]; ok {
 				return pick(uIdx), true
@@ -599,8 +677,13 @@ func (d *linkDecomp) buildArgs(pick func(int) string, builtAr map[string]string,
 	})
 }
 
-func (d *linkDecomp) relink(ctx context.Context, pick func(int) string) error {
+func (d *linkDecomp) relinkWith(ctx context.Context, driverTC *toolchain, linkerPath string, pick func(int) string) error {
+	if driverTC == nil {
+		driverTC = d.badTC
+	}
 	d.counter++
+	arTool := firstNonEmpty(driverTC.Ar, d.arTool)
+	ranlib := firstNonEmpty(driverTC.Ranlib, d.ranlib)
 	builtAr := make(map[string]string, len(d.archives))
 	for i, g := range d.archives {
 		members := make([]string, len(g.memberIdx))
@@ -608,20 +691,25 @@ func (d *linkDecomp) relink(ctx context.Context, pick func(int) string) error {
 			members[m] = pick(uIdx)
 		}
 		outAr := filepath.Join(d.mixedDir, fmt.Sprintf("mix_%d_%d_%s", d.counter, i, filepath.Base(g.badPath)))
-		if err := createStaticArchive(ctx, d.arTool, d.ranlib, outAr, members); err != nil {
+		if err := createStaticArchive(ctx, arTool, ranlib, outAr, members); err != nil {
 			return err
 		}
 		builtAr[g.badPath] = outAr
 		defer os.Remove(outAr)
 	}
-	args, err := d.buildArgs(pick, builtAr, strconv.Itoa(d.counter))
+	args, err := d.buildArgs(pick, builtAr, linkerPath, strconv.Itoa(d.counter))
 	if err != nil {
 		return err
 	}
-	if out, err := runToolInDir(ctx, driverFor(d.badTC, d.targetLink.IsCXX), args, d.targetLink.CWD); err != nil {
+	extraEnv, args := applySDKRoot(driverTC, args)
+	if out, err := runToolInDirEnv(ctx, driverFor(driverTC, d.targetLink.IsCXX), args, d.targetLink.CWD, extraEnv); err != nil {
 		return fmt.Errorf("relink %s: %w\n%s", d.targetLink.Output, err, out)
 	}
 	return nil
+}
+
+func (d *linkDecomp) relink(ctx context.Context, pick func(int) string) error {
+	return d.relinkWith(ctx, d.badTC, "", pick)
 }
 
 func (d *linkDecomp) makeSingle(testFn func(context.Context) (bool, string, error), cIdx, pIdx int) func(context.Context, string) (bool, string, error) {
@@ -657,7 +745,7 @@ func (d *linkDecomp) freezeRelink(ctx context.Context, cIdx, pIdx int, candObj s
 		}
 	}
 	var err error
-	if rr.LinkArgs, err = d.buildArgs(pick, builtAr, "reduce"); err != nil {
+	if rr.LinkArgs, err = d.buildArgs(pick, builtAr, "", "reduce"); err != nil {
 		return reduceRelink{}, err
 	}
 	return rr, nil
@@ -1658,7 +1746,7 @@ type passBisectResult struct {
 
 func isInterproceduralPass(passName, target string) bool {
 	t := strings.TrimSpace(target)
-	if strings.HasPrefix(t, "(") && strings.HasSuffix(t, ")") {
+	if t == "[module]" || (strings.HasPrefix(t, "(") && strings.HasSuffix(t, ")")) {
 		return true
 	}
 	switch strings.ToLower(strings.TrimSpace(passName)) {
@@ -1668,7 +1756,8 @@ func isInterproceduralPass(passName, target string) bool {
 		"globaloptpass", "globaldcepass", "attributorpass", "attributorcgsccpass",
 		"functionspecializationpass", "mergefunctionspass",
 		"inline", "always-inline", "function-attrs", "argpromotion", "deadargelim",
-		"ipsccp", "globalopt", "globaldce", "attributor":
+		"ipsccp", "globalopt", "globaldce", "attributor",
+		"called-value-propagation", "constmerge", "openmp-opt", "rpo-function-attrs", "rel-lookup-table-converter":
 		return true
 	}
 	return false
@@ -2147,10 +2236,15 @@ func bisectLLVMTargets(spec platformSpec, hostOS, hostArch string) string {
 }
 
 func buildClangInWorktree(ctx context.Context, wtDir, buildDir string, spec platformSpec, jobs int) (string, error) {
+	return buildProjectToolInWorktree(ctx, wtDir, buildDir, spec, jobs, "clang", "clang", "clang")
+}
+
+func buildProjectToolInWorktree(ctx context.Context, wtDir, buildDir string, spec platformSpec, jobs int, project, target, binName string) (string, error) {
 	if jobs <= 0 {
 		jobs = runtime.NumCPU()
 	}
 	llvmDir := filepath.Join(wtDir, "llvm")
+	baseEnv := stripEnv(os.Environ(), "CCACHE_DISABLE", "SCCACHE_DISABLE")
 	extraEnv := []string{"CCACHE_BASEDIR=" + evalSymlinksExisting(filepath.Dir(wtDir))}
 	configure := func() error {
 		if err := os.MkdirAll(buildDir, 0o755); err != nil {
@@ -2159,10 +2253,12 @@ func buildClangInWorktree(ctx context.Context, wtDir, buildDir string, spec plat
 		args := []string{
 			"-G", "Ninja", "-S", llvmDir, "-B", buildDir,
 			"-DCMAKE_BUILD_TYPE=Release", "-DLLVM_ENABLE_ASSERTIONS=ON",
-			"-DLLVM_TARGETS_TO_BUILD=" + bisectLLVMTargets(spec, runtime.GOOS, runtime.GOARCH), "-DLLVM_ENABLE_PROJECTS=clang",
-			"-DLLVM_APPEND_VC_REV=OFF", "-DCLANG_ENABLE_CIR=OFF", "-DCLANG_ENABLE_STATIC_ANALYZER=OFF",
-			"-DLLVM_INCLUDE_TESTS=OFF", "-DLLVM_INCLUDE_BENCHMARKS=OFF", "-DLLVM_INCLUDE_EXAMPLES=OFF",
-			"-DLLVM_INCLUDE_DOCS=OFF", "-DLLVM_ENABLE_BINDINGS=OFF", "-DLLVM_PARALLEL_LINK_JOBS=2",
+			"-DLLVM_TARGETS_TO_BUILD=" + bisectLLVMTargets(spec, runtime.GOOS, runtime.GOARCH), "-DLLVM_ENABLE_PROJECTS=" + project,
+			"-DLLVM_APPEND_VC_REV=OFF", "-DLLVM_INCLUDE_TESTS=OFF", "-DLLVM_INCLUDE_BENCHMARKS=OFF",
+			"-DLLVM_INCLUDE_EXAMPLES=OFF", "-DLLVM_INCLUDE_DOCS=OFF", "-DLLVM_ENABLE_BINDINGS=OFF", "-DLLVM_PARALLEL_LINK_JOBS=2",
+		}
+		if project == "clang" {
+			args = append(args, "-DCLANG_ENABLE_CIR=OFF", "-DCLANG_ENABLE_STATIC_ANALYZER=OFF")
 		}
 		if _, err := exec.LookPath("ccache"); err == nil {
 			args = append(args,
@@ -2175,15 +2271,17 @@ func buildClangInWorktree(ctx context.Context, wtDir, buildDir string, spec plat
 				args = append(args, "-DLLVM_USE_LINKER=lld")
 			}
 		}
-		if out, err := runToolInDirEnv(ctx, "cmake", args, "", extraEnv); err != nil {
-			return fmt.Errorf("cmake configure clang: %w\n%s", err, tailText(out, 4096))
+		if out, err := runToolInDirBaseEnv(ctx, "cmake", args, "", baseEnv, extraEnv); err != nil {
+			return fmt.Errorf("cmake configure %s: %w\n%s", project, err, tailText(out, 4096))
 		}
 		return nil
 	}
 
 	needCfg := !fileExists(filepath.Join(buildDir, "build.ninja"))
 	if !needCfg {
-		if raw, err := os.ReadFile(filepath.Join(buildDir, "CMakeCache.txt")); err != nil || !strings.Contains(string(raw), llvmDir) {
+		if raw, err := os.ReadFile(filepath.Join(buildDir, "CMakeCache.txt")); err != nil ||
+			!strings.Contains(string(raw), llvmDir) ||
+			!strings.Contains(string(raw), "LLVM_ENABLE_PROJECTS:STRING="+project) {
 			needCfg = true
 		}
 	}
@@ -2193,25 +2291,27 @@ func buildClangInWorktree(ctx context.Context, wtDir, buildDir string, spec plat
 			return "", err
 		}
 	}
-	out, err := runToolInDirEnv(ctx, "ninja", []string{"-C", buildDir, "-j", strconv.Itoa(jobs), "clang"}, "", extraEnv)
+	out, err := runToolInDirBaseEnv(ctx, "ninja", []string{"-C", buildDir, "-j", strconv.Itoa(jobs), target}, "", baseEnv, extraEnv)
 	if err != nil && ctx.Err() == nil && !needCfg && isStaleNinjaError(out) {
 		_ = os.RemoveAll(buildDir)
 		if cfgErr := configure(); cfgErr != nil {
 			return "", cfgErr
 		}
-		out, err = runToolInDirEnv(ctx, "ninja", []string{"-C", buildDir, "-j", strconv.Itoa(jobs), "clang"}, "", extraEnv)
+		out, err = runToolInDirBaseEnv(ctx, "ninja", []string{"-C", buildDir, "-j", strconv.Itoa(jobs), target}, "", baseEnv, extraEnv)
 	}
 	if err != nil {
-		return "", fmt.Errorf("ninja clang: %w\n%s", err, tailText(out, 4096))
+		return "", fmt.Errorf("ninja %s: %w\n%s", target, err, tailText(out, 4096))
 	}
-	clangBin := filepath.Join(buildDir, "bin", "clang")
-	if !fileExists(clangBin) {
-		return "", fmt.Errorf("built clang missing at %s", clangBin)
+	toolBin := filepath.Join(buildDir, "bin", binName)
+	if !fileExists(toolBin) {
+		return "", fmt.Errorf("built %s missing at %s", binName, toolBin)
 	}
-	if _, err := os.Lstat(filepath.Join(buildDir, "bin", "clang++")); err != nil {
-		_ = os.Symlink("clang", filepath.Join(buildDir, "bin", "clang++"))
+	if binName == "clang" {
+		if _, err := os.Lstat(filepath.Join(buildDir, "bin", "clang++")); err != nil {
+			_ = os.Symlink("clang", filepath.Join(buildDir, "bin", "clang++"))
+		}
 	}
-	return clangBin, nil
+	return toolBin, nil
 }
 
 func isStaleNinjaError(out string) bool {
@@ -2252,9 +2352,13 @@ func runToolInDir(ctx context.Context, bin string, args []string, dir string) (s
 }
 
 func runToolInDirEnv(ctx context.Context, bin string, args []string, dir string, extraEnv []string) (string, error) {
+	return runToolInDirBaseEnv(ctx, bin, args, dir, os.Environ(), extraEnv)
+}
+
+func runToolInDirBaseEnv(ctx context.Context, bin string, args []string, dir string, baseEnv, extraEnv []string) (string, error) {
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = dir
-	cmd.Env = mergeEnv(os.Environ(), append([]string{"SOURCE_DATE_EPOCH=0"}, extraEnv...))
+	cmd.Env = mergeEnv(baseEnv, append([]string{"SOURCE_DATE_EPOCH=0"}, extraEnv...))
 	setCmdProcessGroup(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil && ctx.Err() != nil && !errors.Is(err, ctx.Err()) {

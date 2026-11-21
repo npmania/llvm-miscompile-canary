@@ -349,6 +349,7 @@ func planWrap(cfg wrapConfig, isCXX bool, cwd string, args []string) (*wrapPlan,
 	if !parsed.hasTarget {
 		injected = append(injected, crossTargetArgs(spec)...)
 	}
+	injected = appendCrossSysrootArgs(injected, spec, parsed.hasSysroot, mode == "link" || mode == "compile_link")
 	if spec.IsDarwin && cfg.SDKRoot != "" && !parsed.hasSysroot {
 		injected = append(injected, "-isysroot", cfg.SDKRoot)
 	}
@@ -543,11 +544,13 @@ func stripFlags(args []string, mask uint, cwd string, dropSources ...string) []s
 			}
 		}
 		if mask&stripHost != 0 {
-			if a == "-isysroot" {
+			if a == "-isysroot" || a == "--sysroot" || a == "-B" || a == "--gcc-toolchain" {
 				i++
 				continue
 			}
-			if strings.HasPrefix(a, "-frandom-seed=") || strings.HasPrefix(a, "-isysroot=") {
+			if strings.HasPrefix(a, "-frandom-seed=") || strings.HasPrefix(a, "-isysroot=") ||
+				strings.HasPrefix(a, "--sysroot=") || strings.HasPrefix(a, "--gcc-toolchain=") ||
+				(strings.HasPrefix(a, "-B") && a != "-Bstatic" && a != "-Bdynamic") {
 				continue
 			}
 		}

@@ -36,9 +36,9 @@ type platformSpec struct {
 
 var platformSpecs = map[string]platformSpec{
 	platLinuxX86:     {ID: platLinuxX86, OS: "linux", Arch: "amd64", LLVMTarget: "X86", BaselineFlags: []string{"-march=x86-64-v3"}},
-	platLinuxARM64:   {ID: platLinuxARM64, OS: "linux", Arch: "arm64", LLVMTarget: "AArch64", BaselineFlags: []string{"-mcpu=neoverse-v1"}},
+	platLinuxARM64:   {ID: platLinuxARM64, OS: "linux", Arch: "arm64", LLVMTarget: "AArch64", TargetTriple: "aarch64-linux-gnu", BaselineFlags: []string{"-mcpu=neoverse-v1"}},
 	platLinuxRISCV64: {ID: platLinuxRISCV64, OS: "linux", Arch: "riscv64", LLVMTarget: "RISCV", TargetTriple: "riscv64-linux-gnu", BaselineFlags: []string{"-march=rva23u64"}},
-	platDarwinARM:    {ID: platDarwinARM, OS: "darwin", Arch: "arm64", LLVMTarget: "AArch64", BaselineFlags: []string{"-mcpu=apple-m1"}, IsDarwin: true},
+	platDarwinARM:    {ID: platDarwinARM, OS: "darwin", Arch: "arm64", LLVMTarget: "AArch64", TargetTriple: "arm64-apple-darwin", BaselineFlags: []string{"-mcpu=apple-m1"}, IsDarwin: true},
 }
 
 func lookupPlatform(id string) (platformSpec, error) {

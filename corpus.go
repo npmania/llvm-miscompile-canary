@@ -586,6 +586,8 @@ func (r *runner) wireWorkspace(absWork, srcDir string, cfg runConfig) (*workspac
 		"BUILD_DIR=" + buildDir,
 		"TMPDIR=" + tmpDir,
 		"SOURCE_DATE_EPOCH=0",
+		"CCACHE_DISABLE=1",
+		"SCCACHE_DISABLE=1",
 	}
 	if cfg.TC.Ar != "" {
 		overrides = append(overrides, "AR="+cfg.TC.Ar)
@@ -659,6 +661,8 @@ func (r *runner) runCMakeBuild(ctx context.Context, cm *cmakeSpec, tc *toolchain
 		"-DCMAKE_BUILD_TYPE=Release",
 		"-DCMAKE_C_COMPILER=" + filepath.Join(ws.WrapperDir, "clang"),
 		"-DCMAKE_CXX_COMPILER=" + filepath.Join(ws.WrapperDir, "clang++"),
+		"-DCMAKE_C_COMPILER_LAUNCHER=",
+		"-DCMAKE_CXX_COMPILER_LAUNCHER=",
 		"-DFETCHCONTENT_FULLY_DISCONNECTED=ON",
 	}
 	if _, err := exec.LookPath("ninja"); err == nil {
@@ -718,7 +722,7 @@ func (r *runner) testAll(ctx context.Context, rec *recipe, ws *workspace, extraE
 		}
 	case rec.CTest != nil:
 		_ = os.Remove(filepath.Join(ws.BuildDir, "Testing", "Temporary", "LastTestsFailed.log"))
-		perTest := crossTimeout(ws.Spec, 3*time.Minute)
+		perTest := max(crossTimeout(ws.Spec, 3*time.Minute), timeout/3)
 		if headroom := timeout - 30*time.Second; headroom > 0 {
 			perTest = min(perTest, headroom)
 		} else {
@@ -765,7 +769,7 @@ func (r *runner) testOneCmd(rec *recipe, ws *workspace, testID string, extraEnv 
 
 func (r *runner) testOne(ctx context.Context, rec *recipe, ws *workspace, testID string, extraEnv []string, timeout time.Duration) runOut {
 	if timeout <= 0 {
-		timeout = crossTimeout(ws.Spec, 3*time.Minute)
+		timeout = max(crossTimeout(ws.Spec, 3*time.Minute), crossTimeout(ws.Spec, rec.timeout())/3)
 	}
 	argv, dir, env := r.testOneCmd(rec, ws, testID, extraEnv)
 	if len(argv) == 0 {

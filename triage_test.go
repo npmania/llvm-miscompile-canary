@@ -17,6 +17,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestBisectFirstFail(t *testing.T) {
@@ -441,6 +442,33 @@ exec %s "$@"
 	if err == nil {
 		t.Fatal("expected error when allGood fails on multi-binary package")
 	}
+
+	_ = os.Remove(filepath.Join(badB, "helper"))
+	_, err = bisectObjects(context.Background(), objectBisectOpts{
+		Spec: spec, Profile: profDistroO2, GoodTC: &gTC, BadTC: &bTC,
+		GoodBuildDir: goodB, BadBuildDir: badB, BadManifestDir: badM,
+		ScratchDir: filepath.Join(tmp, "scratch-missing-1"),
+		Test: func(context.Context) (bool, string, error) {
+			return false, "always fails", nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "1 manifest outputs missing on disk") {
+		t.Fatalf("expected skippedMissing count on allGood fail, got %v", err)
+	}
+
+	_ = os.Remove(filepath.Join(badB, "app1"))
+	_ = os.Remove(filepath.Join(badB, "app2"))
+	_, err = bisectObjects(context.Background(), objectBisectOpts{
+		Spec: spec, Profile: profDistroO2, GoodTC: &gTC, BadTC: &bTC,
+		GoodBuildDir: goodB, BadBuildDir: badB, BadManifestDir: badM,
+		ScratchDir: filepath.Join(tmp, "scratch-missing-all"),
+		Test: func(context.Context) (bool, string, error) {
+			return true, "ok", nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "3 manifest outputs missing on disk") {
+		t.Fatalf("expected skippedMissing count when all manifest outputs missing, got %v", err)
+	}
 }
 
 func TestCommitBisect(t *testing.T) {
@@ -813,6 +841,20 @@ func TestAliveTV(t *testing.T) {
 	}
 	if r := runAliveTV(ctx, writeMock("big-ok", "echo \"Transformation seems to be correct!\""), bigIR, aIR, 5*time.Second); r.Status != formalUnsupported || r.ProvesBug {
 		t.Fatalf("oversized IR with mock bin = %+v, want unsupported cutoff", r)
+	}
+
+	hugeOutIR := strings.Repeat("  %v = add i32 %x, 1\n", 1200)
+	longFail := "define i32 @f(i32 %x) {\n" + hugeOutIR + "  ret i32 %x\n}\nERROR: Value mismatch\nTransformation doesn't verify!\nSummary:\n  1 incorrect transformations\n"
+	clipped := clipAliveTVOutput(longFail, 4096)
+	if !strings.Contains(clipped, "; ... [omitted IR]") || !strings.Contains(clipped, "ERROR: Value mismatch") || !strings.Contains(clipped, "Transformation doesn't verify!") || len(clipped) > 4096 {
+		t.Fatalf("clipAliveTVOutput unexpected len=%d:\n%s", len(clipped), clipped)
+	}
+	rClip := parseAliveTVOutput(longFail, errors.New("exit 1"), false)
+	if rClip.Status != aliveMiscompile || !rClip.ProvesBug || !strings.Contains(rClip.Output, "ERROR: Value mismatch") || !strings.Contains(rClip.Output, "; ... [omitted IR]") {
+		t.Fatalf("parseAliveTVOutput clipped = %+v", rClip)
+	}
+	if h := headText(strings.Repeat("a", 10)+"é", 11); !utf8.ValidString(h) || !strings.HasSuffix(h, "\n...[truncated]") {
+		t.Fatalf("headText non-UTF8 or missing suffix: %q", h)
 	}
 }
 
@@ -1302,6 +1344,12 @@ func TestTriageHelpers(t *testing.T) {
 	if !isInterproceduralPass("InlinerPass", "(caller)") ||
 		!isInterproceduralPass("PostOrderFunctionAttrsPass", "(foo, bar)") ||
 		!isInterproceduralPass("GlobalOptPass", "[module]") ||
+		!isInterproceduralPass("AnyModulePass", "([module])") ||
+		!isInterproceduralPass("called-value-propagation", "foo") ||
+		!isInterproceduralPass("constmerge", "foo") ||
+		!isInterproceduralPass("openmp-opt", "foo") ||
+		!isInterproceduralPass("rpo-function-attrs", "foo") ||
+		!isInterproceduralPass("rel-lookup-table-converter", "foo") ||
 		!isInterproceduralPass("SomeCustomCGSCCPass", "(fn)") {
 		t.Fatal("expected interprocedural/CGSCC passes to be detected")
 	}
@@ -1810,6 +1858,93 @@ func TestTriageDrops(t *testing.T) {
 			t.Fatalf("expected ASanUBSanClean=false and needs-review, got %+v", res.Incident)
 		}
 	})
+
+	t.Run("bad-build-good-fails", func(t *testing.T) {
+		t.Parallel()
+		tmp := t.TempDir()
+		tarPath := filepath.Join(tmp, "clean.tar.gz")
+		rec := makeTestRecipe(t, filepath.Join(tmp, "corpus"), "bothfail", tarPath, makeTarGz(t, tarPath, cleanFiles))
+		r := &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2}
+		failPath := filepath.Join(tmp, "fail-cc")
+		_ = os.WriteFile(failPath, []byte("#!/bin/sh\necho 'error: broken both' >&2\nexit 1\n"), 0o755)
+		badTC := *goodTC
+		badTC.Clang = failPath
+		gTC := *goodTC
+		gTC.Clang = failPath
+		res, err := triage(context.Background(), triageOpts{
+			Runner: r, Recipe: rec, Spec: spec, Profile: profDistroO2, GoodTC: &gTC, BadTC: &badTC,
+			GoodSHA: "111111111111", BadSHA: "222222222222", TestID: "check_calc", WorkDir: filepath.Join(tmp, "w"),
+		})
+		if err != nil || !res.Dropped || res.DropReason != "not_regression" {
+			t.Fatalf("expected not_regression drop when good also fails build, got res=%+v err=%v", res, err)
+		}
+	})
+
+	t.Run("bad-build-good-passes-plain-and-ice", func(t *testing.T) {
+		t.Parallel()
+		tmp := t.TempDir()
+		tarPath := filepath.Join(tmp, "clean.tar.gz")
+		rec := makeTestRecipe(t, filepath.Join(tmp, "corpus"), "badbuild", tarPath, makeTarGz(t, tarPath, cleanFiles))
+		r := &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2}
+
+		plainCC := filepath.Join(tmp, "plain-fail-cc")
+		_ = os.WriteFile(plainCC, []byte("#!/bin/sh\necho 'culprit.c:1:2: error: syntax broken' >&2\nexit 1\n"), 0o755)
+		plainTC := *goodTC
+		plainTC.Clang = plainCC
+		resPlain, err := triage(context.Background(), triageOpts{
+			Runner: r, Recipe: rec, Spec: spec, Profile: profDistroO2, GoodTC: goodTC, BadTC: &plainTC,
+			GoodSHA: "111111111111", BadSHA: "222222222222", TestID: "check_calc", WorkDir: filepath.Join(tmp, "w-plain"),
+		})
+		if err != nil || resPlain.Dropped || !resPlain.BuildFailed || resPlain.IsICE || resPlain.Incident == nil || resPlain.Incident.Kind != incidentKindBuildFail || !strings.Contains(resPlain.Incident.ErrorExcerpt, "syntax broken") {
+			t.Fatalf("unexpected plain build-fail result: res=%+v err=%v", resPlain, err)
+		}
+
+		iceCC := filepath.Join(tmp, "ice-fail-cc")
+		_ = os.WriteFile(iceCC, []byte("#!/bin/sh\necho 'PLEASE submit a bug report to https://github.com/llvm/llvm-project/issues/' >&2\nexit 1\n"), 0o755)
+		iceTC := *goodTC
+		iceTC.Clang = iceCC
+		resICE, err := triage(context.Background(), triageOpts{
+			Runner: r, Recipe: rec, Spec: spec, Profile: profDistroO2, GoodTC: goodTC, BadTC: &iceTC,
+			GoodSHA: "111111111111", BadSHA: "222222222222", TestID: "check_calc", WorkDir: filepath.Join(tmp, "w-ice"),
+		})
+		if err != nil || resICE.Dropped || !resICE.BuildFailed || !resICE.IsICE || resICE.Incident == nil || !strings.Contains(resICE.Incident.Title, "ICE") {
+			t.Fatalf("unexpected ICE build-fail result: res=%+v err=%v", resICE, err)
+		}
+	})
+
+	t.Run("conservative-skipped-on-diag-o0-fail", func(t *testing.T) {
+		t.Parallel()
+		tmp := t.TempDir()
+		tarPath := filepath.Join(tmp, "clean.tar.gz")
+		rec := makeTestRecipe(t, filepath.Join(tmp, "corpus"), "skipcons", tarPath, makeTarGz(t, tarPath, cleanFiles))
+		r := &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2}
+
+		invLog := filepath.Join(tmp, "inv.log")
+		badPath := filepath.Join(tmp, "bad-all-opt")
+		badBody := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$*\" >> %s\nexec %s -DBAD_MISCOMPILE=1 \"$@\"\n",
+			shQuote(invLog), shQuote(goodTC.Clang))
+		if err := os.WriteFile(badPath, []byte(badBody), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		badTC := *goodTC
+		badTC.Clang = badPath
+		badTC.AliveTV, badTC.LLUBI, badTC.LLVMReduce = "", "", ""
+
+		res, err := triage(context.Background(), triageOpts{
+			Runner: r, Recipe: rec, Spec: spec, Profile: profDistroO2, GoodTC: goodTC, BadTC: &badTC,
+			GoodSHA: "111111111111", BadSHA: "222222222222", TestID: "check_calc", WorkDir: filepath.Join(tmp, "w"),
+		})
+		if err != nil || res.Dropped || res.Incident == nil {
+			t.Fatalf("unexpected result: res=%+v err=%v", res, err)
+		}
+		if res.Incident.DiagO0Status != "test_fail" || res.Incident.ConservativeFlagIndependent {
+			t.Fatalf("expected DiagO0Status=test_fail and ConservativeFlagIndependent=false: %+v", res.Incident)
+		}
+		logRaw, _ := os.ReadFile(invLog)
+		if strings.Contains(string(logRaw), "-ftrivial-auto-var-init=zero") {
+			t.Fatalf("expected conservative build to be skipped when diag-O0 failed, log=\n%s", string(logRaw))
+		}
+	})
 }
 
 func TestTriagePipeline(t *testing.T) {
@@ -2159,4 +2294,323 @@ func TestTriageContextCancel(t *testing.T) {
 			t.Fatalf("good-test cancel: res=%+v err=%v, want context.Canceled", res, err)
 		}
 	})
+}
+
+func writeBadLinkerScript(t *testing.T, path, realLinker string) {
+	t.Helper()
+	body := fmt.Sprintf(`#!/bin/sh
+set -eu
+out=""; prev=""
+for a in "$@"; do
+  if [ "$prev" = "-o" ]; then out="$a"; fi
+  prev="$a"
+done
+%s "$@"
+case "$out" in
+  *diag-o0*) ;;
+  *)
+    if [ -n "$out" ] && [ -x "$out" ]; then
+      printf '#!/bin/sh\nexit 1\n' > "$out"
+      chmod 0755 "$out"
+    fi
+    ;;
+esac
+`, shQuote(realLinker))
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLinkerBugIsolationAndCommitBisect(t *testing.T) {
+	t.Parallel()
+	spec, goodTC := hostToolchainOrSkip(t)
+	tmp := t.TempDir()
+	srcDir := filepath.Join(tmp, "src")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSixTUs(t, srcDir)
+
+	goodLinker := filepath.Join(tmp, "good-ld")
+	badLinker := filepath.Join(tmp, "bad-ld")
+	_ = os.WriteFile(goodLinker, []byte(fmt.Sprintf("#!/bin/sh\nexec %s \"$@\"\n", shQuote(goodTC.Linker))), 0o755)
+	writeBadLinkerScript(t, badLinker, goodTC.Linker)
+
+	gTC := *goodTC
+	gTC.Linker = goodLinker
+	bTC := *goodTC
+	bTC.Linker = badLinker
+
+	goodB, _, _ := buildMultiTU(t, spec, profDistroO2, &gTC, srcDir, filepath.Join(tmp, "good-ws"), false)
+	badB, badM, appBin := buildMultiTU(t, spec, profDistroO2, &bTC, srcDir, filepath.Join(tmp, "bad-ws"), false)
+
+	objRes, err := bisectObjects(context.Background(), objectBisectOpts{
+		Spec: spec, Profile: profDistroO2, GoodTC: &gTC, BadTC: &bTC,
+		GoodBuildDir: goodB, BadBuildDir: badB, BadManifestDir: badM,
+		ScratchDir: filepath.Join(tmp, "obj-scratch"),
+		Test: func(ctx context.Context) (bool, string, error) {
+			out, err := exec.CommandContext(ctx, appBin).CombinedOutput()
+			return err == nil, string(out), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("bisectObjects linker bug: %v", err)
+	}
+	if !objRes.IsLinkerBug || objRes.Culprit != nil || objRes.relinkLinker == nil || objRes.TargetLink == nil || objRes.decomp == nil {
+		t.Fatalf("expected IsLinkerBug isolation without Culprit, got %+v", objRes)
+	}
+	if want := filepath.Base(badLinker); objRes.LinkerName != want {
+		t.Fatalf("LinkerName = %q, want %q", objRes.LinkerName, want)
+	}
+	if pass, _, err := objRes.relinkLinker(context.Background(), goodLinker); err != nil || !pass {
+		t.Fatalf("relinkLinker(goodLinker) = (%v, %v), want pass", pass, err)
+	}
+	if pass, _, err := objRes.relinkLinker(context.Background(), badLinker); err != nil || pass {
+		t.Fatalf("relinkLinker(badLinker) = (%v, %v), want fail", pass, err)
+	}
+
+	repo := filepath.Join(tmp, "llvm")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=T", "GIT_AUTHOR_EMAIL=t@e",
+			"GIT_COMMITTER_NAME=T", "GIT_COMMITTER_EMAIL=t@e",
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	runGit("init", "-b", "main")
+	var shas []string
+	for i := range 6 {
+		state := "GOOD"
+		if i >= 3 {
+			state = "MISCOMPILE"
+		}
+		_ = os.WriteFile(filepath.Join(repo, "v.txt"), []byte(fmt.Sprintf("%s\n%d\n", state, i)), 0o644)
+		runGit("add", "v.txt")
+		subj := fmt.Sprintf("[LLD] Commit %d", i)
+		if i == 3 {
+			subj = "[LLD][ThinLTO] Drop symbol in dead strip (#250123)"
+		}
+		runGit("commit", "-m", subj)
+		shas = append(shas, runGit("rev-parse", "HEAD"))
+	}
+
+	gotSHA, gotSubj, gotCommitErr, gotErr := runTriageCommitBisect(context.Background(), triageOpts{
+		LLVMSrcDir: repo, GoodSHA: shas[0], BadSHA: shas[5],
+		Spec: spec, GoodTC: &gTC, BadTC: &bTC,
+		buildClang: func(_ context.Context, wt, bd, _ string) (string, error) {
+			raw, err := os.ReadFile(filepath.Join(wt, "v.txt"))
+			if err != nil {
+				return "", err
+			}
+			_ = os.MkdirAll(bd, 0o755)
+			midLD := filepath.Join(bd, "mid-ld")
+			if strings.HasPrefix(string(raw), "GOOD") {
+				_ = os.WriteFile(midLD, []byte(fmt.Sprintf("#!/bin/sh\nexec %s \"$@\"\n", shQuote(goodTC.Linker))), 0o755)
+			} else {
+				writeBadLinkerScript(t, midLD, goodTC.Linker)
+			}
+			return midLD, nil
+		},
+	}, filepath.Join(tmp, "bisect-work"), objRes)
+	if gotErr != nil || gotCommitErr != "" || gotSHA != shas[3] || !strings.Contains(gotSubj, "Drop symbol in dead strip") {
+		t.Fatalf("runTriageCommitBisect linker bug: sha=%q subj=%q commitErr=%q err=%v", gotSHA, gotSubj, gotCommitErr, gotErr)
+	}
+}
+
+func TestLinkerBugPipelineBundle(t *testing.T) {
+	t.Parallel()
+	spec, goodTC := hostToolchainOrSkip(t)
+	if _, err := exec.LookPath("zstd"); err != nil {
+		t.Skip("zstd unavailable")
+	}
+	selfExe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp := t.TempDir()
+	tarPath := filepath.Join(tmp, "lnkbug.tar.gz")
+	sha := makeTarGz(t, tarPath, map[string]string{
+		"sub1/dup.c": "int dup_one(void) { return 10; }\n",
+		"sub2/dup.c": "int dup_two(void) { return 20; }\n",
+		"libsrc.c":   "int lib_fn(void) { return 12; }\n",
+		"main.c":     "extern int dup_one(void); extern int dup_two(void); extern int lib_fn(void); int main(void) { return (dup_one() + dup_two() + lib_fn()) == 42 ? 0 : 1; }\n",
+	})
+	rec := makeTestRecipe(t, filepath.Join(tmp, "corpus"), "lnkbug", tarPath, sha)
+	buildScript := fmt.Sprintf(`#!/bin/sh
+set -eu
+mkdir -p "$BUILD_DIR/sub1" "$BUILD_DIR/sub2"
+"$CC" -c "$SRC_DIR/sub1/dup.c" -o "$BUILD_DIR/sub1/dup.o"
+"$CC" -c "$SRC_DIR/sub2/dup.c" -o "$BUILD_DIR/sub2/dup.o"
+"$CC" -c "$SRC_DIR/libsrc.c" -o "$BUILD_DIR/libsrc.o"
+"$CC" -c "$SRC_DIR/main.c" -o "$BUILD_DIR/main.o"
+%s rcs "$BUILD_DIR/libhelper.a" "$BUILD_DIR/libsrc.o"
+"$CC" "$BUILD_DIR/sub1/dup.o" "$BUILD_DIR/sub2/dup.o" "$BUILD_DIR/main.o" "$BUILD_DIR/libhelper.a" -o "$BUILD_DIR/runner"
+`, shQuote(goodTC.Ar))
+	if err := os.WriteFile(filepath.Join(rec.Dir, "build.sh"), []byte(buildScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	goodLinker := filepath.Join(tmp, "good-ld")
+	badLinker := filepath.Join(tmp, "bad-ld")
+	_ = os.WriteFile(goodLinker, []byte(fmt.Sprintf("#!/bin/sh\nexec %s \"$@\"\n", shQuote(goodTC.Linker))), 0o755)
+	writeBadLinkerScript(t, badLinker, goodTC.Linker)
+
+	gTC := *goodTC
+	gTC.Linker = goodLinker
+	bTC := *goodTC
+	bTC.Linker = badLinker
+	bTC.AliveTV, bTC.LLUBI, bTC.LLVMReduce = "", "", ""
+
+	res, err := triage(context.Background(), triageOpts{
+		Runner:        &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2},
+		Recipe:        rec,
+		Spec:          spec,
+		Profile:       profDistroO2,
+		GoodTC:        &gTC,
+		BadTC:         &bTC,
+		GoodSHA:       "1111111111111111111111111111111111111111",
+		BadSHA:        "2222222222222222222222222222222222222222",
+		WorkDir:       filepath.Join(tmp, "work"),
+		BundleDir:     filepath.Join(tmp, "bundles"),
+		FlakyAttempts: 1,
+	})
+	if err != nil || res.Dropped || res.Incident == nil {
+		t.Fatalf("triage linker bug: res=%+v err=%v", res, err)
+	}
+	inc := res.Incident
+	if !inc.IsLinkerBug || inc.Confidence != confLikely || inc.HasReducedIR || inc.CulpritTU != "" || inc.PassDiff != "" {
+		t.Fatalf("unexpected linker incident fields: %+v", inc)
+	}
+	if inc.CulpritPass != filepath.Base(badLinker) || inc.AliveTVStatus != formalUnsupported || inc.LLUBIStatus != formalUnsupported {
+		t.Fatalf("unexpected pass/formal status: %+v", inc)
+	}
+
+	dec, err := exec.Command("zstd", "-d", "-c", res.BundlePath).Output()
+	if err != nil {
+		t.Fatalf("zstd -d: %v", err)
+	}
+	unpackDir := t.TempDir()
+	tr := tar.NewReader(bytes.NewReader(dec))
+	seen := make(map[string]int64)
+	var dupObjs []string
+	var hasAr bool
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("tar: %v", err)
+		}
+		raw, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatalf("tar read %s: %v", hdr.Name, err)
+		}
+		seen[filepath.Base(hdr.Name)] = hdr.Size
+		if strings.Contains(hdr.Name, "/inputs/") && strings.HasSuffix(hdr.Name, "_dup.o") {
+			dupObjs = append(dupObjs, hdr.Name)
+		}
+		if strings.Contains(hdr.Name, "/inputs/") && strings.HasSuffix(hdr.Name, "_libhelper.a") {
+			hasAr = true
+		}
+		rel := hdr.Name
+		if idx := strings.IndexByte(rel, '/'); idx >= 0 {
+			rel = rel[idx+1:]
+		}
+		dst := filepath.Join(unpackDir, rel)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(dst, raw, os.FileMode(hdr.Mode)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, f := range []string{"repro.sh", "summary.json", "link.args"} {
+		if seen[f] == 0 {
+			t.Errorf("bundle missing %q (seen=%v)", f, seen)
+		}
+	}
+	for _, forbid := range []string{"standalone_tu.c", "reduced.ll"} {
+		if _, ok := seen[forbid]; ok {
+			t.Errorf("linker bug bundle should omit %q", forbid)
+		}
+	}
+	if len(dupObjs) != 2 || !hasAr {
+		t.Fatalf("expected 2 disambiguated dup.o files + libhelper.a in bundle, dupObjs=%v hasAr=%v", dupObjs, hasAr)
+	}
+
+	runRepro := exec.Command("sh", filepath.Join(unpackDir, "repro.sh"))
+	runRepro.Dir = unpackDir
+	runRepro.Env = append(os.Environ(),
+		"CLANG="+goodTC.Clang,
+		"BAD_LD="+badLinker,
+		"GOOD_LD="+goodLinker,
+	)
+	if out, err := runRepro.CombinedOutput(); err != nil {
+		t.Fatalf("repro.sh failed: %v\n%s", err, out)
+	}
+	if err := exec.Command(filepath.Join(unpackDir, "bad.out")).Run(); err == nil {
+		t.Fatalf("expected bad.out from repro.sh to fail")
+	}
+	if err := exec.Command(filepath.Join(unpackDir, "good.out")).Run(); err != nil {
+		t.Fatalf("expected good.out from repro.sh to pass: %v", err)
+	}
+
+	unitTmp := t.TempDir()
+	objA := filepath.Join(unitTmp, "s1", "x.o")
+	objB := filepath.Join(unitTmp, "s2", "x.o")
+	arPath := filepath.Join(unitTmp, "libfoo.a")
+	_ = mkdirAll(filepath.Dir(objA), filepath.Dir(objB))
+	_ = os.WriteFile(objA, []byte("OBJ_A_DATA"), 0o644)
+	_ = os.WriteFile(objB, []byte("OBJ_B_DATA"), 0o644)
+	_ = os.WriteFile(arPath, []byte("AR_DATA"), 0o644)
+	decomp := &linkDecomp{
+		targetLink: linkRec{
+			CWD: unitTmp,
+			FullArgs: []string{
+				"--sysroot=/host/sysroot", "-B", "/host/bin",
+				"-isysroot", "/host/sdk",
+				"-Wl,-export_dynamic", "-framework", "CoreFoundation",
+				objA, objB, arPath, "-o", "app", "--ld-path=/bad/ld",
+			},
+		},
+		units: []*compiledObj{
+			{GoodObj: objA, BadObj: objA},
+			{GoodObj: objB, BadObj: objB},
+		},
+		directIdx: map[string]int{evalSymlinksExisting(objA): 0, evalSymlinksExisting(objB): 1},
+		archives:  []archiveGroup{{goodPath: arPath, badPath: arPath}},
+	}
+	staged, ok := stageLinkerReproInputs(decomp, 1024)
+	if !ok {
+		t.Fatalf("stageLinkerReproInputs unexpectedly failed")
+	}
+	var linkArgsRaw string
+	for _, e := range staged {
+		if e.name == "link.args" {
+			linkArgsRaw = string(e.data)
+		}
+	}
+	for _, want := range []string{"-Wl,-export_dynamic", "-framework", "CoreFoundation", "inputs/0000_x.o", "inputs/0001_x.o", "inputs/0002_libfoo.a"} {
+		if !strings.Contains(linkArgsRaw, want) {
+			t.Errorf("link.args missing %q:\n%s", want, linkArgsRaw)
+		}
+	}
+	for _, forbid := range []string{"/host/sysroot", "/host/bin", "/host/sdk", "/bad/ld"} {
+		if strings.Contains(linkArgsRaw, forbid) {
+			t.Errorf("link.args leaked host arg %q:\n%s", forbid, linkArgsRaw)
+		}
+	}
+	if _, ok := stageLinkerReproInputs(decomp, 10); ok {
+		t.Fatalf("expected stageLinkerReproInputs to reject bundle exceeding maxBytes")
+	}
 }

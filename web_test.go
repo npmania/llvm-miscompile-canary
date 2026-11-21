@@ -127,14 +127,14 @@ func TestSanitize(t *testing.T) {
 }
 
 func TestCleanIR(t *testing.T) {
-	noisy := "; ModuleID = '/tmp/work/before.ll'\nsource_filename = \"/tmp/work/foo.c\"\ntarget datalayout = \"e-m:e-i64:64\"\ntarget triple = \"x86_64-unknown-linux-gnu\"\n\ndeclare void @dead() #0\n; Function Attrs: noinline\ndefine i32 @foo(i32 %a) #1 {\n  %s = private constant [8 x i8] c\"tag #1\\00\"\n  %r = add i32 %a, 1, !dbg !10\n  ret i32 %r\n}\n\nattributes #0 = { nounwind }\n!llvm.ident = !{!0}\n!0 = !{!\"clang\"}\n!10 = !DILocation(line: 1)\n"
+	noisy := "; ModuleID = '/tmp/work/before.ll'\nsource_filename = \"/tmp/work/foo.c\"\ntarget datalayout = \"e-m:e-i64:64\"\ntarget triple = \"x86_64-unknown-linux-gnu\"\n\ndeclare void @dead() #0\n; Function Attrs: noinline\ndefine i32 @foo(i32 %a) #1 {\n  %s = private constant [8 x i8] c\"tag #1\\00\"\n  %r = add i32 %a, 1, !dbg !10\n  ret i32 %r\n}\n\nattributes #0 = { nounwind }\n^0 = module: (path: \"foo.o\", hash: (1, 2, 3, 4, 5))\n^1 = gv: (name: \"foo\")\n^2 = blockcount: 0\n!llvm.ident = !{!0}\n!0 = !{!\"clang\"}\n!10 = !DILocation(line: 1)\n"
 	ir := cleanIR(noisy)
 	for _, w := range []string{"target triple =", "define i32 @foo(i32 %a) #1 {", "%r = add i32 %a, 1", "attributes #0 ="} {
 		if !strings.Contains(ir, w) {
 			t.Errorf("cleanIR missing %q", w)
 		}
 	}
-	for _, b := range []string{"ModuleID", "source_filename", "!llvm.", "!0 =", "!10 =", "!dbg"} {
+	for _, b := range []string{"ModuleID", "source_filename", "^0 =", "^1 =", "^2 =", "!llvm.", "!0 =", "!10 =", "!dbg"} {
 		if strings.Contains(ir, b) {
 			t.Errorf("cleanIR kept %q", b)
 		}
@@ -209,6 +209,8 @@ func TestCleanIR(t *testing.T) {
 		`!27 = distinct !{!27, !28, !"scopeB"}`,
 		`!28 = distinct !{!28, !"domain"}`,
 		`!30 = !{i32 1, !"wchar_size", i32 4}`,
+		`^0 = module: (path: "sem.o", hash: (1, 2, 3, 4, 5))`,
+		`^1 = gv: (name: "sem")`,
 	}, "\n")
 	cleanedSem := cleanIR(semIR)
 	for _, want := range []string{
@@ -598,8 +600,17 @@ func TestSiteGenerate(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	staleDir := filepath.Join(outDir, "incidents", "stale-dir")
+	if err := os.MkdirAll(staleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(staleDir, "index.html"), []byte("stale"), 0o644)
+
 	if err := generateSite(storeDir, outDir, corpusDir); err != nil {
 		t.Fatalf("generateSite: %v", err)
+	}
+	if fileExists(staleDir) {
+		t.Errorf("expected stale incidents subdir %s to be pruned", staleDir)
 	}
 	read := func(rel string) string {
 		t.Helper()
@@ -760,6 +771,50 @@ func TestSiteGenerate(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(string(rawIdx)), "javascript:") {
 		t.Errorf("index page allowed javascript URL:\n%s", string(rawIdx))
+	}
+
+	miscStore, miscOut := t.TempDir(), t.TempDir()
+	miscInc := &incident{
+		ID: "inc-misc", Status: incidentOpen, Confidence: confLikely,
+		GoodSHA:     "1111111111111111111111111111111111111111",
+		BadSHA:      "2222222222222222222222222222222222222222",
+		CulpritPass: "instcombine", CulpritTU: "src/engine.c",
+		ErrorExcerpt: "assertion failed at line 9",
+		PassDiff:     strings.Repeat("+  %v = add i32 %x, 1\n", 1000) + "llvm/llvm-project#999999\n",
+		Affected:     []affected{{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2, TestID: "t1"}},
+		CreatedAt:    t1, UpdatedAt: t1,
+	}
+	if _, err := saveIncident(miscStore, miscInc); err != nil {
+		t.Fatal(err)
+	}
+	if err := generateSite(miscStore, miscOut, corpusDir); err != nil {
+		t.Fatalf("generateSite misc: %v", err)
+	}
+	miscIdx, err := os.ReadFile(filepath.Join(miscOut, "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(miscIdx), `overflow-wrap:anywhere`) {
+		t.Errorf("index.html missing overflow-wrap:anywhere on Function cell")
+	}
+	miscPageRaw, err := os.ReadFile(filepath.Join(miscOut, "incidents", "inc-misc", "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	miscPage := string(miscPageRaw)
+	if err := checkHTMLNoUnsafeCrossRefs(miscPage); err != nil {
+		t.Fatalf("miscPage cross-ref: %v", err)
+	}
+	for _, want := range []string{
+		`<th scope="row">TU</th>`,
+		`<code>src/engine.c</code>`,
+		"bad snapshot; commit bisect incomplete",
+		"<h2>Error Excerpt</h2>",
+		"; ... [truncated]",
+	} {
+		if !strings.Contains(miscPage, want) {
+			t.Errorf("miscPage missing %q:\n%s", want, miscPage)
+		}
 	}
 }
 
@@ -947,7 +1002,7 @@ func TestWorkflowsAndInitScript(t *testing.T) {
 		"ci.yml":        {"go build -o lmc .", "validate-corpus -corpus corpus -require 42"},
 		"toolchain.yml": {"workflow_dispatch:", "fail-fast: false", "--target master", "| zstd ", "GH_REPO: ${{ github.repository }}", "git ls-remote --exit-code --heads", `select(.status == "open")`, "grep -Fxq", "--limit 500", "CCACHE_BASEDIR: ${{ github.workspace }}", "CCACHE_MAXSIZE: 1.5G"},
 		"sweep.yml":     {"corpus-matrix -corpus corpus -include -shards 12", "fail-fast: false", "zstd -dc", "| tar -xf -", "GH_REPO: ${{ github.repository }}", "if: always() && !cancelled()", "LLVM_SUBJ: ${{ steps.meta.outputs.subject }}", "./lmc site -store _data -out _site -corpus corpus", `case ",${PKGS}," in`, "contains(format(',{0},', matrix.packages), ',dav1d,')", "corpus-src-v2-${{ matrix.src_hash }}", "fragments/shard-${PLAT}-${SHARD}.json", "fragment-shard-${{ matrix.platform }}-${{ matrix.shard }}"},
-		"triage.yml":    {"./lmc alive-check", "--target master", "BUILD_ALIVE2_LLVM=1", "GH_REPO: ${{ github.repository }}", "TEST_ID: ${{ matrix.test_id }}", "-print -quit", "Free runner disk space", "Fallback download raw triage artifacts", "group: miscompile-triage", "max-parallel: 4", "bad_sha12:", "ccache-toolchain-${{ matrix.tc_platform }}-${{ matrix.bad_sha12 }}", "reduced_before.ll", ".alive_tv_status", "-timeout 215m", "-commit-timeout 90m", "CCACHE_MAXSIZE: 1.5G"},
+		"triage.yml":    {"./lmc alive-check", "--target master", "BUILD_ALIVE2_LLVM=1", "GH_REPO: ${{ github.repository }}", "TEST_ID: ${{ matrix.test_id }}", "-print -quit", "Free runner disk space", "Fallback download raw triage artifacts", "group: miscompile-triage", "max-parallel: 4", "bad_sha12:", "ccache-toolchain-${{ matrix.tc_platform }}-${{ matrix.bad_sha12 }}", "reduced_before.ll", ".alive_tv_status", "-timeout 215m", "-commit-timeout 90m", "CCACHE_MAXSIZE: 1.5G", "!cancelled()", "-status-out out/status.json", "record-triage", "triage.log"},
 	}
 	for name, wants := range checks {
 		raw, err := os.ReadFile(filepath.Join(".github", "workflows", name))
@@ -1945,6 +2000,15 @@ func TestSiteFailureLogsPage(t *testing.T) {
 		LastGoodByTarget: map[string]string{
 			targetKey("lua", platLinuxX86, profDistroO2): goodNew,
 		},
+		LastTriage: map[string]triageRecord{
+			targetKey("cpython", platLinuxRISCV64, profDistroO2): {
+				Target:    targetKey("cpython", platLinuxRISCV64, profDistroO2),
+				GoodSHA:   goodOld,
+				BadSHA:    badSHA,
+				Outcome:   "not_regression",
+				UpdatedAt: t1,
+			},
+		},
 	}
 	sw := &sweep{
 		ID: formatSweepID(t1, badSHA), LLVMCommit: badSHA, StartedAt: t1, CompletedAt: t1,
@@ -2018,6 +2082,7 @@ func TestSiteFailureLogsPage(t *testing.T) {
 		`assertion failed`,
 		`id="log-foo-bar-linux-x86_64-distro-o2"`,
 		`id="log-foo-bar-linux-x86_64-distro-o2-2"`,
+		`triage: not_regression`,
 	} {
 		if !strings.Contains(logsPage, want) {
 			t.Errorf("logs/index.html missing %q:\n%s", want, logsPage)
@@ -2036,6 +2101,9 @@ func TestSiteFailureLogsPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	recordSweep(st, *swGreen, []*incident{staleClosed})
+	if _, ok := st.LastTriage[targetKey("cpython", platLinuxRISCV64, profDistroO2)]; ok {
+		t.Errorf("expected LastTriage entry cleared on statusPass")
+	}
 	if err := saveState(storeDir, st); err != nil {
 		t.Fatal(err)
 	}
@@ -2087,6 +2155,8 @@ func TestIssueReproCommandAndPassName(t *testing.T) {
 		{"invalidateO2", &incident{CulpritPass: "InvalidateAnalysisPass<llvm::AAManager>", Affected: []affected{{Profile: profDistroO2}}}, "opt -O2 -S"},
 		{"frontendIrgen", &incident{CulpritPass: "frontend-irgen", Affected: []affected{{Profile: profReleaseLTO}}}, "opt -O3 -S"},
 		{"mlAdvisor", &incident{CulpritPass: "inliner-ml-advisor-release", Affected: []affected{{Profile: profDistroO2}}}, "opt -O2 -S"},
+		{"linkerLinux", &incident{IsLinkerBug: true, CulpritPass: "ld.lld (ThinLTO)", Affected: []affected{{Profile: profReleaseLTO}}}, "ld.lld (ThinLTO) (link repro)"},
+		{"linkerFallback", &incident{IsLinkerBug: true}, "lld (link repro)"},
 	}
 	for _, tc := range reproCases {
 		if got := reproCommand(tc.inc); got != tc.want {
@@ -2264,6 +2334,18 @@ func TestStoreConfidenceDiagO0AndLLUBI(t *testing.T) {
 	if got, ok := rowVal(incidentMetaRows([]*incident{o0Fail}, true, ""), "<code>-O0</code>"); !ok || got != "test_fail" {
 		t.Errorf("html -O0 test_fail = (%q, %v)", got, ok)
 	}
+
+	equalExitUB := &incident{
+		ID: "llubi-ub", Status: incidentOpen, BadSHA: sha,
+		LLUBIStatus: llubiMismatch, LLUBIOutput: "before_exit=0 after_exit=0\nmemory mismatch",
+		Affected: []affected{{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2}},
+	}
+	if got, ok := rowVal(incidentMetaRows([]*incident{equalExitUB}, false, defaultSiteURL), "`llubi`"); !ok || got != "`0` (before) -> `0` (after) (UB/poison mismatch)" {
+		t.Errorf("md equal-exit llubi = (%q, %v)", got, ok)
+	}
+	if got, ok := rowVal(incidentMetaRows([]*incident{equalExitUB}, true, ""), "<code>llubi</code>"); !ok || got != "<code>0</code> (before) -&gt; <code>0</code> (after) (UB/poison mismatch)" {
+		t.Errorf("html equal-exit llubi = (%q, %v)", got, ok)
+	}
 }
 
 func TestSiteAndIssueInlineReducedIR(t *testing.T) {
@@ -2339,9 +2421,27 @@ func TestSiteAndIssueInlineReducedIR(t *testing.T) {
 		ErrorExcerpt: "foo.c:1: error: bad",
 		Affected:     []affected{{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2}},
 	}
+	emptyWithBundle := &incident{
+		ID: "inc-empty-bundle", Status: incidentOpen, Confidence: confLikely,
+		GoodSHA: bigWithBundle.GoodSHA, BadSHA: sha, CulpritSHA: sha,
+		CulpritPass: "ld64.lld (ThinLTO)", IsLinkerBug: true, BundleURL: bundleURL,
+		Affected: []affected{{Package: "cpython", Platform: platDarwinARM, Profile: profReleaseLTO}},
+	}
+	oversizedWithFlag := &incident{
+		ID: "inc-flag-bundle", Status: incidentOpen, Confidence: confLikely,
+		GoodSHA: bigWithBundle.GoodSHA, BadSHA: sha, CulpritSHA: sha,
+		CulpritPass: "instcombine", HasReducedIR: true, BundleURL: bundleURL,
+		Affected: []affected{{Package: "zstd", Platform: platLinuxX86, Profile: profDistroO2}},
+	}
+	if bodyEmpty := formatGroupBody([]*incident{emptyWithBundle}, "", defaultSiteURL); strings.Contains(bodyEmpty, "Reduced IR exceeds inline limit") {
+		t.Errorf("emptyWithBundle falsely showed Reduced IR exceeds inline limit:\n%s", bodyEmpty)
+	}
+	if bodyFlag := formatGroupBody([]*incident{oversizedWithFlag}, "", defaultSiteURL); !strings.Contains(bodyFlag, wantNote) {
+		t.Errorf("oversizedWithFlag missing bundle note:\n%s", bodyFlag)
+	}
 
 	storeDir, outDir := t.TempDir(), t.TempDir()
-	for _, inc := range []*incident{bigWithBundle, truncNoBundle, unsafeBundle, cgInc, buildWithBundle} {
+	for _, inc := range []*incident{bigWithBundle, truncNoBundle, unsafeBundle, cgInc, buildWithBundle, emptyWithBundle, oversizedWithFlag} {
 		if _, err := saveIncident(storeDir, inc); err != nil {
 			t.Fatal(err)
 		}
@@ -2377,6 +2477,12 @@ func TestSiteAndIssueInlineReducedIR(t *testing.T) {
 	buildPage := readPage(buildWithBundle.ID)
 	if strings.Contains(buildPage, "<h2>Reduced IR</h2>") || strings.Contains(buildPage, "Reduced IR exceeds inline limit") {
 		t.Errorf("buildPage should not show Reduced IR section:\n%s", buildPage)
+	}
+	if emptyPage := readPage(emptyWithBundle.ID); strings.Contains(emptyPage, "<h2>Reduced IR</h2>") || strings.Contains(emptyPage, "Reduced IR exceeds inline limit") {
+		t.Errorf("emptyPage falsely showed Reduced IR section:\n%s", emptyPage)
+	}
+	if flagPage := readPage(oversizedWithFlag.ID); !strings.Contains(flagPage, wantHTMLNote) {
+		t.Errorf("flagPage missing bundle note:\n%s", flagPage)
 	}
 }
 
@@ -2565,6 +2671,84 @@ func TestAggregateRegressionSelection(t *testing.T) {
 		if r.Package != w.pkg || r.Platform != w.plat || r.Profile != w.prof || gotTest != w.test || r.GoodSHA != w.good {
 			t.Errorf("regs3[%d] = (%s, %s, %s, %s, %q), want (%s, %s, %s, %s, %q)", i, r.Package, r.Platform, r.Profile, gotTest, r.GoodSHA, w.pkg, w.plat, w.prof, w.test, w.good)
 		}
+	}
+
+	store4, frags4 := t.TempDir(), t.TempDir()
+	if err := saveState(store4, &state{
+		LastGoodSHA: goodSHA,
+		LastGoodByTarget: map[string]string{
+			targetKey("pkg-nr", platLinuxX86, profDistroO2):    goodSHA,
+			targetKey("pkg-ub", platLinuxX86, profDistroO2):    goodSHA,
+			targetKey("pkg-flaky", platLinuxX86, profDistroO2): goodSHA,
+			targetKey("pkg-err", platLinuxX86, profDistroO2):   goodSHA,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	statusDir := t.TempDir()
+	for _, tc := range []struct{ pkg, outcome string }{
+		{"pkg-nr", "not_regression"},
+		{"pkg-ub", "upstream_ub"},
+		{"pkg-flaky", "flaky"},
+		{"pkg-err", "triage_error"},
+	} {
+		sp := filepath.Join(statusDir, tc.pkg+".json")
+		if err := writeTriageStatus(sp, targetKey(tc.pkg, platLinuxX86, profDistroO2), goodSHA, badSHA, tc.outcome, ""); err != nil {
+			t.Fatal(err)
+		}
+		if code := runCLI(context.Background(), []string{"lmc", "record-triage", "-store", store4, "-status", sp}, &out, &errBuf); code != 0 {
+			t.Fatalf("record-triage %s failed (%d): %s", tc.pkg, code, errBuf.String())
+		}
+	}
+	errStatusOut := filepath.Join(statusDir, "cli-err.json")
+	if code := runCLI(context.Background(), []string{
+		"lmc", "triage", "-pkg", "missingpkg", "-plat", platLinuxX86,
+		"-good-tc", "/nonexistent/bin", "-bad-tc", "/nonexistent/bin", "-status-out", errStatusOut,
+	}, &out, &errBuf); code == 0 {
+		t.Fatalf("expected triage failure on nonexistent pkg")
+	}
+	var cliStatus triageRecord
+	if err := readJSON(errStatusOut, &cliStatus); err != nil || cliStatus.Outcome != "triage_error" || cliStatus.Target != targetKey("missingpkg", platLinuxX86, profDistroO2) {
+		t.Fatalf("unexpected CLI triage error status: rec=%+v err=%v", cliStatus, err)
+	}
+
+	if err := writeResultFragment(filepath.Join(frags4, "f.json"), []pkgResult{
+		{Package: "pkg-nr", Platform: platLinuxX86, Profile: profDistroO2, Status: statusTestFail, DurationSec: 5, FailedTests: []string{"t1"}},
+		{Package: "pkg-ub", Platform: platLinuxX86, Profile: profDistroO2, Status: statusTestFail, DurationSec: 6, FailedTests: []string{"t1"}},
+		{Package: "pkg-flaky", Platform: platLinuxX86, Profile: profDistroO2, Status: statusTestFail, DurationSec: 7, FailedTests: []string{"t1"}},
+		{Package: "pkg-err", Platform: platLinuxX86, Profile: profDistroO2, Status: statusTestFail, DurationSec: 8, FailedTests: []string{"t1"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	regOut4 := filepath.Join(t.TempDir(), "regs4.json")
+	if code := runCLI(context.Background(), []string{"lmc", "aggregate", "-frags", frags4, "-store", store4, "-sha", badSHA, "-reg-out", regOut4}, &out, &errBuf); code != 0 {
+		t.Fatalf("aggregate4 failed (%d): %s", code, errBuf.String())
+	}
+	var regs4 []regressionTarget
+	if err := readJSON(regOut4, &regs4); err != nil {
+		t.Fatal(err)
+	}
+	if len(regs4) != 2 || regs4[0].Package != "pkg-flaky" || regs4[1].Package != "pkg-err" {
+		t.Fatalf("expected only flaky and triage_error regressions (not_regression & upstream_ub suppressed), got %+v", regs4)
+	}
+
+	newerGoodSHA := "3333333333333333333333333333333333333333"
+	st4, err := loadState(store4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st4.LastGoodByTarget[targetKey("pkg-nr", platLinuxX86, profDistroO2)] = newerGoodSHA
+	if err := saveState(store4, st4); err != nil {
+		t.Fatal(err)
+	}
+	if code := runCLI(context.Background(), []string{"lmc", "aggregate", "-frags", frags4, "-store", store4, "-sha", badSHA, "-reg-out", regOut4}, &out, &errBuf); code != 0 {
+		t.Fatalf("aggregate4 after new good failed (%d): %s", code, errBuf.String())
+	}
+	if err := readJSON(regOut4, &regs4); err != nil {
+		t.Fatal(err)
+	}
+	if len(regs4) != 3 || regs4[0].Package != "pkg-nr" {
+		t.Fatalf("expected pkg-nr unsuppressed when GoodSHA advances, got %+v", regs4)
 	}
 }
 

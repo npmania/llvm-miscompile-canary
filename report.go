@@ -46,6 +46,7 @@ var (
 	reHexSHA       = regexp.MustCompile(`^[0-9a-fA-F]{7,40}$`)
 	reDedupMarker  = regexp.MustCompile(`<!--\s*lmc-dedup-key:\s*([^\s>]+)\s*-->`)
 	reMetaDefLine  = regexp.MustCompile(`^!(\d+)\s*=\s*(.*)$`)
+	reSummaryLine  = regexp.MustCompile(`^\^\d+\s*=`)
 	reDebugMetaRHS = regexp.MustCompile(`^(?:distinct\s+)?!(?:DI|GenericDI)`)
 	reInlineMeta   = regexp.MustCompile(`(?:\s*,\s*|\s+)!(?:dbg|DIAssignID|prof|callees|heapallocsite|srcloc)\s+!\d+\b`)
 	reMetaRef      = regexp.MustCompile(`!(\d+)\b`)
@@ -359,7 +360,7 @@ func stripIR(ir string, forDiff bool) string {
 		if trim == "" {
 			continue
 		}
-		if hasPref(trim, dropBase) || (forDiff && hasPref(trim, dropDiff)) {
+		if hasPref(trim, dropBase) || reSummaryLine.MatchString(trim) || (forDiff && hasPref(trim, dropDiff)) {
 			parsed[i].drop = true
 			continue
 		}
@@ -440,6 +441,18 @@ func isValidOptPassName(pass string) bool {
 	return p != "frontend-irgen" && p != "inliner-ml-advisor-release" && reOptPassName.MatchString(p)
 }
 
+func hasNonInlinedReducedIR(inc *incident) bool {
+	if inc == nil || inc.isBuildFail() || inlineReducedIR(inc.ReducedIR) != "" || !isSafeHTTPURL(inc.BundleURL) {
+		return false
+	}
+	if inc.HasReducedIR {
+		return true
+	}
+	return strings.TrimSpace(inc.ReducedIR) != "" &&
+		!strings.Contains(inc.ReducedIR, "...[truncated]") &&
+		!strings.Contains(inc.ReducedIR, "; ... [truncated]")
+}
+
 func inlineReducedIR(raw string) string {
 	if strings.Contains(raw, "...[truncated]") || strings.Contains(raw, "; ... [truncated]") {
 		return ""
@@ -473,6 +486,9 @@ func reproCommand(inc *incident) string {
 	lvl := incidentOptLevel(inc)
 	if inc == nil {
 		return "opt " + lvl + " -S"
+	}
+	if inc.IsLinkerBug {
+		return cmp.Or(sanitizeText(inc.CulpritPass), "lld") + " (link repro)"
 	}
 	if inc.IsCodeGenPass {
 		return "llc " + lvl
@@ -632,6 +648,9 @@ func incidentMetaRows(incs []*incident, htmlMode bool, siteURL string) [][2]stri
 		subj := txt(primary.CulpritSubject)
 		add("Commit", c+pick(subj != "", " ("+subj+")", ""))
 	} else if bad := commitCode(primary.BadSHA); bad != "" {
+		if !isBuild {
+			bad += " (bad snapshot; commit bisect incomplete)"
+		}
 		add("Commit", bad)
 	}
 	if g, bad := sha(primary.GoodSHA), sha(primary.BadSHA); g != "" && bad != "" {
@@ -648,8 +667,10 @@ func incidentMetaRows(incs []*incident, htmlMode bool, siteURL string) [][2]stri
 	}
 	if fn, tu := raw(primary.CulpritFunc), raw(primary.CulpritTU); fn != "" && tu != "" {
 		add("Function", code(fn)+" ("+code(tu)+")")
-	} else if v := cmp.Or(fn, tu); v != "" {
-		add("Function", code(v))
+	} else if fn != "" {
+		add("Function", code(fn))
+	} else if tu != "" {
+		add("TU", code(tu))
 	}
 	if tgt := formatTargets(mergedAffected(incs), htmlMode); tgt != "" {
 		add(pick(htmlMode, "Targets", "Target"), tgt)
@@ -682,7 +703,11 @@ func incidentMetaRows(incs []*incident, htmlMode bool, siteURL string) [][2]stri
 			add(code("alive-tv"), aliveVal)
 		}
 		if m := reLLUBIExits.FindStringSubmatch(primary.LLUBIOutput); primary.LLUBIStatus != formalUnsupported && len(m) >= 3 {
-			add(code("llubi"), code(m[1])+" (before)"+pick(htmlMode, " -&gt; ", " -> ")+code(m[2])+" (after)")
+			val := code(m[1]) + " (before)" + pick(htmlMode, " -&gt; ", " -> ") + code(m[2]) + " (after)"
+			if primary.LLUBIStatus == llubiMismatch && m[1] == m[2] {
+				val += " (UB/poison mismatch)"
+			}
+			add(code("llubi"), val)
 		} else if !isOmittedFormalStatus(primary.LLUBIStatus) {
 			add(code("llubi"), txt(primary.LLUBIStatus))
 		}
@@ -1120,7 +1145,7 @@ func formatGroupBody(incs []*incident, key, siteURL string) string {
 		if ir := inlineReducedIR(primary.ReducedIR); ir != "" {
 			f := fenceFor(ir)
 			fmt.Fprintf(&b, "`%s`:\n\n%sllvm\n%s\n%s\n\n", reproCommand(primary), f, ir, f)
-		} else if isSafeHTTPURL(primary.BundleURL) {
+		} else if hasNonInlinedReducedIR(primary) {
 			fmt.Fprintf(&b, "Reduced IR exceeds inline limit; see `reduced.ll` in [reproducer.tar.zst](%s).\n\n", strings.TrimSpace(primary.BundleURL))
 		}
 		if diff := clipCode(sanitizeCode(strings.TrimSpace(primary.PassDiff)), 18000); diff != "" {

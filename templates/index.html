@@ -29,7 +29,7 @@
             <td class="mono nowrap"><a href="/incidents/{{.ID}}/">{{.ID}}</a></td>
             <td class="mono nowrap">{{if .CulpritCommitURL}}<a href="{{.CulpritCommitURL}}" rel="noopener">{{.CulpritSHA}}</a>{{else}}{{.CulpritSHA}}{{end}}</td>
             <td class="mono nowrap">{{.Pass}}</td>
-            <td class="mono nowrap">{{.Function}}</td>
+            <td class="mono" style="overflow-wrap:anywhere">{{.Function}}</td>
             <td class="mono">{{.Targets}}</td>
             <td class="mono nowrap">{{if .IssueURL}}<a href="{{.IssueURL}}">#{{.IssueNumber}}</a>{{else if gt .IssueNumber 0}}#{{.IssueNumber}}{{else}}-{{end}}</td>
           </tr>

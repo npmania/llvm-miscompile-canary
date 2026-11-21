@@ -134,6 +134,43 @@ func TestPlatformAndFlags(t *testing.T) {
 		strings.Contains(reproFallback, "-passes=InstCombinePass") {
 		t.Fatalf("unexpected fallback opt repro script:\n%s", reproFallback)
 	}
+	if platformSpecs[platLinuxARM64].TargetTriple != "aarch64-linux-gnu" || platformSpecs[platDarwinARM].TargetTriple != "arm64-apple-darwin" {
+		t.Fatalf("unexpected TargetTriple: arm64=%q darwin=%q", platformSpecs[platLinuxARM64].TargetTriple, platformSpecs[platDarwinARM].TargetTriple)
+	}
+	reproDarwin := generateReproScript(&incident{
+		ID: "dar-1", GoodSHA: "aaaa", BadSHA: "bbbb", CulpritPass: "aarch64-isel", IsCodeGenPass: true, DiagO0Status: "test_fail",
+		Affected: []affected{{Package: "lua", Platform: platDarwinARM, Profile: profReleaseLTO}},
+	})
+	for _, want := range []string{
+		`GOOD_CLANG="${GOOD_CLANG:-$CLANG}"`,
+		`BAD_CLANG="${BAD_CLANG:-$CLANG}"`,
+		`xcrun --show-sdk-path`,
+		`${SDKROOT:+-isysroot "$SDKROOT"}`,
+		`--target=arm64-apple-darwin`,
+		`-mtriple=arm64-apple-darwin`,
+		`"$GOOD_CLANG" --target=arm64-apple-darwin`,
+		`"$BAD_CLANG" --target=arm64-apple-darwin`,
+		`elif [ -f before.ll ] && [ -s before.ll ]; then`,
+	} {
+		if !strings.Contains(reproDarwin, want) {
+			t.Fatalf("darwin repro missing %q:\n%s", want, reproDarwin)
+		}
+	}
+	reproLink := generateReproScript(&incident{
+		ID: "lnk-1", GoodSHA: "aaaa", BadSHA: "bbbb", CulpritPass: "ld64.lld (ThinLTO)", IsLinkerBug: true,
+		Affected: []affected{{Package: "cpython", Platform: platDarwinARM, Profile: profReleaseLTO}},
+	})
+	for _, want := range []string{
+		`BAD_LD="${BAD_LD:-${LD:-ld64.lld}}"`,
+		`GOOD_LD="${GOOD_LD:-}"`,
+		`xcrun --show-sdk-path`,
+		`@link.args -o bad.out`,
+		`@link.args -o good.out`,
+	} {
+		if !strings.Contains(reproLink, want) {
+			t.Fatalf("linker repro missing %q:\n%s", want, reproLink)
+		}
+	}
 	id1 := buildIncidentID("zstd", platLinuxX86, profDistroO2, "t1", "11111111", "aaaaaaaa")
 	id2 := buildIncidentID("zstd", platDarwinARM, profReleaseLTO, "t1", "11111111", "aaaaaaaa")
 	id3 := buildIncidentID("zstd", platLinuxX86, profReleaseLTO, "t1", "11111111", "aaaaaaaa")
@@ -350,7 +387,7 @@ exit 0
 		t.Fatalf("missing capture artifacts: %+v", recs[0])
 	}
 
-	got := stripFlags([]string{"-I", "/inc", "-isystem-after", "/after", "-include-pch", "a.pch", "-includefoo.h", "-imacrosbar.h", "-D", "X=1", "-isysroot", "/sdk", "-flto=thin", "--ld-path=/ld", "--ld-path", "/ld2", "-fuse-ld=lld", "-Xlinker", "-z", "-order_file", "ord.txt", "-opt-record-file", "rec.yaml", "-Xassembler", "--noexecstack", "--param", "max=1", "-mllvm", "-opt-bisect-limit=9", "-frandom-seed=123", "-c", "foo.c", "-o", "foo.o"},
+	got := stripFlags([]string{"-I", "/inc", "-isystem-after", "/after", "-include-pch", "a.pch", "-includefoo.h", "-imacrosbar.h", "-D", "X=1", "-isysroot", "/sdk", "--sysroot", "/sr1", "--sysroot=/sr2", "--gcc-toolchain", "/usr1", "--gcc-toolchain=/usr2", "-B", "/b1", "-B/b2", "-flto=thin", "--ld-path=/ld", "--ld-path", "/ld2", "-fuse-ld=lld", "-Xlinker", "-z", "-order_file", "ord.txt", "-opt-record-file", "rec.yaml", "-Xassembler", "--noexecstack", "--param", "max=1", "-mllvm", "-opt-bisect-limit=9", "-frandom-seed=123", "-c", "foo.c", "-o", "foo.o"},
 		stripMode|stripOutput|stripInclude|stripHost|stripLink|stripLTO|stripOptBisect|stripSources, dir)
 	want := []string{"-D", "X=1", "-order_file", "ord.txt", "-opt-record-file", "rec.yaml", "-Xassembler", "--noexecstack", "--param", "max=1"}
 	if !slices.Equal(got, want) {
@@ -823,6 +860,29 @@ func TestCLISubcommands(t *testing.T) {
 	}
 	if code := runCLI(context.Background(), []string{"lmc", "sync-issues", "-store", storeDir, "-dry-run", "-quiet"}, &out, &errBuf); code != 0 {
 		t.Fatalf("sync-issues -dry-run failed (%d): %s", code, errBuf.String())
+	}
+
+	fakeBin := filepath.Join(dir, "fake-tc")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"clang", "clang++", "ld.lld", "ld64.lld"} {
+		if err := os.WriteFile(filepath.Join(fakeBin, n), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	badSDK := filepath.Join(dir, "missing-sdk")
+	for _, subArgs := range [][]string{
+		{"lmc", "build", "-corpus", corpusDir, "-pkg", "alpha", "-plat", platDarwinARM, "-tc", fakeBin, "-sdkroot", badSDK},
+		{"lmc", "test", "-corpus", corpusDir, "-pkg", "alpha", "-plat", platDarwinARM, "-tc", fakeBin, "-sdkroot", badSDK},
+		{"lmc", "sweep", "-corpus", corpusDir, "-pkg", "alpha", "-plat", platDarwinARM, "-tc", fakeBin, "-sdkroot", badSDK},
+		{"lmc", "triage", "-corpus", corpusDir, "-pkg", "alpha", "-plat", platDarwinARM, "-good-tc", fakeBin, "-bad-tc", fakeBin, "-sdkroot", badSDK},
+	} {
+		out.Reset()
+		errBuf.Reset()
+		if code := runCLI(context.Background(), subArgs, &out, &errBuf); code == 0 || !strings.Contains(errBuf.String(), "is not a directory") {
+			t.Fatalf("%v -> code=%d stderr=%q, want sdkroot directory error", subArgs, code, errBuf.String())
+		}
 	}
 }
 
@@ -1305,4 +1365,156 @@ func makeTestTarGz(t *testing.T, dir string, files map[string]string) (string, s
 	}
 	h := sha256.Sum256(buf.Bytes())
 	return p, hex.EncodeToString(h[:])
+}
+
+func TestCrossSysrootArgs(t *testing.T) {
+	t.Parallel()
+	rvSpec, err := lookupPlatform(platLinuxRISCV64)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	voidRoot := t.TempDir()
+	voidLibc := filepath.Join(voidRoot, "usr", "riscv64-linux-gnu", "lib", "libc.so")
+	if err := os.MkdirAll(filepath.Dir(voidLibc), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(voidLibc, []byte("GROUP ( /usr/lib64/libc.so.6 )\nAS_NEEDED ( /lib/ld-linux-riscv64-lp64d.so.1 )\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, ver := range []string{"9.5", "14.2"} {
+		crt := filepath.Join(voidRoot, "usr", "lib", "gcc", "riscv64-linux-gnu", ver, "crtbeginS.o")
+		if err := os.MkdirAll(filepath.Dir(crt), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(crt, []byte("crt"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gotVoid := crossSysrootArgsForRoot(rvSpec, voidRoot)
+	wantUsr := filepath.Join(voidRoot, "usr")
+	wantGCC := filepath.Join(wantUsr, "lib", "gcc", "riscv64-linux-gnu", "14.2")
+	wantVoid := []string{
+		"--sysroot=" + filepath.Join(wantUsr, "riscv64-linux-gnu"),
+		"--gcc-toolchain=" + wantUsr,
+		"-B" + wantGCC,
+		"-L" + wantGCC,
+	}
+	if !slices.Equal(gotVoid, wantVoid) {
+		t.Fatalf("crossSysrootArgsForRoot(void) = %v, want %v", gotVoid, wantVoid)
+	}
+
+	gotCompileNoSys := filterCrossSysrootArgs(nil, gotVoid, false, false)
+	if !slices.Equal(gotCompileNoSys, wantVoid[:3]) {
+		t.Fatalf("filterCrossSysrootArgs(hasSysroot=false, linking=false) = %v, want %v", gotCompileNoSys, wantVoid[:3])
+	}
+	gotCompileHasSys := filterCrossSysrootArgs(nil, gotVoid, true, false)
+	if !slices.Equal(gotCompileHasSys, wantVoid[1:3]) {
+		t.Fatalf("filterCrossSysrootArgs(hasSysroot=true, linking=false) = %v, want %v", gotCompileHasSys, wantVoid[1:3])
+	}
+	gotLinkHasSys := filterCrossSysrootArgs(nil, gotVoid, true, true)
+	if !slices.Equal(gotLinkHasSys, wantVoid[1:]) {
+		t.Fatalf("filterCrossSysrootArgs(hasSysroot=true, linking=true) = %v, want %v", gotLinkHasSys, wantVoid[1:])
+	}
+
+	pCompileSys, err := planWrap(wrapConfig{RealCC: "/fake/cc", Platform: platLinuxRISCV64, Profile: profDistroO2, Linker: "/fake/lld"}, false, t.TempDir(), []string{"--sysroot=/custom/sr", "-c", "foo.c", "-o", "foo.o"})
+	if err != nil {
+		t.Fatalf("planWrap compile with sysroot: %v", err)
+	}
+	if pCompileSys.mode != "compile" || strings.Count(strings.Join(pCompileSys.fullArgs, " "), "--sysroot=") != 1 || slices.ContainsFunc(pCompileSys.fullArgs, func(a string) bool { return strings.HasPrefix(a, "-L") }) {
+		t.Fatalf("unexpected compile plan with sysroot: mode=%s args=%v", pCompileSys.mode, pCompileSys.fullArgs)
+	}
+	pLinkSys, err := planWrap(wrapConfig{RealCC: "/fake/cc", Platform: platLinuxRISCV64, Profile: profDistroO2, Linker: "/fake/lld"}, false, t.TempDir(), []string{"--sysroot=/custom/sr", "foo.o", "-o", "foo"})
+	if err != nil {
+		t.Fatalf("planWrap link with sysroot: %v", err)
+	}
+	if pLinkSys.mode != "link" || strings.Count(strings.Join(pLinkSys.fullArgs, " "), "--sysroot=") != 1 {
+		t.Fatalf("unexpected link plan with sysroot: mode=%s args=%v", pLinkSys.mode, pLinkSys.fullArgs)
+	}
+	for _, a := range crossSysrootArgs(rvSpec) {
+		if strings.HasPrefix(a, "--sysroot=") {
+			continue
+		}
+		if !slices.Contains(pLinkSys.fullArgs, a) {
+			t.Fatalf("planWrap link with hasSysroot=true missing %q: %v", a, pLinkSys.fullArgs)
+		}
+		if !strings.HasPrefix(a, "-L") && !slices.Contains(pCompileSys.fullArgs, a) {
+			t.Fatalf("planWrap compile with hasSysroot=true missing %q: %v", a, pCompileSys.fullArgs)
+		}
+	}
+
+	ubuntuRoot := t.TempDir()
+	ubuntuLibc := filepath.Join(ubuntuRoot, "usr", "riscv64-linux-gnu", "lib", "libc.so")
+	if err := os.MkdirAll(filepath.Dir(ubuntuLibc), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ubuntuLibc, []byte("GROUP ( /usr/riscv64-linux-gnu/lib/libc.so.6 )\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := crossSysrootArgsForRoot(rvSpec, ubuntuRoot); len(got) != 0 {
+		t.Fatalf("crossSysrootArgsForRoot(ubuntu) = %v, want nil", got)
+	}
+}
+
+func TestCCacheDisableAndCTestTimeout(t *testing.T) {
+	dir := t.TempDir()
+	mockBin := filepath.Join(dir, "mockbin")
+	if err := os.MkdirAll(mockBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmakeLog := filepath.Join(dir, "cmake.log")
+	ctestLog := filepath.Join(dir, "ctest.log")
+	if err := os.WriteFile(filepath.Join(mockBin, "cmake"), []byte(fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$@\" >> %s\nexit 0\n", shQuote(cmakeLog))), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mockBin, "ctest"), []byte(fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$@\" > %s\nexit 0\n", shQuote(ctestLog))), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", mockBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	srcDir := filepath.Join(dir, "src")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rvSpec, err := lookupPlatform(platLinuxRISCV64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &runner{LMCBin: "/bin/sh", Jobs: 2}
+	rec := &recipe{
+		Name: "simdutf", Version: "1.0", Lang: "cxx", TimeoutMin: 15, SmokeTest: "smoke",
+		Platforms: []string{platLinuxRISCV64}, Dir: filepath.Join(dir, "recipe"),
+		CMake: &cmakeSpec{}, CTest: &ctestSpec{},
+	}
+	ws, bOut, err := r.build(context.Background(), runConfig{
+		Recipe: rec, Spec: rvSpec, Profile: profReleaseLTO,
+		TC:      &toolchain{Spec: rvSpec, Clang: "/fake/clang", ClangXX: "/fake/clang++", Linker: "/fake/ld.lld"},
+		WorkDir: filepath.Join(dir, "work"), SrcDir: srcDir,
+	})
+	if err != nil || !bOut.Passed {
+		t.Fatalf("mock build failed: err=%v out=%s", err, bOut.Output)
+	}
+	if !slices.Contains(ws.Env, "CCACHE_DISABLE=1") || !slices.Contains(ws.Env, "SCCACHE_DISABLE=1") {
+		t.Fatalf("wireWorkspace Env missing CCACHE_DISABLE=1 / SCCACHE_DISABLE=1: %v", ws.Env)
+	}
+	cmakeArgs, err := os.ReadFile(cmakeLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"-DCMAKE_C_COMPILER_LAUNCHER=", "-DCMAKE_CXX_COMPILER_LAUNCHER="} {
+		if !strings.Contains(string(cmakeArgs), want) {
+			t.Fatalf("cmake args missing %q:\n%s", want, string(cmakeArgs))
+		}
+	}
+	tOut, _ := r.testAll(context.Background(), rec, ws, nil, 0)
+	if !tOut.Passed {
+		t.Fatalf("mock testAll failed: %s", tOut.Output)
+	}
+	ctestArgs, err := os.ReadFile(ctestLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(ctestArgs), "--timeout\n900\n") {
+		t.Fatalf("riscv64 timeout_min=15 ctest args = %q, want --timeout 900", string(ctestArgs))
+	}
 }

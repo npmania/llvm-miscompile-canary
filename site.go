@@ -108,6 +108,8 @@ func generateSite(storeDir, outDir, corpusDir string) error {
 	}{resolveNav(st, sweeps), catalog}); err != nil {
 		return err
 	}
+	incOutDir := filepath.Join(outDir, "incidents")
+	keepIDs := make(map[string]bool, len(incs))
 	for _, inc := range incs {
 		if inc == nil || inc.ID == "" {
 			continue
@@ -115,12 +117,20 @@ func generateSite(storeDir, outDir, corpusDir string) error {
 		if err := validateSafeID("incident id", inc.ID); err != nil {
 			return err
 		}
-		dir := filepath.Join(outDir, "incidents", inc.ID)
+		keepIDs[inc.ID] = true
+		dir := filepath.Join(incOutDir, inc.ID)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
 		if err := renderPage(filepath.Join(dir, "index.html"), "incident.html", buildIncidentData(st, sweeps, inc)); err != nil {
 			return err
+		}
+	}
+	if ents, err := os.ReadDir(incOutDir); err == nil {
+		for _, ent := range ents {
+			if ent.IsDir() && !keepIDs[ent.Name()] {
+				_ = os.RemoveAll(filepath.Join(incOutDir, ent.Name()))
+			}
 		}
 	}
 	return nil
@@ -271,7 +281,19 @@ func buildIndexData(st *state, sweeps []*sweep, incs []*incident, catalog []corp
 						}
 					}
 					failed := strings.Join(tests, ", ")
-					if excerpt != "" || failed != "" {
+					var tr triageRecord
+					hasTriage := false
+					if st != nil && st.LastTriage != nil {
+						tr, hasTriage = st.LastTriage[targetKey(pkg.Name, col.Platform, col.Profile)]
+						hasTriage = hasTriage && strings.TrimSpace(tr.Outcome) != ""
+					}
+					if hasTriage {
+						if d := strings.TrimSpace(sanitizeCode(strings.ReplaceAll(tr.Detail, "\r\n", "\n"))); d != "" && (strings.ContainsRune(d, '\n') || len(d) > 80) {
+							block := "[triage " + sanitizeText(tr.Outcome) + "]\n" + clipCode(d, 2000)
+							excerpt = pick(excerpt != "", excerpt+"\n\n"+block, block)
+						}
+					}
+					if excerpt != "" || failed != "" || hasTriage {
 						anchor := logAnchor(pkg.Name, col.Platform, col.Profile)
 						if usedAnchors[anchor] {
 							anchor = uniqueIncidentID(anchor, usedAnchors)
@@ -280,6 +302,12 @@ func buildIndexData(st *state, sweeps []*sweep, incs []*incident, catalog []corp
 						stLabel := "test failure"
 						if isBuild {
 							stLabel = pick(isICEExcerpt(res.ErrorExcerpt), "compiler ICE", "build failure")
+						}
+						if hasTriage {
+							stLabel += " · triage: " + sanitizeText(strings.TrimSpace(tr.Outcome))
+							if d := sanitizeText(strings.TrimSpace(tr.Detail)); d != "" && !strings.ContainsRune(d, '\n') && len(d) <= 80 {
+								stLabel += " (" + d + ")"
+							}
 						}
 						logEntries = append(logEntries, sweepLogEntry{
 							Anchor:      anchor,
@@ -371,20 +399,22 @@ func buildIncidentData(st *state, sweeps []*sweep, inc *incident) any {
 		heading = pkgs + ": " + pick(isICEExcerpt(inc.ErrorExcerpt), "compiler ICE", "build failure")
 	}
 	errExcerpt := clipCode(sanitizeCode(strings.ReplaceAll(strings.TrimSpace(inc.ErrorExcerpt), "\r\n", "\n")), 8000)
+	errHeading := pick(inc.isBuildFail(), "Build Error", "Error Excerpt")
 	aliveOut := formatAliveTVOutput(inc)
 	cleanedIR := inlineReducedIR(inc.ReducedIR)
-	irBundleURL := pick(!inc.isBuildFail() && cleanedIR == "" && isSafeHTTPURL(inc.BundleURL), strings.TrimSpace(inc.BundleURL), "")
+	irBundleURL := pick(hasNonInlinedReducedIR(inc), strings.TrimSpace(inc.BundleURL), "")
 	return struct {
 		Nav             navHeader
 		ID, Heading     string
 		Rows            []kvRow
+		ErrorHeading    string
 		ErrorExcerpt    string
 		AliveTVOutput   string
 		ReproCmd        string
 		CleanedIR       string
 		IRBundleURL     string
 		HighlightedDiff template.HTML
-	}{nav, inc.ID, heading, rows, errExcerpt, aliveOut, reproCommand(inc), cleanedIR, irBundleURL, highlightDiffHTML(strings.TrimSpace(inc.PassDiff))}
+	}{nav, inc.ID, heading, rows, errHeading, errExcerpt, aliveOut, reproCommand(inc), cleanedIR, irBundleURL, highlightDiffHTML(clipCode(sanitizeCode(strings.TrimSpace(inc.PassDiff)), 18000))}
 }
 
 func toIncidentRow(inc *incident) incidentRowView {
