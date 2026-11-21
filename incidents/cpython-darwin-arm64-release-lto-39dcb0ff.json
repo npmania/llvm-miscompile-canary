@@ -1,0 +1,33 @@
+{
+  "id": "cpython-darwin-arm64-release-lto-39dcb0ff",
+  "title": "cpython: ld64.lld (ThinLTO)",
+  "status": "resolved",
+  "confidence": "likely",
+  "good_sha": "8fbf94a21b69770091c73381be24fff43e89d93e",
+  "bad_sha": "d6c0a0a6a5c762fd327001c177490ee4c49ca718",
+  "culprit_sha": "39dcb0ff91b312bb269334168d5e32be78b60417",
+  "culprit_subject": "Reland \"Compute GUIDs once and store in metadata\"",
+  "fixed_sha": "d4599c550b547561ef10e580344a9afb22315c8d",
+  "culprit_pass": "ld64.lld (ThinLTO)",
+  "is_linker_bug": true,
+  "diag_o0_status": "pass",
+  "asan_ubsan_clean": true,
+  "conservative_flag_independent": true,
+  "alive_tv_status": "unsupported",
+  "alive_tv_output": "linker or ThinLTO whole-program bug; single-function verification not applicable",
+  "llubi_status": "unsupported",
+  "llubi_output": "linker or ThinLTO whole-program bug; single-function verification not applicable",
+  "standalone_repro_cmd": "clang @link.args",
+  "affected": [
+    {
+      "package": "cpython",
+      "version": "v3.14.3",
+      "platform": "darwin-arm64",
+      "profile": "release-lto",
+      "test_id": "test_math"
+    }
+  ],
+  "created_at": "2026-11-21T00:35:45.642Z",
+  "updated_at": "2026-11-21T00:35:45.642Z",
+  "resolved_at": "2026-10-19T17:07:37Z"
+}
