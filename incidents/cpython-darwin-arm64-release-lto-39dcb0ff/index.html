@@ -54,6 +54,27 @@
         </tr>
       </tbody>
     </table>
+    <h2>Error Excerpt</h2>
+    <pre><code>Traceback (most recent call last):
+  File &#34;&lt;frozen runpy&gt;&#34;, line 198, in _run_module_as_main
+  File &#34;&lt;frozen runpy&gt;&#34;, line 88, in _run_code
+  File &#34;Lib/test/__main__.py&#34;, line 1, in &lt;module&gt;
+    from test.libregrtest.main import main
+  File &#34;Lib/test/libregrtest/main.py&#34;, line 14, in &lt;module&gt;
+    from .cmdline import _parse_args, Namespace
+  File &#34;Lib/test/libregrtest/cmdline.py&#34;, line 6, in &lt;module&gt;
+    from .utils import ALL_RESOURCES, RESOURCE_NAMES, TestFilter
+  File &#34;Lib/test/libregrtest/utils.py&#34;, line 10, in &lt;module&gt;
+    import subprocess
+  File &#34;Lib/subprocess.py&#34;, line 106, in &lt;module&gt;
+    from _posixsubprocess import fork_exec as _fork_exec
+ModuleNotFoundError: No module named &#39;_posixsubprocess&#39;</code></pre>
+    <h2>Diff</h2>
+    <pre><code><span class="muted">--- good (python.exe, nm -gU | grep PyInterpreterState_Main)</span>
+<span class="muted">+++ bad (python.exe, nm -gU | grep PyInterpreterState_Main)</span>
+<span class="muted">@@ -1,2 +1,1 @@</span>
+<span class="diff-del">-_PyInterpreterState_Main</span>
+ __PyInterpreterState_Main</code></pre>
   </main>
 </body>
 </html>
