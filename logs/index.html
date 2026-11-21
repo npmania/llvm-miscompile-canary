@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <header><strong>llvm-miscompile-canary</strong> · trunk <a href="https://github.com/llvm/llvm-project/commit/a74ae5b105e3aaa31d28b52da46ff3d95fa7a6e1" rel="noopener"><code>a74ae5b105e3</code></a> · <time datetime="2026-11-20T20:53:24Z">2026-11-20 20:53 UTC</time> · <a href="/">status</a> · <a href="/corpus/">corpus</a> · <a href="https://github.com/npmania/llvm-miscompile-canary" rel="noopener">git</a></header>
+  <header><strong>llvm-miscompile-canary</strong> · trunk <a href="https://github.com/llvm/llvm-project/commit/25b1c803e1e1504f6dc11f7afd68e65ad3ee5964" rel="noopener"><code>25b1c803e1e1</code></a> · <time datetime="2026-11-21T02:48:41Z">2026-11-21 02:48 UTC</time> · <a href="/">status</a> · <a href="/corpus/">corpus</a> · <a href="https://github.com/npmania/llvm-miscompile-canary" rel="noopener">git</a></header>
   <main>
     <h1>Failure Logs</h1>
     <h2 id="log-simdutf-linux-riscv64-release-lto">simdutf (linux-riscv64 / -O3 -flto=thin) <span class="muted">· test failure</span></h2>
@@ -18,26 +18,26 @@ nternal_tests
       Start 81: utf8_length_from_utf16_tests
 78/86 Test #81: utf8_length_from_utf16_tests ...................   Passed    0.05 sec
       Start 82: to_well_formed_utf16_tests
-79/86 Test #82: to_well_formed_utf16_tests .....................   Passed   12.86 sec
+79/86 Test #82: to_well_formed_utf16_tests .....................   Passed   12.16 sec
       Start 83: convert_utf16_to_utf8_with_replacement_tests
-80/86 Test #83: convert_utf16_to_utf8_with_replacement_tests ...   Passed    0.45 sec
+80/86 Test #83: convert_utf16_to_utf8_with_replacement_tests ...   Passed    0.42 sec
       Start 84: convert_utf8_to_utf16_with_replacement_tests
-81/86 Test #84: convert_utf8_to_utf16_with_replacement_tests ...   Passed    0.13 sec
+81/86 Test #84: convert_utf8_to_utf16_with_replacement_tests ...   Passed    0.12 sec
       Start 85: fixed_string_tests
 82/86 Test #85: fixed_string_tests .............................   Passed    0.04 sec
       Start 86: nostdlibcxx_c_api_test
 83/86 Test #86: nostdlibcxx_c_api_test .........................   Passed    0.02 sec
-84/86 Test #20: validate_utf32_with_errors_tests ...............   Passed  534.19 sec
+84/86 Test #20: validate_utf32_with_errors_tests ...............   Passed  490.60 sec
 85/86 Test #19: validate_utf32_basic_tests .....................***Timeout 540.01 sec
 Checking implementation rvv
 Running &#39;validate utf32 returns true for valid input&#39;... .......... OK
 Running &#39;validate utf32 returns true for empty string&#39;...  OK
 
-86/86 Test #74: basic_fuzzer ...................................   Passed  415.37 sec
+86/86 Test #74: basic_fuzzer ...................................   Passed  450.60 sec
 
 99% tests passed, 1 tests failed out of 86
 
-Total Test time (real) = 801.34 sec
+Total Test time (real) = 834.90 sec
 
 The following tests FAILED:
 	 19 - validate_utf32_basic_tests (Timeout)
