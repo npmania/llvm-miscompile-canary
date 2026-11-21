@@ -43,6 +43,7 @@ type wrapConfig struct {
 	Profile       string
 	SDKRoot       string
 	ManifestDir   string
+	LTOCacheDir   string
 	ExtraCFlags   []string
 	ExtraLDFlags  []string
 	SaveLTOTemps  bool
@@ -124,6 +125,7 @@ func wrapEnv(c wrapConfig) []string {
 		"LMC_PROFILE=" + c.Profile,
 		"LMC_SDKROOT=" + c.SDKRoot,
 		"LMC_MANIFEST_DIR=" + c.ManifestDir,
+		"LMC_LTO_CACHE_DIR=" + c.LTOCacheDir,
 		"LMC_EXTRA_CFLAGS=" + joinFlags(c.ExtraCFlags),
 		"LMC_EXTRA_LDFLAGS=" + joinFlags(c.ExtraLDFlags),
 		"LMC_SAVE_LTO_TEMPS=" + save,
@@ -143,6 +145,7 @@ func loadWrapConfig(getenv func(string) string) wrapConfig {
 		Profile:       get("LMC_PROFILE"),
 		SDKRoot:       get("LMC_SDKROOT"),
 		ManifestDir:   get("LMC_MANIFEST_DIR"),
+		LTOCacheDir:   get("LMC_LTO_CACHE_DIR"),
 		ExtraCFlags:   splitFlags(getenv("LMC_EXTRA_CFLAGS")),
 		ExtraLDFlags:  splitFlags(getenv("LMC_EXTRA_LDFLAGS")),
 		SaveLTOTemps:  save == "1" || strings.EqualFold(save, "true"),
@@ -187,6 +190,7 @@ type wrapPlan struct {
 	randomSeed    string
 	isShared      bool
 	ltoTempsDir   string
+	ltoCacheDir   string
 	captureMatch  bool
 	captureSrc    string
 	captureSrcOut string
@@ -211,6 +215,11 @@ func runWrapper(ctx context.Context, argv0 string, args []string, cwd string, en
 	}
 	if strings.HasSuffix(plan.ltoTempsDir, ".lto.d") {
 		if err := os.MkdirAll(plan.ltoTempsDir, 0o755); err != nil {
+			return 1, err
+		}
+	}
+	if plan.ltoCacheDir != "" {
+		if err := os.MkdirAll(plan.ltoCacheDir, 0o755); err != nil {
 			return 1, err
 		}
 	}
@@ -373,20 +382,29 @@ func planWrap(cfg wrapConfig, isCXX bool, cwd string, args []string) (*wrapPlan,
 		injected = append(injected, cfg.ExtraCFlags...)
 	}
 
-	var ltoTempsDir string
+	var ltoTempsDir, ltoCacheDir string
 	if mode == "link" || mode == "compile_link" {
 		if cfg.Linker != "" {
 			injected = append(injected, linkerFlag(cfg.Linker))
 		}
 		injected = append(injected, profileLinkerFlags(prof, spec)...)
-		if cfg.SaveLTOTemps && prof == profReleaseLTO {
-			if spec.IsDarwin {
-				// ld64.lld takes single-dash -save-temps rather than --save-temps
-				ltoTempsDir = out + ".lto.d"
-				injected = append(injected, "-Wl,-save-temps", "-Wl,-object_path_lto,"+ltoTempsDir)
-			} else {
-				ltoTempsDir = filepath.Dir(out)
-				injected = append(injected, "-Wl,--save-temps")
+		if prof == profReleaseLTO {
+			if cfg.SaveLTOTemps {
+				if spec.IsDarwin {
+					// ld64.lld takes single-dash -save-temps rather than --save-temps
+					ltoTempsDir = out + ".lto.d"
+					injected = append(injected, "-Wl,-save-temps", "-Wl,-object_path_lto,"+ltoTempsDir)
+				} else {
+					ltoTempsDir = filepath.Dir(out)
+					injected = append(injected, "-Wl,--save-temps")
+				}
+			} else if cfg.LTOCacheDir != "" {
+				ltoCacheDir = resolvePath(cwd, cfg.LTOCacheDir)
+				if spec.IsDarwin {
+					injected = append(injected, "-Wl,-cache_path_lto,"+ltoCacheDir)
+				} else {
+					injected = append(injected, "-Wl,--thinlto-cache-dir="+ltoCacheDir)
+				}
 			}
 		}
 		injected = append(injected, cfg.ExtraLDFlags...)
@@ -430,7 +448,7 @@ func planWrap(cfg wrapConfig, isCXX bool, cwd string, args []string) (*wrapPlan,
 		rawArgs: slices.Clone(args), fullArgs: appendBeforeDashDash(args, injected),
 		extraEnv: append(baseEnv, "SOURCE_DATE_EPOCH=0"),
 		sources:  parsed.sources, objectFiles: parsed.objectFiles, archiveFiles: parsed.archiveFiles,
-		output: out, explicitOut: parsed.output, randomSeed: seed, isShared: parsed.isShared, ltoTempsDir: ltoTempsDir,
+		output: out, explicitOut: parsed.output, randomSeed: seed, isShared: parsed.isShared, ltoTempsDir: ltoTempsDir, ltoCacheDir: ltoCacheDir,
 		captureMatch: captureMatch, captureSrc: capMatchSrc, captureSrcOut: capSrc, captureBCOut: capBC,
 	}, nil
 }

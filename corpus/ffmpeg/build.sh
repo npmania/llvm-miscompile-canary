@@ -10,6 +10,7 @@ set -- \
   --cxx="${CXX:-$CC}" \
   --disable-asm \
   --disable-doc \
+  --disable-large-tests \
   --disable-network \
   --disable-autodetect \
   --disable-shared \

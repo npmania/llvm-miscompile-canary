@@ -18,6 +18,7 @@ const (
 	statusPass      = "pass"
 	statusTestFail  = "test_fail"
 	statusBuildFail = "build_fail"
+	statusTimeout   = "timeout"
 	statusSkipped   = "skipped"
 
 	incidentOpen     = "open"

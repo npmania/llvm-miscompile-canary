@@ -529,7 +529,7 @@ func (r *runner) prepareWorkspace(ctx context.Context, cfg runConfig) (*workspac
 	} else if srcDir, err = filepath.Abs(srcDir); err != nil {
 		return nil, err
 	}
-	for _, sub := range []string{"build", "manifest", "tmp"} {
+	for _, sub := range []string{"build", "manifest", "tmp", "lto-cache"} {
 		d := filepath.Join(absWork, sub)
 		if err := os.RemoveAll(d); err != nil {
 			return nil, err
@@ -598,10 +598,15 @@ func (r *runner) wireWorkspace(absWork, srcDir string, cfg runConfig) (*workspac
 	if cfg.TC.NM != "" {
 		overrides = append(overrides, "NM="+cfg.TC.NM)
 	}
+	ltoCacheDir := ""
+	if cfg.Profile == profReleaseLTO && !cfg.SaveLTOTemps {
+		ltoCacheDir = filepath.Join(absWork, "lto-cache")
+	}
 	overrides = append(overrides, wrapEnv(wrapConfig{
 		RealCC: cfg.TC.Clang, RealCXX: cfg.TC.ClangXX, Linker: cfg.TC.Linker,
 		Platform: cfg.Spec.ID, Profile: cfg.Profile, SDKRoot: cfg.TC.SDKRoot,
-		ManifestDir: manifestDir, ExtraCFlags: cfg.ExtraCFlags, ExtraLDFlags: cfg.ExtraLDFlags,
+		ManifestDir: manifestDir, LTOCacheDir: ltoCacheDir,
+		ExtraCFlags: cfg.ExtraCFlags, ExtraLDFlags: cfg.ExtraLDFlags,
 		SaveLTOTemps: cfg.SaveLTOTemps, CaptureTU: cfg.CaptureTU, CaptureOutDir: cfg.CaptureOutDir,
 	})...)
 	var err error
@@ -781,6 +786,20 @@ func (r *runner) testOne(ctx context.Context, rec *recipe, ws *workspace, testID
 	return out
 }
 
+func formatRunExcerpt(out runOut, maxBytes int) string {
+	body := tailText(out.Output, maxBytes)
+	if out.ExitCode == 124 && out.Err != nil {
+		if body == "" {
+			return out.Err.Error()
+		}
+		return out.Err.Error() + "\n\n" + body
+	}
+	if body == "" && out.Err != nil {
+		return tailText(out.Err.Error(), maxBytes)
+	}
+	return body
+}
+
 func (r *runner) sweepPackage(ctx context.Context, cfg runConfig) pkgResult {
 	res := pkgResult{Package: cfg.Recipe.Name, Version: cfg.Recipe.Version, Platform: cfg.Spec.ID, Profile: cfg.Profile}
 	if !cfg.Recipe.supportsPlatform(cfg.Spec.ID) {
@@ -794,11 +813,13 @@ func (r *runner) sweepPackage(ctx context.Context, cfg runConfig) pkgResult {
 		return res
 	}
 	if !bOut.Passed {
-		excerpt := tailText(bOut.Output, 1500)
 		if detectICE(bOut.Output) {
-			excerpt = "[compiler ICE] " + extractICEExcerpt(bOut.Output, 4000)
+			res.Status, res.DurationSec, res.ErrorExcerpt = statusBuildFail, time.Since(start).Seconds(), "[compiler ICE] "+extractICEExcerpt(bOut.Output, 4000)
+		} else if bOut.ExitCode == 124 {
+			res.Status, res.DurationSec, res.ErrorExcerpt = statusTimeout, time.Since(start).Seconds(), formatRunExcerpt(bOut, 1500)
+		} else {
+			res.Status, res.DurationSec, res.ErrorExcerpt = statusBuildFail, time.Since(start).Seconds(), formatRunExcerpt(bOut, 1500)
 		}
-		res.Status, res.DurationSec, res.ErrorExcerpt = statusBuildFail, time.Since(start).Seconds(), excerpt
 		return res
 	}
 	tOut, failIDs := r.testAll(ctx, cfg.Recipe, ws, cfg.ExtraEnv, cfg.Timeout)
@@ -807,7 +828,11 @@ func (r *runner) sweepPackage(ctx context.Context, cfg runConfig) pkgResult {
 		res.Status = statusPass
 		return res
 	}
-	res.Status, res.FailedTests, res.ErrorExcerpt = statusTestFail, failIDs, tailText(tOut.Output, 1500)
+	if tOut.ExitCode == 124 && len(failIDs) == 0 {
+		res.Status, res.ErrorExcerpt = statusTimeout, formatRunExcerpt(tOut, 1500)
+		return res
+	}
+	res.Status, res.FailedTests, res.ErrorExcerpt = statusTestFail, failIDs, formatRunExcerpt(tOut, 1500)
 	return res
 }
 

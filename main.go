@@ -292,7 +292,7 @@ func cmdBuild(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		if detectICE(out.Output) {
 			ice = " (compiler ICE)"
 		}
-		return fmt.Errorf("build failed%s (exit %d):\n%s", ice, out.ExitCode, tailText(out.Output, 3000))
+		return fmt.Errorf("build failed%s (exit %d):\n%s", ice, out.ExitCode, formatRunExcerpt(out, 3000))
 	}
 	fmt.Fprintf(stdout, "built %s (%s / %s) in %.2fs -> %s\n", rec.Name, tc.Spec.ID, *prof, out.Duration.Seconds(), ws.BuildDir)
 	return nil
@@ -345,14 +345,14 @@ func cmdTest(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	if target != "" {
 		out := r.testOne(ctx, rec, ws, target, nil, crossTimeout(tc.Spec, rec.timeout()))
 		if !out.Passed {
-			return fmt.Errorf("test %s failed (exit %d):\n%s", target, out.ExitCode, tailText(out.Output, 3000))
+			return fmt.Errorf("test %s failed (exit %d):\n%s", target, out.ExitCode, formatRunExcerpt(out, 3000))
 		}
 		fmt.Fprintf(stdout, "PASS %s %s (%.2fs)\n", rec.Name, target, out.Duration.Seconds())
 		return nil
 	}
 	out, failIDs := r.testAll(ctx, rec, ws, nil, crossTimeout(tc.Spec, rec.timeout()))
 	if !out.Passed {
-		return fmt.Errorf("test_all failed (failed=%v, exit=%d):\n%s", failIDs, out.ExitCode, tailText(out.Output, 3000))
+		return fmt.Errorf("test_all failed (failed=%v, exit=%d):\n%s", failIDs, out.ExitCode, formatRunExcerpt(out, 3000))
 	}
 	fmt.Fprintf(stdout, "PASS %s test_all (%.2fs)\n", rec.Name, out.Duration.Seconds())
 	return nil
@@ -418,7 +418,7 @@ func cmdSweep(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 					return err
 				}
 			}
-			if pr.Status == statusTestFail || pr.Status == statusBuildFail {
+			if pr.Status == statusTestFail || pr.Status == statusBuildFail || pr.Status == statusTimeout {
 				anyFail = true
 			}
 			fmt.Fprintf(stdout, "[sweep] %-16s %-14s %-12s -> %s (%.2fs)\n", pr.Package, pr.Platform, pr.Profile, pr.Status, pr.DurationSec)

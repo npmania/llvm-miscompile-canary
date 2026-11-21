@@ -3061,3 +3061,110 @@ func TestBuildFailWithCulpritReportAndSite(t *testing.T) {
 		}
 	}
 }
+
+func TestTimeoutAggregateAndSite(t *testing.T) {
+	t.Parallel()
+	storeDir, fragsDir, outDir := t.TempDir(), t.TempDir(), t.TempDir()
+	goodSHA := "1111111111111111111111111111111111111111"
+	badSHA := "2222222222222222222222222222222222222222"
+	now := time.Date(2026, 11, 21, 10, 0, 0, 0, time.UTC)
+
+	if err := saveState(storeDir, &state{
+		LastGoodSHA: goodSHA,
+		LastGoodByTarget: map[string]string{
+			targetKey("ffmpeg", platLinuxRISCV64, profReleaseLTO): goodSHA,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	openInc := &incident{
+		ID:         "open-ffmpeg-inc",
+		Title:      "ffmpeg: earlier issue",
+		Status:     incidentOpen,
+		Confidence: confLikely,
+		GoodSHA:    goodSHA,
+		BadSHA:     goodSHA,
+		Affected:   []affected{{Package: "ffmpeg", Platform: platLinuxRISCV64, Profile: profReleaseLTO, TestID: "fate-adler32", GoodSHA: goodSHA}},
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if _, err := saveIncident(storeDir, openInc); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writeResultFragment(filepath.Join(fragsDir, "frag.json"), []pkgResult{
+		{
+			Package:      "ffmpeg",
+			Version:      "n8.1.3",
+			Platform:     platLinuxRISCV64,
+			Profile:      profReleaseLTO,
+			Status:       statusTimeout,
+			DurationSec:  4500,
+			ErrorExcerpt: "test_all.sh timed out after 1h15m0s\n\nTEST    pixfmt-monob",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	regOut := filepath.Join(t.TempDir(), "regs.json")
+	var out, errBuf bytes.Buffer
+	if code := runCLI(context.Background(), []string{
+		"lmc", "aggregate", "-frags", fragsDir, "-store", storeDir, "-sha", badSHA, "-out", outDir, "-reg-out", regOut,
+	}, &out, &errBuf); code != 0 {
+		t.Fatalf("aggregate failed (%d): %s", code, errBuf.String())
+	}
+
+	var regs []regressionTarget
+	if err := readJSON(regOut, &regs); err != nil {
+		t.Fatal(err)
+	}
+	if len(regs) != 0 {
+		t.Fatalf("statusTimeout should not emit regression target, got %+v", regs)
+	}
+	incs, err := loadAllIncidents(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(incs) != 1 || incs[0].ID != openInc.ID || incs[0].Status != incidentOpen {
+		t.Fatalf("statusTimeout modified/resolved incidents unexpectedly: %+v", incs)
+	}
+	st, err := loadState(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotGood := st.targetGoodSHA("ffmpeg", platLinuxRISCV64, profReleaseLTO); gotGood != goodSHA {
+		t.Fatalf("LastGoodByTarget advanced on timeout: got %q, want %q", gotGood, goodSHA)
+	}
+
+	idxRaw, err := os.ReadFile(filepath.Join(outDir, "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := string(idxRaw)
+	if err := checkHTMLNoUnsafeCrossRefs(idx); err != nil {
+		t.Fatalf("index cross-ref: %v", err)
+	}
+	if !strings.Contains(idx, `<a class="err" href="/logs/#log-ffmpeg-linux-riscv64-release-lto">timeout</a>`) {
+		t.Fatalf("index.html missing timeout log link:\n%s", idx)
+	}
+
+	logsRaw, err := os.ReadFile(filepath.Join(outDir, "logs", "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	logsPage := string(logsRaw)
+	if err := checkHTMLNoUnsafeCrossRefs(logsPage); err != nil {
+		t.Fatalf("logs cross-ref: %v", err)
+	}
+	for _, want := range []string{
+		`id="log-ffmpeg-linux-riscv64-release-lto"`,
+		`ffmpeg (linux-riscv64 / -O3 -flto=thin)`,
+		`· timeout`,
+		`test_all.sh timed out after 1h15m0s`,
+		`TEST    pixfmt-monob`,
+	} {
+		if !strings.Contains(logsPage, want) {
+			t.Errorf("logs/index.html missing %q:\n%s", want, logsPage)
+		}
+	}
+}

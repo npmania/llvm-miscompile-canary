@@ -1976,6 +1976,76 @@ int main(void) { return calc(5) == 6 ? 0 : 1; }
 			t.Fatalf("expected conservative build to be skipped when diag-O0 failed, log=\n%s", string(logRaw))
 		}
 	})
+
+	makeTimeoutRecipe := func(t *testing.T, name, buildBody, testAllBody, testOneBody string) (*recipe, string) {
+		t.Helper()
+		tmp := t.TempDir()
+		srcDir := filepath.Join(tmp, "src")
+		recDir := filepath.Join(tmp, "recipe")
+		if err := os.MkdirAll(srcDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(recDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(srcDir, "main.c"), []byte("int main(void){return 0;}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		for fn, body := range map[string]string{
+			"build.sh":    "#!/bin/sh\nset -eu\n" + buildBody + "\n",
+			"test_all.sh": "#!/bin/sh\nset -eu\n" + testAllBody + "\n",
+			"test_one.sh": "#!/bin/sh\nset -eu\n" + testOneBody + "\n",
+		} {
+			if err := os.WriteFile(filepath.Join(recDir, fn), []byte(body), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return &recipe{Name: name, Version: "1.0", Lang: "c", TimeoutMin: 1, SmokeTest: "smoke", Platforms: []string{spec.ID}, Dir: recDir}, srcDir
+	}
+
+	t.Run("test-all-timeout", func(t *testing.T) {
+		t.Parallel()
+		rec, srcDir := makeTimeoutRecipe(t, "testto", "exit 0", "echo 'TEST    pixfmt-monob'\nsleep 10", "exit 0")
+		res, err := triage(context.Background(), triageOpts{
+			Runner:      &runner{LMCBin: selfExe, Jobs: 1},
+			Recipe:      rec,
+			Spec:        spec,
+			Profile:     profDistroO2,
+			GoodTC:      goodTC,
+			BadTC:       goodTC,
+			GoodSHA:     "111111111111",
+			BadSHA:      "222222222222",
+			SrcDir:      srcDir,
+			WorkDir:     filepath.Join(filepath.Dir(srcDir), "work"),
+			TestTimeout: 500 * time.Millisecond,
+		})
+		if err != nil || !res.Dropped || res.DropReason != "timeout" ||
+			!strings.Contains(res.Detail, "test_all.sh timed out after") ||
+			!strings.Contains(res.Detail, "TEST    pixfmt-monob") {
+			t.Fatalf("expected timeout drop on test_all timeout, got res=%+v err=%v", res, err)
+		}
+	})
+
+	t.Run("build-timeout", func(t *testing.T) {
+		t.Parallel()
+		rec, srcDir := makeTimeoutRecipe(t, "buildto", "echo 'partial build log'\nexit 124", "exit 0", "exit 0")
+		res, err := triage(context.Background(), triageOpts{
+			Runner:  &runner{LMCBin: selfExe, Jobs: 1},
+			Recipe:  rec,
+			Spec:    spec,
+			Profile: profDistroO2,
+			GoodTC:  goodTC,
+			BadTC:   goodTC,
+			GoodSHA: "111111111111",
+			BadSHA:  "222222222222",
+			SrcDir:  srcDir,
+			WorkDir: filepath.Join(filepath.Dir(srcDir), "work"),
+		})
+		if err != nil || !res.Dropped || res.DropReason != "timeout" || !res.BuildFailed ||
+			!strings.Contains(res.Detail, "partial build log") {
+			t.Fatalf("expected timeout drop on build timeout, got res=%+v err=%v", res, err)
+		}
+	})
 }
 
 func TestTriagePipeline(t *testing.T) {
@@ -3117,5 +3187,28 @@ func TestStripLinkLibsAndBuildFailCompileArgs(t *testing.T) {
 	wantRsp := []string{"-O2", "foo.c", "-S", "-emit-llvm", "-o", "out.ll"}
 	if !slices.Equal(gotRsp, wantRsp) {
 		t.Fatalf("buildFailCompileArgs(@flags.rsp) = %v, want %v", gotRsp, wantRsp)
+	}
+}
+
+func TestRewriteLinkArgsStripsLTOCache(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	raw := []string{
+		"-O3", "-flto=thin",
+		"-Wl,--thinlto-cache-dir=/tmp/c",
+		"-Wl,--thinlto-cache-dir,/tmp/c2",
+		"-Wl,-cache_path_lto,/tmp/c3",
+		"-Wl,-cache_path_lto=/tmp/c4",
+		"-Xlinker", "--thinlto-cache-dir", "-Xlinker", "/tmp/c5",
+		"-Wl,--thinlto-jobs=4",
+		"foo.o", "-o", "app",
+	}
+	got, err := rewriteLinkArgs(raw, linkRewriteOpts{cwd: dir, stripLTO: false})
+	if err != nil {
+		t.Fatalf("rewriteLinkArgs: %v", err)
+	}
+	want := []string{"-O3", "-flto=thin", "-Wl,--thinlto-jobs=4", "foo.o", "-o", "app"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("rewriteLinkArgs(stripLTO=false) = %v, want %v", got, want)
 	}
 }

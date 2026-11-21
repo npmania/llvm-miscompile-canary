@@ -354,6 +354,41 @@ func TestWrapperProbeAndPlan(t *testing.T) {
 	if !slices.Contains(ws.Env, "CMAKE_TOOLCHAIN_FILE="+tcFile) || !slices.Contains(ws.Env, "QEMU_CPU=rva23u64") {
 		t.Fatalf("missing cross env in ws.Env")
 	}
+
+	ltoCacheCfg := wrapConfig{
+		RealCC: "/fake/clang", RealCXX: "/fake/clang++", Linker: "/fake/ld.lld",
+		Platform: platLinuxX86, Profile: profReleaseLTO, LTOCacheDir: "/tmp/lto-cache",
+	}
+	pCacheELF, err := planWrap(ltoCacheCfg, false, "/work", []string{"a.o", "-o", "/work/app"})
+	if err != nil || pCacheELF.ltoCacheDir != "/tmp/lto-cache" || !slices.Contains(pCacheELF.fullArgs, "-Wl,--thinlto-cache-dir=/tmp/lto-cache") {
+		t.Fatalf("ELF LTO cache plan = %+v (err=%v)", pCacheELF, err)
+	}
+	ltoCacheDarwin := ltoCacheCfg
+	ltoCacheDarwin.Platform = platDarwinARM
+	ltoCacheDarwin.Linker = "/fake/ld64.lld"
+	ltoCacheDarwin.SDKRoot = "/fake/MacOSX.sdk"
+	pCacheDarwin, err := planWrap(ltoCacheDarwin, false, "/work", []string{"a.o", "-o", "/work/app"})
+	if err != nil || pCacheDarwin.ltoCacheDir != "/tmp/lto-cache" || !slices.Contains(pCacheDarwin.fullArgs, "-Wl,-cache_path_lto,/tmp/lto-cache") {
+		t.Fatalf("Darwin LTO cache plan = %+v (err=%v)", pCacheDarwin, err)
+	}
+	ltoCacheSaveTemps := ltoCacheCfg
+	ltoCacheSaveTemps.SaveLTOTemps = true
+	pNoCacheTemps, err := planWrap(ltoCacheSaveTemps, false, "/work", []string{"a.o", "-o", "/work/app"})
+	if err != nil || pNoCacheTemps.ltoCacheDir != "" || slices.Contains(pNoCacheTemps.fullArgs, "-Wl,--thinlto-cache-dir=/tmp/lto-cache") {
+		t.Fatalf("SaveLTOTemps should disable LTO cache: %+v (err=%v)", pNoCacheTemps, err)
+	}
+	ltoCacheO2 := ltoCacheCfg
+	ltoCacheO2.Profile = profDistroO2
+	pNoCacheO2, err := planWrap(ltoCacheO2, false, "/work", []string{"a.o", "-o", "/work/app"})
+	if err != nil || pNoCacheO2.ltoCacheDir != "" || slices.Contains(pNoCacheO2.fullArgs, "-Wl,--thinlto-cache-dir=/tmp/lto-cache") {
+		t.Fatalf("distro-O2 should not enable LTO cache: %+v (err=%v)", pNoCacheO2, err)
+	}
+	wsLTO, err := (&runner{LMCBin: "/bin/sh"}).wireWorkspace(rvWork, filepath.Join(rvWork, "src"), runConfig{
+		Spec: rvSpec, Profile: profReleaseLTO, TC: &toolchain{Spec: rvSpec, Clang: "/fake/clang", ClangXX: "/fake/clang++", Linker: "/fake/ld.lld"},
+	})
+	if err != nil || !slices.Contains(wsLTO.Env, "LMC_LTO_CACHE_DIR="+filepath.Join(rvWork, "lto-cache")) {
+		t.Fatalf("wireWorkspace(release-lto) missing LMC_LTO_CACHE_DIR: err=%v env=%v", err, wsLTO.Env)
+	}
 }
 
 func TestWrapperCaptureAndStripFlags(t *testing.T) {
@@ -1553,4 +1588,78 @@ func TestCCacheDisableAndCTestTimeout(t *testing.T) {
 	if !strings.Contains(string(ctestArgs), "--timeout\n900\n") {
 		t.Fatalf("riscv64 timeout_min=15 ctest args = %q, want --timeout 900", string(ctestArgs))
 	}
+}
+
+func TestSweepPackageTimeout(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	srcDir := filepath.Join(dir, "src")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	spec := platformSpecs[platLinuxX86]
+	tc := &toolchain{Spec: spec, Clang: "/bin/true", ClangXX: "/bin/true", Linker: "/bin/true"}
+	r := &runner{LMCBin: "/bin/sh", Jobs: 1}
+
+	mkRecipe := func(name, buildBody, testAllBody, testOneBody string) *recipe {
+		t.Helper()
+		p := filepath.Join(dir, "rec-"+name)
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for fn, body := range map[string]string{
+			"build.sh":    "#!/bin/sh\nset -eu\n" + buildBody + "\n",
+			"test_all.sh": "#!/bin/sh\nset -eu\n" + testAllBody + "\n",
+			"test_one.sh": "#!/bin/sh\nset -eu\n" + testOneBody + "\n",
+		} {
+			if err := os.WriteFile(filepath.Join(p, fn), []byte(body), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return &recipe{
+			Name: name, Version: "1.0", Lang: "c", TimeoutMin: 5, SmokeTest: "smoke",
+			Platforms: []string{spec.ID}, Dir: p,
+		}
+	}
+
+	t.Run("test-timeout", func(t *testing.T) {
+		t.Parallel()
+		testTimeoutRec := mkRecipe("test-to", "exit 0", "echo 'TEST    pixfmt-monob'\nsleep 10", "exit 0")
+		resTestTO := r.sweepPackage(context.Background(), runConfig{
+			Recipe: testTimeoutRec, Spec: spec, Profile: profReleaseLTO, TC: tc,
+			WorkDir: filepath.Join(dir, "w-test-to"), SrcDir: srcDir, Timeout: 500 * time.Millisecond,
+		})
+		if resTestTO.Status != statusTimeout || len(resTestTO.FailedTests) != 0 ||
+			!strings.Contains(resTestTO.ErrorExcerpt, "test_all.sh timed out after") ||
+			!strings.Contains(resTestTO.ErrorExcerpt, "TEST    pixfmt-monob") {
+			t.Fatalf("test timeout sweepPackage = %+v", resTestTO)
+		}
+	})
+
+	t.Run("test-timeout-smoke-fail", func(t *testing.T) {
+		t.Parallel()
+		smokeFailRec := mkRecipe("smoke-fail", "exit 0", "sleep 10", "exit 1")
+		resSmokeFail := r.sweepPackage(context.Background(), runConfig{
+			Recipe: smokeFailRec, Spec: spec, Profile: profReleaseLTO, TC: tc,
+			WorkDir: filepath.Join(dir, "w-smoke-fail"), SrcDir: srcDir, Timeout: 500 * time.Millisecond,
+		})
+		if resSmokeFail.Status != statusTestFail || !slices.Equal(resSmokeFail.FailedTests, []string{"smoke"}) ||
+			!strings.Contains(resSmokeFail.ErrorExcerpt, "test_all.sh timed out after") {
+			t.Fatalf("test timeout + smoke fail sweepPackage = %+v", resSmokeFail)
+		}
+	})
+
+	t.Run("build-timeout", func(t *testing.T) {
+		t.Parallel()
+		buildTimeoutRec := mkRecipe("build-to", "echo 'compiling foo.c'\nsleep 10", "exit 0", "exit 0")
+		resBuildTO := r.sweepPackage(context.Background(), runConfig{
+			Recipe: buildTimeoutRec, Spec: spec, Profile: profDistroO2, TC: tc,
+			WorkDir: filepath.Join(dir, "w-build-to"), SrcDir: srcDir, Timeout: 500 * time.Millisecond,
+		})
+		if resBuildTO.Status != statusTimeout ||
+			!strings.Contains(resBuildTO.ErrorExcerpt, "build.sh timed out after") ||
+			!strings.Contains(resBuildTO.ErrorExcerpt, "compiling foo.c") {
+			t.Fatalf("build timeout sweepPackage = %+v", resBuildTO)
+		}
+	})
 }

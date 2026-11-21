@@ -156,11 +156,19 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 		return nil, fmt.Errorf("bad build: %w", err)
 	}
 	if !badOut.Passed {
+		isICE := detectICE(badOut.Output)
+		if badOut.ExitCode == 124 && !isICE {
+			return &triageResult{
+				Dropped:     true,
+				DropReason:  "timeout",
+				BuildFailed: true,
+				Detail:      formatRunExcerpt(badOut, 800),
+			}, nil
+		}
 		goodWS, goodOut, gErr := buildProfile("good-build", o.Profile, o.GoodTC, nil, nil, false)
 		if gErr != nil {
 			return nil, fmt.Errorf("good build: %w", gErr)
 		}
-		isICE := detectICE(badOut.Output)
 		if !goodOut.Passed {
 			return &triageResult{
 				Dropped:     true,
@@ -207,6 +215,9 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 		}
 		if allOut.Passed {
 			return &triageResult{Dropped: true, DropReason: "flaky"}, nil
+		}
+		if allOut.ExitCode == 124 && len(failIDs) == 0 {
+			return &triageResult{Dropped: true, DropReason: "timeout", Detail: formatRunExcerpt(allOut, 800)}, nil
 		}
 		testFailOut = allOut.Output
 		if len(failIDs) > 0 {

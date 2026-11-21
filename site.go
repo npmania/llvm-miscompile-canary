@@ -260,15 +260,19 @@ func buildIndexData(st *state, sweeps []*sweep, incs []*incident, catalog []corp
 			switch res.Status {
 			case statusPass:
 				row.Cells = append(row.Cells, matrixCell{"pass", formatDuration(res.DurationSec), ""})
-			case statusTestFail, statusBuildFail:
+			case statusTestFail, statusBuildFail, statusTimeout:
 				isBuild := res.Status == statusBuildFail
-				kind, text := pick(isBuild, "err", "fail"), pick(isBuild, "err", "fail")
+				isTimeout := res.Status == statusTimeout
+				kind := pick(isBuild || isTimeout, "err", "fail")
+				text := pick(isTimeout, "timeout", pick(isBuild, "err", "fail"))
 				lk := linkKey{pkg.Name, col.Platform, col.Profile, isBuild}
 				incID := ""
-				if incExists[res.IncidentID] {
-					incID = res.IncidentID
+				if !isTimeout {
+					if incExists[res.IncidentID] {
+						incID = res.IncidentID
+					}
+					incID = cmp.Or(incID, openByTarget[lk], closedByTarget[lk])
 				}
-				incID = cmp.Or(incID, openByTarget[lk], closedByTarget[lk])
 				href := ""
 				if incID != "" {
 					href = "/incidents/" + incID + "/"
@@ -300,7 +304,9 @@ func buildIndexData(st *state, sweeps []*sweep, incs []*incident, catalog []corp
 						}
 						usedAnchors[anchor] = true
 						stLabel := "test failure"
-						if isBuild {
+						if isTimeout {
+							stLabel = "timeout"
+						} else if isBuild {
 							stLabel = pick(isICEExcerpt(res.ErrorExcerpt), "compiler ICE", "build failure")
 						}
 						if hasTriage {

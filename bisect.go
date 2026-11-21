@@ -1356,8 +1356,10 @@ func rewriteLinkArgs(rawArgs []string, opts linkRewriteOpts) ([]string, error) {
 			switch {
 			case isSaveTempsLinkerTok(t):
 				continue
-			case (t == "-object_path_lto" || t == "--lto-obj-path") && j+1 < len(toks):
+			case (t == "-object_path_lto" || t == "--lto-obj-path" || t == "-cache_path_lto" || t == "--thinlto-cache-dir") && j+1 < len(toks):
 				j++
+				continue
+			case strings.HasPrefix(t, "--thinlto-cache-dir=") || strings.HasPrefix(t, "-cache_path_lto="):
 				continue
 			case opts.stripLTO && strings.HasPrefix(t, "--thinlto-jobs="):
 				continue
