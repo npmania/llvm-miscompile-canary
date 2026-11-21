@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>cpython: ld64.lld (ThinLTO) · llvm-miscompile-canary</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header><strong>llvm-miscompile-canary</strong> · trunk <a href="https://github.com/llvm/llvm-project/commit/a74ae5b105e3aaa31d28b52da46ff3d95fa7a6e1" rel="noopener"><code>a74ae5b105e3</code></a> · <time datetime="2026-11-20T20:53:24Z">2026-11-20 20:53 UTC</time> · <a href="/">status</a> · <a href="/corpus/">corpus</a> · <a href="https://github.com/npmania/llvm-miscompile-canary" rel="noopener">git</a></header>
+  <main>
+    <h1>cpython: ld64.lld (ThinLTO)</h1>
+    <table class="kv">
+      <tbody>
+        <tr>
+          <th scope="row">Status</th>
+          <td>resolved at <a href="https://github.com/llvm/llvm-project/commit/d4599c550b547561ef10e580344a9afb22315c8d" rel="noopener"><code>d4599c550b54</code></a></td>
+        </tr>
+        <tr>
+          <th scope="row">Commit</th>
+          <td><a href="https://github.com/llvm/llvm-project/commit/39dcb0ff91b312bb269334168d5e32be78b60417" rel="noopener"><code>39dcb0ff91b3</code></a> (Reland &#34;Compute GUIDs once and store in metadata&#34;)</td>
+        </tr>
+        <tr>
+          <th scope="row">Range</th>
+          <td><a href="https://github.com/llvm/llvm-project/compare/8fbf94a21b69770091c73381be24fff43e89d93e...d6c0a0a6a5c762fd327001c177490ee4c49ca718" rel="noopener"><code>8fbf94a21b69</code> .. <code>d6c0a0a6a5c7</code></a></td>
+        </tr>
+        <tr>
+          <th scope="row">Pass</th>
+          <td><code>ld64.lld (ThinLTO)</code></td>
+        </tr>
+        <tr>
+          <th scope="row">Targets</th>
+          <td><code>cpython</code> / <code>test_math</code> (<code>darwin-arm64</code>: <code>-O3 -flto=thin</code>)</td>
+        </tr>
+        <tr>
+          <th scope="row"><code>-O0</code></th>
+          <td>pass</td>
+        </tr>
+        <tr>
+          <th scope="row">Sanitizers</th>
+          <td><code>asan,ubsan</code> clean</td>
+        </tr>
+        <tr>
+          <th scope="row">Conservative</th>
+          <td>reproduces (<code>-fno-strict-aliasing -fwrapv -ftrivial-auto-var-init=zero</code>)</td>
+        </tr>
+        <tr>
+          <th scope="row"><code>alive-tv</code></th>
+          <td>unsupported</td>
+        </tr>
+        <tr>
+          <th scope="row"><code>llubi</code></th>
+          <td>unsupported</td>
+        </tr>
+      </tbody>
+    </table>
+  </main>
+</body>
+</html>
