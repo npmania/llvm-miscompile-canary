@@ -1147,6 +1147,11 @@ func formatGroupBody(incs []*incident, key, siteURL string) string {
 			fmt.Fprintf(&b, "`%s`:\n\n%sllvm\n%s\n%s\n\n", reproCommand(primary), f, ir, f)
 		} else if hasNonInlinedReducedIR(primary) {
 			fmt.Fprintf(&b, "Reduced IR exceeds inline limit; see `reduced.ll` in [reproducer.tar.zst](%s).\n\n", strings.TrimSpace(primary.BundleURL))
+		} else if rawErr := strings.ReplaceAll(strings.TrimSpace(primary.ErrorExcerpt), "\r\n", "\n"); rawErr != "" {
+			if excerpt := clipCode(sanitizeCode(rawErr), 4000); excerpt != "" {
+				f := fenceFor(excerpt)
+				fmt.Fprintf(&b, "%s\n%s\n%s\n\n", f, excerpt, f)
+			}
 		}
 		if diff := clipCode(sanitizeCode(strings.TrimSpace(primary.PassDiff)), 18000); diff != "" {
 			f := fenceFor(diff)

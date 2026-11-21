@@ -134,6 +134,7 @@ type objectBisectResult struct {
 	UsedNativeLTO bool
 	IsLinkerBug   bool
 	LinkerName    string
+	LinkDiff      string
 	TargetLink    *linkRec
 	decomp        *linkDecomp
 	relinkSingle  func(context.Context, string) (bool, string, error)
@@ -372,6 +373,10 @@ func detectLinkerBug(ctx context.Context, o objectBisectOpts, d *linkDecomp, tar
 	if o.GoodTC.Linker == "" || o.BadTC.Linker == "" {
 		return nil, false, nil
 	}
+	linkOut := targetLink.Output
+	if linkOut != "" && !filepath.IsAbs(linkOut) && targetLink.CWD != "" {
+		linkOut = filepath.Join(targetLink.CWD, linkOut)
+	}
 	if err := d.relinkWith(ctx, o.GoodTC, o.GoodTC.Linker, pickGood); err != nil {
 		return nil, false, nil
 	}
@@ -379,12 +384,19 @@ func detectLinkerBug(ctx context.Context, o objectBisectOpts, d *linkDecomp, tar
 	if err != nil || !goodLDPass {
 		return nil, false, err
 	}
+	goodSyms, goodOK := exportedSymbols(ctx, o.GoodTC, linkOut)
 	if err := d.relinkWith(ctx, o.GoodTC, o.BadTC.Linker, pickGood); err != nil {
 		return nil, false, nil
 	}
 	badLDPass, err := runTest()
 	if err != nil || badLDPass {
 		return nil, false, err
+	}
+	var linkDiff string
+	if goodOK {
+		if badSyms, badOK := exportedSymbols(ctx, o.BadTC, linkOut); badOK {
+			linkDiff = diffExportedSymbols(ctx, linkOut, goodSyms, badSyms)
+		}
 	}
 	linkerName := filepath.Base(o.BadTC.Linker)
 	if o.Profile == profReleaseLTO {
@@ -394,6 +406,7 @@ func detectLinkerBug(ctx context.Context, o objectBisectOpts, d *linkDecomp, tar
 	return &objectBisectResult{
 		IsLinkerBug: true,
 		LinkerName:  linkerName,
+		LinkDiff:    linkDiff,
 		TargetLink:  &tlCopy,
 		decomp:      d,
 		relinkLinker: func(rctx context.Context, lldBin string) (bool, string, error) {
@@ -403,6 +416,60 @@ func detectLinkerBug(ctx context.Context, o objectBisectOpts, d *linkDecomp, tar
 			return o.Test(rctx)
 		},
 	}, true, nil
+}
+
+func exportedSymbols(ctx context.Context, tc *toolchain, binPath string) ([]string, bool) {
+	if binPath == "" {
+		return nil, false
+	}
+	var nmBin string
+	if tc != nil && tc.NM != "" {
+		nmBin = tc.NM
+	} else if p, err := exec.LookPath("llvm-nm"); err == nil {
+		nmBin = p
+	} else if p, err := exec.LookPath("nm"); err == nil {
+		nmBin = p
+	}
+	if nmBin == "" {
+		return nil, false
+	}
+	var args []string
+	switch {
+	case strings.Contains(filepath.Base(nmBin), "llvm-nm"):
+		args = []string{"--extern-only", "--defined-only", "--just-symbol-name", binPath}
+	case (tc != nil && tc.Spec.IsDarwin) || runtime.GOOS == "darwin":
+		args = []string{"-gU", "-j", binPath}
+	default:
+		args = []string{"-g", "--defined-only", "-j", binPath}
+	}
+	out, err := exec.CommandContext(ctx, nmBin, args...).Output()
+	if err != nil {
+		return nil, false
+	}
+	var syms []string
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasSuffix(line, ":") {
+			continue
+		}
+		syms = append(syms, line)
+	}
+	if len(syms) == 0 {
+		return nil, false
+	}
+	slices.Sort(syms)
+	return slices.Compact(syms), true
+}
+
+func diffExportedSymbols(ctx context.Context, target string, goodSyms, badSyms []string) string {
+	if len(goodSyms) == 0 || len(badSyms) == 0 {
+		return ""
+	}
+	base := filepath.Base(target)
+	if base == "" || base == "." || base == string(filepath.Separator) {
+		base = "binary"
+	}
+	return unifiedDiff(ctx, "good ("+base+")", strings.Join(goodSyms, "\n"), "bad ("+base+")", strings.Join(badSyms, "\n"))
 }
 
 func relinkMapped(ctx context.Context, tc *toolchain, goodBuild, badBuild string, rec linkRec, scratchDir, tag string) error {

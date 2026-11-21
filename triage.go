@@ -191,6 +191,7 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 		return &triageResult{Incident: inc, BuildFailed: true, IsICE: isICE}, nil
 	}
 
+	var testFailOut string
 	testID := strings.TrimSpace(o.TestID)
 	if testID == "" {
 		allOut, failIDs := o.Runner.testAll(ctx, o.Recipe, badWS, nil, o.TestTimeout)
@@ -200,6 +201,7 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 		if allOut.Passed {
 			return &triageResult{Dropped: true, DropReason: "flaky"}, nil
 		}
+		testFailOut = allOut.Output
 		if len(failIDs) > 0 {
 			testID = failIDs[0]
 		} else {
@@ -211,7 +213,7 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 	if attempts <= 0 {
 		attempts = 3
 	}
-	for range attempts {
+	for i := range attempts {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -221,6 +223,9 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 		}
 		if out.Passed {
 			return &triageResult{Dropped: true, DropReason: "flaky"}, nil
+		}
+		if i == 0 && strings.TrimSpace(out.Output) != "" {
+			testFailOut = out.Output
 		}
 	}
 
@@ -313,7 +318,7 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 
 	if objRes.IsLinkerBug {
 		msg := "linker or ThinLTO whole-program bug; single-function verification not applicable"
-		passRes = &passBisectResult{CulpritPass: objRes.LinkerName}
+		passRes = &passBisectResult{CulpritPass: objRes.LinkerName, PassDiff: objRes.LinkDiff}
 		aliveRes = formalResult{Status: formalUnsupported, Output: msg}
 		llubiRes = formalResult{Status: formalUnsupported, Output: msg}
 		if objRes.TargetLink != nil {
@@ -392,6 +397,8 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 		return nil, err
 	}
 
+	testErr := clipCode(sanitizeCode(tailText(stripWorkDirs(strings.ReplaceAll(strings.TrimSpace(testFailOut), "\r\n", "\n"), badWS.SrcDir, badWS.BuildDir), 4000)), 4000)
+
 	now := time.Now().UTC()
 	incID := buildIncidentID(o.Recipe.Name, o.Spec.ID, o.Profile, testID, o.BadSHA, culpritSHA)
 	inc := &incident{
@@ -419,6 +426,7 @@ func triage(ctx context.Context, o triageOpts) (*triageResult, error) {
 		ReducedIR:                   redRes.ReducedIR,
 		HasReducedIR:                fileNonEmpty(redRes.ReducedPath),
 		StandaloneReproCmd:          tuCmd,
+		ErrorExcerpt:                testErr,
 		PassDiff:                    clipCode(passRes.PassDiff, 64000),
 		Affected:                    []affected{{Package: o.Recipe.Name, Version: o.Recipe.Version, Platform: o.Spec.ID, Profile: o.Profile, TestID: testID}},
 		CreatedAt:                   now,
@@ -1625,6 +1633,20 @@ func formatCulpritTU(srcDir, buildDir string, culprit *compiledObj) string {
 		return filepath.ToSlash(rel)
 	}
 	return filepath.Base(culprit.BadObj)
+}
+
+func stripWorkDirs(s string, dirs ...string) string {
+	for _, d := range dirs {
+		if d == "" {
+			continue
+		}
+		clean := filepath.Clean(d)
+		s = strings.ReplaceAll(s, clean+string(filepath.Separator), "")
+		if real := evalSymlinksExisting(clean); real != "" && real != clean {
+			s = strings.ReplaceAll(s, real+string(filepath.Separator), "")
+		}
+	}
+	return s
 }
 
 func buildIncidentID(pkg, plat, prof, testID, badSHA, culpritSHA string) string {

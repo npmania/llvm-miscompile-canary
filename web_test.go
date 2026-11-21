@@ -2876,3 +2876,48 @@ func TestGroupQualifiesForIssueAndDryRunUpdate(t *testing.T) {
 		t.Fatalf("offline dry-run update on tracked downgraded issue: acts=%+v err=%v out=%s", acts, err, dry.String())
 	}
 }
+
+func TestLinkerBugReportAndSite(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 21, 1, 0, 0, 0, time.UTC)
+	inc := &incident{
+		ID: "cpython-darwin-arm64-release-lto-39dcb0ff", Status: incidentOpen, Confidence: confLikely,
+		GoodSHA: "8fbf94a21b69770091c73381be24fff43e89d93e", BadSHA: "d6c0a0a6a5c762fd327001c177490ee4c49ca718",
+		CulpritSHA: "39dcb0ff91b312bb269334168d5e32be78b60417", CulpritPass: "ld64.lld (ThinLTO)", IsLinkerBug: true,
+		ErrorExcerpt: "ModuleNotFoundError: No module named '_posixsubprocess'",
+		PassDiff:     "--- good (python.exe)\n+++ bad (python.exe)\n@@ -1,2 +1,1 @@\n-_PyInterpreterState_Main\n __PyInterpreterState_Main\n",
+		Affected:     []affected{{Package: "cpython", Platform: platDarwinARM, Profile: profReleaseLTO, TestID: "test_math"}},
+		CreatedAt:    now, UpdatedAt: now,
+	}
+
+	body := formatGroupBody([]*incident{inc}, "", defaultSiteURL)
+	if err := checkNoCrossRefs(body); err != nil {
+		t.Fatalf("body cross-ref: %v", err)
+	}
+	for _, want := range []string{"ModuleNotFoundError: No module named '_posixsubprocess'", "```diff", "-_PyInterpreterState_Main"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("formatGroupBody missing %q:\n%s", want, body)
+		}
+	}
+
+	storeDir, outDir := t.TempDir(), t.TempDir()
+	if _, err := saveIncident(storeDir, inc); err != nil {
+		t.Fatal(err)
+	}
+	if err := generateSite(storeDir, outDir, ""); err != nil {
+		t.Fatalf("generateSite: %v", err)
+	}
+	rawHTML, err := os.ReadFile(filepath.Join(outDir, "incidents", inc.ID, "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := string(rawHTML)
+	if err := checkHTMLNoUnsafeCrossRefs(page); err != nil {
+		t.Fatalf("page cross-ref: %v", err)
+	}
+	for _, want := range []string{"<h2>Error Excerpt</h2>", "ModuleNotFoundError", "<h2>Diff</h2>", `class="diff-del"`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("incident page missing %q:\n%s", want, page)
+		}
+	}
+}

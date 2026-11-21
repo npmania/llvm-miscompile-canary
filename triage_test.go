@@ -2614,3 +2614,100 @@ mkdir -p "$BUILD_DIR/sub1" "$BUILD_DIR/sub2"
 		t.Fatalf("expected stageLinkerReproInputs to reject bundle exceeding maxBytes")
 	}
 }
+
+func TestLinkerBugSymbolDiffAndTestError(t *testing.T) {
+	t.Parallel()
+	if got := diffExportedSymbols(context.Background(), "", nil, []string{"a"}); got != "" {
+		t.Fatalf("expected empty diff for empty goodSyms, got %q", got)
+	}
+	if got := diffExportedSymbols(context.Background(), "/tmp/runner", []string{"a", "b"}, []string{"a", "b"}); got != "" {
+		t.Fatalf("expected empty diff for identical syms, got %q", got)
+	}
+
+	spec, goodTC := hostToolchainOrSkip(t)
+	selfExe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp := t.TempDir()
+	badSrc := filepath.Join(tmp, "bad_alt.c")
+	badBin := filepath.Join(tmp, "bad_alt.out")
+	if err := os.WriteFile(badSrc, []byte("int kept_sym(void) { return 41; }\nint main(void) { return kept_sym() == 40 ? 0 : 1; }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	extraEnv, compileArgs := applySDKRoot(goodTC, []string{badSrc, "-o", badBin})
+	cmd := exec.Command(goodTC.Clang, compileArgs...)
+	cmd.Env = append(os.Environ(), extraEnv...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("compile bad_alt: %v\n%s", err, out)
+	}
+
+	tarPath := filepath.Join(tmp, "symbug.tar.gz")
+	sha := makeTarGz(t, tarPath, map[string]string{
+		"good.c": "int kept_sym(void) { return 40; }\nint dropped_sym(void) { return 2; }\n",
+		"main.c": "extern int kept_sym(void); int main(void) { return kept_sym() == 40 ? 0 : 1; }\n",
+	})
+	rec := makeTestRecipe(t, filepath.Join(tmp, "corpus"), "symbug", tarPath, sha)
+	if err := os.WriteFile(filepath.Join(rec.Dir, "build.sh"), []byte("#!/bin/sh\nset -eu\n\"$CC\" -c \"$SRC_DIR/good.c\" -o \"$BUILD_DIR/good.o\"\n\"$CC\" -c \"$SRC_DIR/main.c\" -o \"$BUILD_DIR/main.o\"\n\"$CC\" \"$BUILD_DIR/good.o\" \"$BUILD_DIR/main.o\" -o \"$BUILD_DIR/runner\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rec.Dir, "test_one.sh"), []byte("#!/bin/sh\nset -eu\nif ! \"$BUILD_DIR/runner\" \"$1\"; then\n  printf '%s/runner: missing symbol dropped_sym\\n' \"$BUILD_DIR\" >&2\n  exit 1\nfi\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	goodLinker := filepath.Join(tmp, "good-ld")
+	badLinker := filepath.Join(tmp, "bad-ld")
+	_ = os.WriteFile(goodLinker, []byte(fmt.Sprintf("#!/bin/sh\nexec %s \"$@\"\n", shQuote(goodTC.Linker))), 0o755)
+	badScript := fmt.Sprintf(`#!/bin/sh
+set -eu
+out=""; prev=""
+for a in "$@"; do
+  if [ "$prev" = "-o" ]; then out="$a"; fi
+  prev="$a"
+done
+case "$out" in
+  *diag-o0*) exec %s "$@" ;;
+  *)
+    %s "$@"
+    if [ -n "$out" ]; then
+      rm -f "$out"
+      cp %s "$out"
+      chmod 0755 "$out"
+    fi
+    ;;
+esac
+`, shQuote(goodTC.Linker), shQuote(goodTC.Linker), shQuote(badBin))
+	if err := os.WriteFile(badLinker, []byte(badScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	gTC, bTC := *goodTC, *goodTC
+	gTC.Linker, bTC.Linker = goodLinker, badLinker
+	bTC.AliveTV, bTC.LLUBI, bTC.LLVMReduce = "", "", ""
+
+	res, err := triage(context.Background(), triageOpts{
+		Runner:        &runner{CacheDir: filepath.Join(tmp, "cache"), LMCBin: selfExe, Jobs: 2},
+		Recipe:        rec,
+		Spec:          spec,
+		Profile:       profDistroO2,
+		GoodTC:        &gTC,
+		BadTC:         &bTC,
+		GoodSHA:       "1111111111111111111111111111111111111111",
+		BadSHA:        "2222222222222222222222222222222222222222",
+		WorkDir:       filepath.Join(tmp, "work"),
+		FlakyAttempts: 1,
+	})
+	if err != nil || res.Dropped || res.Incident == nil {
+		t.Fatalf("triage symbol diff: res=%+v err=%v", res, err)
+	}
+	inc := res.Incident
+	if !inc.IsLinkerBug {
+		t.Fatalf("expected IsLinkerBug, got %+v", inc)
+	}
+	if !strings.Contains(inc.ErrorExcerpt, "missing symbol dropped_sym") || strings.Contains(inc.ErrorExcerpt, tmp) {
+		t.Fatalf("unexpected ErrorExcerpt %q (tmp=%q)", inc.ErrorExcerpt, tmp)
+	}
+	if !strings.Contains(inc.PassDiff, "--- good (runner)") || !strings.Contains(inc.PassDiff, "+++ bad (runner)") || !strings.Contains(inc.PassDiff, "dropped_sym") {
+		t.Fatalf("unexpected PassDiff:\n%s", inc.PassDiff)
+	}
+}
