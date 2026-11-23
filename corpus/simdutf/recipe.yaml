@@ -18,6 +18,7 @@ cmake:
   flags:
     - -DBUILD_SHARED_LIBS=OFF
     - -DSIMDUTF_TESTS=ON
+    - -DSIMDUTF_FAST_TESTS=ON
     - -DSIMDUTF_TOOLS=OFF
     - -DSIMDUTF_ICONV=OFF
 ctest:

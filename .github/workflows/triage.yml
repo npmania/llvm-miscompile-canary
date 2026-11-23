@@ -406,7 +406,7 @@ jobs:
           fi
           ccache -s || true
 
-          for dir in triaged/triage-*; do
+          for dir in triaged triaged/triage-*; do
             [ -d "${dir}" ] || continue
             inc="${dir}/incident.json"
             before="${dir}/ir/before.ll"
@@ -495,7 +495,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p verified
-          for stf in verified/triage-*/status.json; do
+          for stf in verified/status.json verified/triage-*/status.json; do
             [ -f "${stf}" ] || continue
             ./lmc record-triage -store _data -status "${stf}"
           done
@@ -511,7 +511,7 @@ jobs:
               --notes "reproducer-<id>.tar.zst archives."
           fi
 
-          for dir in verified/triage-*; do
+          for dir in verified verified/triage-*; do
             [ -f "${dir}/incident.json" ] || continue
             inc_id="$(jq -r '.id // ""' "${dir}/incident.json")"
             [ -n "${inc_id}" ] || continue
