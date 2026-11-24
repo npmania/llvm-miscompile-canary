@@ -339,5 +339,14 @@
     "zstd|linux-x86_64|distro-O2": "e2b0a1e11c3480967c5491bba65b153d9cf435cc",
     "zstd|linux-x86_64|release-lto": "e2b0a1e11c3480967c5491bba65b153d9cf435cc"
   },
-  "updated_at": "2026-11-24T08:04:27.652426473Z"
+  "last_triage": {
+    "h3|linux-riscv64|distro-O2": {
+      "target": "h3|linux-riscv64|distro-O2",
+      "good_sha": "f0f5939404f989c2458ebe7d82810e8b92f74f1d",
+      "bad_sha": "e2b0a1e11c3480967c5491bba65b153d9cf435cc",
+      "outcome": "flaky",
+      "updated_at": "2026-11-24T08:21:50.977233207Z"
+    }
+  },
+  "updated_at": "2026-11-24T08:23:40.406845165Z"
 }
