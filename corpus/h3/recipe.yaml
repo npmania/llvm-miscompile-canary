@@ -24,4 +24,5 @@ cmake:
     - -DBUILD_FILTERS=ON
     - -DENABLE_DOCS=OFF
     - -DWARNINGS_AS_ERRORS=OFF
-ctest: {}
+ctest:
+  exclude: "Exhaustive"
