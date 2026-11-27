@@ -29,8 +29,8 @@ checkout)
 	esac
 	;;
 push)
-	git -C "$dir" config user.name "github-actions[bot]"
-	git -C "$dir" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+	git -C "$dir" config user.name "Darkglare"
+	git -C "$dir" config user.email "361901347+darkglare-bot@users.noreply.github.com"
 	git -C "$dir" add -A
 	if ! git -C "$dir" diff --cached --quiet; then
 		git -C "$dir" commit -m "$msg"

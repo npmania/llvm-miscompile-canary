@@ -33,8 +33,7 @@ on:
         type: string
 
 permissions:
-  contents: write
-  issues: write
+  contents: read
 
 env:
   GH_REPO: ${{ github.repository }}
@@ -483,7 +482,7 @@ jobs:
 
       - name: Checkout orphan data and gh-pages branches
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.BOT_TOKEN }}
         run: |
           ./scripts/sync-branch.sh checkout data _data
           mkdir -p _data/incidents _data/sweeps
@@ -491,7 +490,7 @@ jobs:
 
       - name: Record triage outcomes, upload bundles & merge incidents
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.BOT_TOKEN }}
         run: |
           set -euo pipefail
           mkdir -p verified
@@ -532,7 +531,7 @@ jobs:
 
       - name: Sync issues
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.BOT_TOKEN }}
           BAD_SHA: ${{ inputs.bad_sha }}
         run: |
           ./lmc sync-issues \

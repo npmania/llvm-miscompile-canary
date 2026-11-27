@@ -14,8 +14,7 @@ on:
         default: false
 
 permissions:
-  contents: write
-  actions: write
+  contents: read
 
 env:
   GH_REPO: ${{ github.repository }}
@@ -230,7 +229,7 @@ jobs:
 
       - name: Publish GitHub Release toolchain-${{ needs.check.outputs.llvm_sha12 }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.BOT_TOKEN }}
           SHA12: ${{ needs.check.outputs.llvm_sha12 }}
         run: |
           tag="toolchain-${SHA12}"
@@ -245,7 +244,7 @@ jobs:
 
       - name: Prune unreferenced toolchain snapshots older than 14 days
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.BOT_TOKEN }}
           SHA12: ${{ needs.check.outputs.llvm_sha12 }}
         run: |
           set -euo pipefail
@@ -308,7 +307,7 @@ jobs:
 
       - name: Trigger sweep.yml
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.BOT_TOKEN }}
           LLVM_SHA: ${{ needs.check.outputs.llvm_sha }}
           PREV_SHA: ${{ needs.check.outputs.previous_sha }}
         run: |
